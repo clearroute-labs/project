@@ -56,6 +56,11 @@ upper-case or non-hex characters, non-canonical encodings, off-curve points,
 wrong-subgroup points, and zero keys/secrets where a key is required. Point
 decoding uses arkworks `Validate::Yes`; identity points are accepted in
 homomorphic ciphertext/commitment components and rejected by key constructors.
+After a point has passed all canonical, on-curve, subgroup, and applicable
+identity checks, the Rust implementation may retain its affine value in a
+bounded per-thread cache (at most 1024 exact wire-string keys). Cache hits
+still apply the key/non-identity policy, and the cache is not protocol state
+or a substitute for validation of a cache miss.
 Groth16 proof and verifying-key bytes use arkworks canonical compressed
 serialization. Public BN254 inputs passed to a host verifier are canonical
 little-endian 32-byte field encodings.

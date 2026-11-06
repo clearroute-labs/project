@@ -19,7 +19,7 @@ thread_local! {
     /// per execution thread and does not affect the wire format or protocol
     /// state.
     static VALIDATED_POINT_CACHE: RefCell<BTreeMap<String, EdwardsAffine>> =
-        RefCell::new(BTreeMap::new());
+        const { RefCell::new(BTreeMap::new()) };
 }
 
 /// Canonical JSON decimal helpers for monetary values, versions, and times.
@@ -293,12 +293,12 @@ pub(crate) fn decode_point(value: &str, non_identity: bool) -> Result<EdwardsAff
     }
     VALIDATED_POINT_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if cache.len() >= MAX_VALIDATED_POINT_CACHE_ENTRIES {
-            if let Some(oldest) = cache.keys().next().cloned() {
-                cache.remove(&oldest);
-            }
+        if cache.len() >= MAX_VALIDATED_POINT_CACHE_ENTRIES
+            && let Some(oldest) = cache.keys().next().cloned()
+        {
+            cache.remove(&oldest);
         }
-        cache.insert(value.to_owned(), point.clone());
+        cache.insert(value.to_owned(), point);
     });
     Ok(point)
 }
