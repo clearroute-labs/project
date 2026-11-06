@@ -1,0 +1,13 @@
+/target/
+/node_modules/
+**/node_modules/
+**/dist/
+/.worktrees/
+/.artifacts/
+/.local/
+/.env
+/.env.*
+!/.env.example
+*.log
+.DS_Store
+
