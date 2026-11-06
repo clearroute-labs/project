@@ -1431,6 +1431,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lending-math"
+version = "0.1.0"
+dependencies = [
+ "num-bigint 0.4.8",
+ "rand",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"

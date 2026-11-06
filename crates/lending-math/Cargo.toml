@@ -1,0 +1,11 @@
+[package]
+name = "lending-math"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Checked integer accounting for the confidential lending protocol"
+
+[dev-dependencies]
+num-bigint = "0.4"
+rand.workspace = true
