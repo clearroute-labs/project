@@ -1,0 +1,336 @@
+import { useMemo, useState } from 'react'
+import { useAppContext } from '../App'
+import { ActionFeedback, Button, Card, EmptyState, Field, Metric, Mono, Money, Notice, SectionHeading, SelectInput, StatusBadge, Table, TextInput } from '../components/ui'
+import { requireFinalized, useAction } from '../lib/actionState'
+import { parseAmount, parseNonNegativeAmount, unixSecondsNow } from '../lib/money'
+import { ProtocolError, type BrokerSummary, type KeeperGrant, type LoanSummary } from '../lib/types'
+import { AmountCell, ConnectionGate, EmptyRow, IdLabel, PageHeader, PublicPrivateNotice, StateFreshness } from './shared'
+
+export function BrokerPage() {
+  return <ConnectionGate role="broker"><BrokerWorkspace /></ConnectionGate>
+}
+
+function BrokerWorkspace() {
+  const { path, snapshot, navigate } = useAppContext()
+  if (!snapshot) return null
+  if (path.startsWith('/broker/loans')) return <LoanBookPage />
+  if (path.startsWith('/broker/operations')) return <OperationsPage />
+  if (path.startsWith('/broker/vaults')) return <VaultBrokerPage />
+  return <BrokerOverview onOpenLoans={() => navigate('/broker/loans')} onOpenOperations={() => navigate('/broker/operations')} onOpenVaults={() => navigate('/broker/vaults')} />
+}
+
+function BrokerOverview({ onOpenLoans, onOpenOperations, onOpenVaults }: { onOpenLoans: () => void; onOpenOperations: () => void; onOpenVaults: () => void }) {
+  const { snapshot, refresh } = useAppContext()
+  if (!snapshot) return null
+  const debt = snapshot.brokers.reduce((total, broker) => total + BigInt(broker.debtTotal), 0n).toString()
+  const ceiling = snapshot.brokers.reduce((total, broker) => total + BigInt(broker.debtCeiling), 0n).toString()
+  const activeLoans = snapshot.loans.filter((loan) => loan.status === 'active' || loan.status === 'impaired').length
+  return <>
+    <PageHeader eyebrow="Broker desk" title="Underwrite with a clear boundary" description="Aggregate debt, loan status and schedule metadata are public. Terms, balances and repayment amounts stay encrypted behind their registered readers." action={<Button variant="secondary" onClick={() => void refresh()}>Refresh state</Button>} />
+    <PublicPrivateNotice>Public records reveal account relationships, IDs, schedules, versions and aggregate accounting. They do not reveal private principal, amount owed, periodic payment or confidential balances.</PublicPrivateNotice>
+    <div className="metrics-grid"><Metric label="Aggregate debt" value={<Money units={debt} decimals={snapshot.asset.decimals} />} supporting="Public draw obligation" tone={debt !== '0' ? 'warning' : 'default'} /><Metric label="Debt ceiling" value={<Money units={ceiling} decimals={snapshot.asset.decimals} />} supporting={`${snapshot.brokers.length} broker record${snapshot.brokers.length === 1 ? '' : 's'}`} /><Metric label="Active loans" value={String(activeLoans)} supporting={`${snapshot.loans.filter((loan) => loan.status === 'defaulted').length} defaulted · ${snapshot.loans.filter((loan) => loan.status === 'paid').length} paid`} /><Metric label="Accounting" value={snapshot.brokers.some((broker) => broker.checkpointStatus !== 'current') ? 'Needs review' : 'Current'} supporting="Reconciliation is explicit and proof-bound" tone={snapshot.brokers.some((broker) => broker.checkpointStatus !== 'current') ? 'warning' : 'positive'} /></div>
+    <div className="dashboard-grid"><Card><SectionHeading eyebrow="Portfolio" title="Broker accounts" action={<Button variant="quiet" onClick={onOpenVaults}>Manage →</Button>} /><BrokerTable brokers={snapshot.brokers} decimals={snapshot.asset.decimals} /></Card><Card><SectionHeading eyebrow="Servicing" title="Loan book" action={<Button variant="quiet" onClick={onOpenLoans}>Open book →</Button>} /><LoanSummaryList loans={snapshot.loans} /></Card></div>
+    <div className="dashboard-grid"><Card><SectionHeading eyebrow="Automation" title="Keeper posture" action={<Button variant="quiet" onClick={onOpenOperations}>Operations →</Button>} /><KeeperSummary grants={snapshot.keeperGrants} /></Card><Card><SectionHeading eyebrow="Liveness" title="What needs attention?" /><AttentionList brokers={snapshot.brokers} loans={snapshot.loans} /></Card></div>
+  </>
+}
+
+function VaultBrokerPage() {
+  const { snapshot, navigate } = useAppContext()
+  if (!snapshot) return null
+  return <><PageHeader eyebrow="Broker desk / setup" title="Vaults & broker accounts" description="Vault and broker creation are public authority changes. Configure the immutable asset and crypto profile before the first draw." action={<Button variant="quiet" onClick={() => navigate('/')}>← Desk overview</Button>} /><PublicPrivateNotice /><Card><SectionHeading eyebrow="Public vaults" title="Configured vaults" /><VaultList vaults={snapshot.vaults} decimals={snapshot.asset.decimals} /></Card><div className="two-column-grid"><CreateVaultCard /><CreateBrokerCard brokers={snapshot.brokers} /></div></>
+}
+
+function CreateVaultCard() {
+  const { snapshot, adapters, refresh } = useAppContext()
+  const [maximum, setMaximum] = useState('')
+  const [kind, setKind] = useState<'open_ended' | 'closed_ended'>('open_ended')
+  const [shareScale, setShareScale] = useState('0')
+  const [epochSeconds, setEpochSeconds] = useState('86400')
+  const [disclosurePolicy, setDisclosurePolicy] = useState('aggregate_only')
+  const [transferable, setTransferable] = useState(false)
+  const [error, setError] = useState('')
+  const action = useAction()
+  if (!snapshot) return null
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setError('')
+    try {
+      if (!snapshot.asset.tokenAccount) throw new Error('The asset profile has no token account.')
+      const assetsMaximum = parseAmount(maximum, snapshot.asset.decimals)
+      const scale = Number.parseInt(shareScale, 10)
+      const epoch = Number.parseInt(epochSeconds, 10)
+      if (!Number.isInteger(scale) || scale < 0 || scale > 18) throw new Error('Share scale must be an integer from 0 to 18.')
+      if (!Number.isInteger(epoch) || epoch <= 0) throw new Error('Checkpoint epoch must be a positive number of seconds.')
+      const receipt = await action.run('Create vault', () => adapters.protocol.createVault({ assetAccount: snapshot.asset.tokenAccount, assetsMaximum, kind, shareScale: scale, sharesTransferable: transferable, checkpointPolicy: { epochSeconds: epoch, disclosurePolicy: disclosurePolicy.trim() || 'aggregate_only' } }))
+      if (receipt) void refresh()
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Enter valid vault configuration.') }
+  }
+  return <Card className="form-card"><SectionHeading eyebrow="Vault authority" title="Create a vault" description="One Core deployment may host multiple vaults for its immutable asset profile. The phase and checkpoint policy are public configuration." /><form onSubmit={submit} className="form-stack"><Field label="Underlying asset" hint="Read from the finalized AssetProfile; not caller supplied."><div className="readonly-field"><Mono>{snapshot.asset.tokenAccount || 'Not configured'}</Mono><span>{snapshot.asset.decimals} decimals</span></div></Field><Field label={`Maximum assets (${snapshot.asset.decimals} decimals)`} htmlFor="vault-maximum"><TextInput id="vault-maximum" inputMode="decimal" value={maximum} onChange={(event) => setMaximum(event.target.value)} placeholder="0.00" /></Field><Field label="Vault kind" htmlFor="vault-kind"><SelectInput id="vault-kind" value={kind} onChange={(event) => setKind(event.target.value as typeof kind)}><option value="open_ended">Open ended</option><option value="closed_ended">Closed ended</option></SelectInput></Field><Field label="Share scale" htmlFor="vault-share-scale" hint="Integer decimal scale used by the Core share ledger."><TextInput id="vault-share-scale" inputMode="numeric" value={shareScale} onChange={(event) => setShareScale(event.target.value)} /></Field><Field label="Checkpoint epoch (seconds)" htmlFor="vault-epoch"><TextInput id="vault-epoch" inputMode="numeric" value={epochSeconds} onChange={(event) => setEpochSeconds(event.target.value)} /></Field><Field label="Disclosure policy" htmlFor="vault-disclosure"><TextInput id="vault-disclosure" value={disclosurePolicy} onChange={(event) => setDisclosurePolicy(event.target.value)} /></Field><label className="checkbox-field"><input type="checkbox" checked={transferable} onChange={(event) => setTransferable(event.target.checked)} /> <span>Allow public share transfers</span></label>{error ? <p className="field-error" role="alert">{error}</p> : null}<Button type="submit" busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Create vault</Button><ActionFeedback state={action.state} /></form></Card>
+}
+
+function CreateBrokerCard({ brokers }: { brokers: BrokerSummary[] }) {
+  const { adapters, snapshot, refresh } = useAppContext()
+  const [vaultId, setVaultId] = useState('')
+  const [key, setKey] = useState('')
+  const [proof, setProof] = useState('')
+  const [ceiling, setCeiling] = useState('')
+  const [error, setError] = useState('')
+  const action = useAction()
+  if (!snapshot) return null
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setError('')
+    try {
+      if (!snapshot.vaults.some((vault) => vault.vaultId === vaultId)) throw new Error('Choose an existing vault.')
+      if (!key.trim() || !proof.trim()) throw new Error('Provide the registered encryption key and proof of possession.')
+      const debtCeiling = parseAmount(ceiling, snapshot.asset.decimals)
+      await action.run('Create broker', () => adapters.protocol.createBroker({ vaultId, brokerEncryptionKey: key.trim(), brokerDebtCeiling: debtCeiling, possessionProof: proof.trim() }))
+      void refresh()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Enter valid broker configuration.')
+    }
+  }
+  return <Card className="form-card"><SectionHeading eyebrow="Broker authority" title="Create a broker" description="A broker binds to one vault and a registered encryption key. Existing broker identities are never silently overwritten." /><form onSubmit={submit} className="form-stack"><Field label="Vault" htmlFor="broker-vault"><SelectInput id="broker-vault" value={vaultId} onChange={(event) => setVaultId(event.target.value)}><option value="">Select a vault</option>{snapshot.vaults.map((vault) => <option key={vault.vaultId} value={vault.vaultId}>{vault.vaultId}</option>)}</SelectInput></Field><Field label="Broker encryption key" htmlFor="broker-key" hint="Public key identifier or canonical encoded key; private witness stays in the browser."><TextInput id="broker-key" value={key} onChange={(event) => setKey(event.target.value)} placeholder="key id / canonical public key" /></Field><Field label="Proof of possession" htmlFor="broker-proof"><TextInput id="broker-proof" value={proof} onChange={(event) => setProof(event.target.value)} placeholder="hex-encoded proof" /></Field><Field label={`Debt ceiling (${snapshot.asset.decimals} decimals)`} htmlFor="broker-ceiling"><TextInput id="broker-ceiling" inputMode="decimal" value={ceiling} onChange={(event) => setCeiling(event.target.value)} placeholder="0.00" /></Field>{error ? <p className="field-error" role="alert">{error}</p> : null}<Button type="submit" disabled={!snapshot.vaults.length} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Create broker</Button><ActionFeedback state={action.state} /></form>{brokers.length ? <p className="form-footnote">{brokers.length} broker record{brokers.length === 1 ? '' : 's'} already visible for this account.</p> : null}</Card>
+}
+
+function LoanBookPage() {
+  const { snapshot, navigate } = useAppContext()
+  if (!snapshot) return null
+  return <><PageHeader eyebrow="Broker desk / loan book" title="Loan book & proposals" description="Proposal terms are encrypted for authorized readers. Public lifecycle status and schedule metadata remain visible for liveness." action={<Button variant="quiet" onClick={() => navigate('/')}>← Desk overview</Button>} /><Notice tone="warning" title="A valid proof is not authority">Origination still requires the borrower and broker authorizations over the same signed agreement. A ciphertext or proof alone cannot move funds.</Notice><Card><SectionHeading eyebrow="Public loan records" title="Loan book" /><LoanTable loans={snapshot.loans} /></Card><div className="two-column-grid"><CreateProposalCard brokers={snapshot.brokers} /><ManageLoanCard loans={snapshot.loans} /></div></>
+}
+
+function CreateProposalCard({ brokers }: { brokers: BrokerSummary[] }) {
+  const { snapshot, adapters, accountId, refresh } = useAppContext()
+  const [brokerId, setBrokerId] = useState('')
+  const [borrowerId, setBorrowerId] = useState('')
+  const [vaultId, setVaultId] = useState('')
+  const [borrowerKeyId, setBorrowerKeyId] = useState('')
+  const [brokerKeyId, setBrokerKeyId] = useState('')
+  const [auditorKeyId, setAuditorKeyId] = useState('')
+  const [paymentCount, setPaymentCount] = useState('')
+  const [paymentInterval, setPaymentInterval] = useState('2592000')
+  const [gracePeriod, setGracePeriod] = useState('0')
+  const [encryptedPrincipal, setEncryptedPrincipal] = useState('')
+  const [encryptedOwed, setEncryptedOwed] = useState('')
+  const [encryptedPayment, setEncryptedPayment] = useState('')
+  const [encryptedAgreement, setEncryptedAgreement] = useState('')
+  const [termsDigest, setTermsDigest] = useState('')
+  const [brokerSignature, setBrokerSignature] = useState('')
+  const [borrowerSignature, setBorrowerSignature] = useState('')
+  const [brokerEpoch, setBrokerEpoch] = useState('0')
+  const [borrowerEpoch, setBorrowerEpoch] = useState('0')
+  const [expiryMinutes, setExpiryMinutes] = useState('60')
+  const [error, setError] = useState('')
+  const action = useAction()
+  if (!snapshot) return null
+  const broker = brokers.find((item) => item.brokerId === brokerId)
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setError('')
+    try {
+      if (!broker) throw new Error('Choose a broker.')
+      if (!borrowerId.trim() || !borrowerKeyId.trim() || !brokerKeyId.trim() || !auditorKeyId.trim() || !encryptedPrincipal.trim() || !encryptedOwed.trim() || !encryptedPayment.trim() || !encryptedAgreement.trim() || !termsDigest.trim() || !brokerSignature.trim() || !borrowerSignature.trim()) throw new Error('Encrypted P/O/Q terms, signatures, agreement payload, digest, key IDs and parties are required.')
+      if (!snapshot.vaults.some((vault) => vault.vaultId === vaultId)) throw new Error('Choose the associated vault.')
+      const count = Number.parseInt(paymentCount, 10)
+      const interval = Number.parseInt(paymentInterval, 10)
+      const grace = Number.parseInt(gracePeriod, 10)
+      if (!Number.isInteger(count) || count <= 0 || !Number.isInteger(interval) || interval <= 0 || !Number.isInteger(grace) || grace < 0) throw new Error('Payment count and interval must be positive; grace cannot be negative.')
+      const expiresAt = unixSecondsNow() + Math.max(5, Number.parseInt(expiryMinutes, 10) || 60) * 60
+      await action.run('Create joint loan proposal', () => adapters.protocol.createProposal({ brokerId, borrowerId: borrowerId.trim(), vaultId, borrowerKeyId: borrowerKeyId.trim(), brokerKeyId: brokerKeyId.trim(), auditorKeyId: auditorKeyId.trim(), paymentCount: count, paymentIntervalSeconds: interval, gracePeriodSeconds: grace, encryptedPrincipal: encryptedPrincipal.trim(), encryptedOwed: encryptedOwed.trim(), encryptedPayment: encryptedPayment.trim(), encryptedAgreement: encryptedAgreement.trim(), termsDigest: termsDigest.trim(), brokerSignature: brokerSignature.trim(), borrowerSignature: borrowerSignature.trim(), brokerAuthorizationEpoch: brokerEpoch.trim(), borrowerAuthorizationEpoch: borrowerEpoch.trim(), expiresAt }))
+      void refresh()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Enter a complete encrypted agreement.')
+    }
+  }
+  return <Card className="form-card"><SectionHeading eyebrow="Joint authorization" title="Create a loan proposal" description="Exchange a signed, encrypted JSON agreement out-of-band. The borrower must decrypt and review it before authorizing." /><form onSubmit={submit} className="form-stack"><Field label="Broker" htmlFor="proposal-broker"><SelectInput id="proposal-broker" value={brokerId} onChange={(event) => setBrokerId(event.target.value)}><option value="">Select broker</option>{brokers.map((item) => <option key={item.brokerId} value={item.brokerId}>{item.brokerId}</option>)}</SelectInput></Field><Field label="Borrower account" htmlFor="proposal-borrower"><TextInput id="proposal-borrower" value={borrowerId} onChange={(event) => setBorrowerId(event.target.value)} placeholder="borrower.testnet" /></Field><div className="two-column-inner"><Field label="Borrower key ID" htmlFor="proposal-borrower-key"><TextInput id="proposal-borrower-key" value={borrowerKeyId} onChange={(event) => setBorrowerKeyId(event.target.value)} placeholder="registered key ID" /></Field><Field label="Broker key ID" htmlFor="proposal-broker-key"><TextInput id="proposal-broker-key" value={brokerKeyId} onChange={(event) => setBrokerKeyId(event.target.value)} placeholder="registered key ID" /></Field></div><Field label="Vault" htmlFor="proposal-vault"><SelectInput id="proposal-vault" value={vaultId} onChange={(event) => setVaultId(event.target.value)}><option value="">Select vault</option>{snapshot.vaults.map((vault) => <option key={vault.vaultId} value={vault.vaultId}>{vault.vaultId}</option>)}</SelectInput></Field><Field label="Loan auditor key" htmlFor="proposal-auditor"><TextInput id="proposal-auditor" value={auditorKeyId} onChange={(event) => setAuditorKeyId(event.target.value)} placeholder="auditor key ID" /></Field><div className="two-column-inner"><Field label="Payment count" htmlFor="proposal-count"><TextInput id="proposal-count" inputMode="numeric" value={paymentCount} onChange={(event) => setPaymentCount(event.target.value)} placeholder="12" /></Field><Field label="Payment interval (seconds)" htmlFor="proposal-interval"><TextInput id="proposal-interval" inputMode="numeric" value={paymentInterval} onChange={(event) => setPaymentInterval(event.target.value)} /></Field></div><Field label="Grace period (seconds)" htmlFor="proposal-grace"><TextInput id="proposal-grace" inputMode="numeric" value={gracePeriod} onChange={(event) => setGracePeriod(event.target.value)} /></Field><Field label="Encrypted principal ciphertext" htmlFor="proposal-principal" hint="Ciphertext only; never paste plaintext principal."><TextInput id="proposal-principal" value={encryptedPrincipal} onChange={(event) => setEncryptedPrincipal(event.target.value)} placeholder="canonical ciphertext" /></Field><Field label="Encrypted amount-owed ciphertext" htmlFor="proposal-owed" hint="Ciphertext only; the browser crypto provider proves consistency."><TextInput id="proposal-owed" value={encryptedOwed} onChange={(event) => setEncryptedOwed(event.target.value)} placeholder="canonical ciphertext" /></Field><Field label="Encrypted periodic-payment ciphertext" htmlFor="proposal-payment" hint="Ciphertext only; public schedule counters remain separate."><TextInput id="proposal-payment" value={encryptedPayment} onChange={(event) => setEncryptedPayment(event.target.value)} placeholder="canonical ciphertext" /></Field><Field label="Encrypted agreement envelope" htmlFor="proposal-envelope" hint="Ciphertext only. Do not paste plaintext terms or private keys."><textarea id="proposal-envelope" className="input textarea" value={encryptedAgreement} onChange={(event) => setEncryptedAgreement(event.target.value)} placeholder="hex/base64 signed encrypted payload" rows={3} /></Field><Field label="Agreement digest" htmlFor="proposal-digest"><TextInput id="proposal-digest" value={termsDigest} onChange={(event) => setTermsDigest(event.target.value)} placeholder="canonical digest" /></Field><div className="two-column-inner"><Field label="Broker signature" htmlFor="proposal-broker-signature"><TextInput id="proposal-broker-signature" value={brokerSignature} onChange={(event) => setBrokerSignature(event.target.value)} placeholder="canonical signature" /></Field><Field label="Borrower signature" htmlFor="proposal-borrower-signature"><TextInput id="proposal-borrower-signature" value={borrowerSignature} onChange={(event) => setBorrowerSignature(event.target.value)} placeholder="canonical signature" /></Field></div><div className="two-column-inner"><Field label="Broker authorization epoch" htmlFor="proposal-broker-epoch"><TextInput id="proposal-broker-epoch" inputMode="numeric" value={brokerEpoch} onChange={(event) => setBrokerEpoch(event.target.value)} /></Field><Field label="Borrower authorization epoch" htmlFor="proposal-borrower-epoch"><TextInput id="proposal-borrower-epoch" inputMode="numeric" value={borrowerEpoch} onChange={(event) => setBorrowerEpoch(event.target.value)} /></Field></div><Field label="Expires in (minutes)" htmlFor="proposal-expiry"><TextInput id="proposal-expiry" inputMode="numeric" value={expiryMinutes} onChange={(event) => setExpiryMinutes(event.target.value)} /></Field>{error ? <p className="field-error" role="alert">{error}</p> : null}<Button type="submit" disabled={!brokers.length} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Publish proposal</Button><ActionFeedback state={action.state} /></form></Card>
+}
+
+function ManageLoanCard({ loans }: { loans: LoanSummary[] }) {
+  const { adapters, refresh } = useAppContext()
+  const crypto = adapters.crypto
+  const [loanId, setLoanId] = useState('')
+  const [operation, setOperation] = useState<'impair' | 'unimpair' | 'default'>('impair')
+  const [error, setError] = useState('')
+  const action = useAction()
+  const selected = loans.find((loan) => loan.loanId === loanId)
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setError('')
+    if (!selected) return setError('Choose an active loan.')
+    if (selected.status === 'paid' || selected.status === 'deleted') return setError('Closed loans cannot be managed.')
+    try {
+      const proof = await crypto.prepareLoanManagement({ loan: selected, operation })
+      const receipt = await action.run(`Mark loan ${operation}`, () => adapters.protocol.manageLoan({ loanId, operation, expectedLoanVersion: selected.stateVersion, proof }))
+      if (receipt) void refresh()
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Loan management proof preparation failed.') }
+  }
+  return <Card className="form-card"><SectionHeading eyebrow="Servicing authority" title="Manage delinquency" description="Default timing is checked by Core against the public due date and grace period. Private exposure is not guessed by this UI." /><form onSubmit={submit} className="form-stack"><Field label="Loan" htmlFor="manage-loan"><SelectInput id="manage-loan" value={loanId} onChange={(event) => setLoanId(event.target.value)}><option value="">Select loan</option>{loans.filter((loan) => !['paid', 'deleted'].includes(loan.status)).map((loan) => <option key={loan.loanId} value={loan.loanId}>{loan.loanId} · {loan.status}</option>)}</SelectInput></Field><Field label="Operation" htmlFor="manage-operation"><SelectInput id="manage-operation" value={operation} onChange={(event) => setOperation(event.target.value as typeof operation)}><option value="impair">Impair</option><option value="unimpair">Unimpair</option><option value="default">Default (after grace)</option></SelectInput></Field>{selected ? <div className="readonly-field"><span>Expected loan version</span><Mono>{selected.stateVersion}</Mono></div> : null}{error ? <p className="field-error" role="alert">{error}</p> : null}<Button type="submit" variant="secondary" disabled={!selected} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Submit management</Button><ActionFeedback state={action.state} /></form></Card>
+}
+
+function OperationsPage() {
+  const { snapshot, navigate } = useAppContext()
+  if (!snapshot) return null
+  return <><PageHeader eyebrow="Broker desk / operations" title="Proof-bound operations" description="Draw, merge, settle and reconcile are separate on-chain operations with explicit versions and failure states." action={<Button variant="quiet" onClick={() => navigate('/')}>← Desk overview</Button>} /><Notice tone="info" title="Keeper scope is narrow by design">Delegates can be granted only named operations, expiry and optional amount limits. A keeper never receives a decryption right from a function-call key.</Notice><div className="two-column-grid"><DrawCard brokers={snapshot.brokers} /><MergeCard brokers={snapshot.brokers} /></div><div className="two-column-grid"><SettlementCard brokers={snapshot.brokers} /><ReconcileCard brokers={snapshot.brokers} /></div><KeeperCard brokers={snapshot.brokers} grants={snapshot.keeperGrants} /></>
+}
+
+function DrawCard({ brokers }: { brokers: BrokerSummary[] }) {
+  const { snapshot, adapters, refresh } = useAppContext()
+  const crypto = adapters.crypto
+  const [brokerId, setBrokerId] = useState('')
+  const [amount, setAmount] = useState('')
+  const [error, setError] = useState('')
+  const action = useAction()
+  if (!snapshot) return null
+  const broker = brokers.find((item) => item.brokerId === brokerId)
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault(); setError('')
+    try {
+      if (!broker) throw new Error('Choose a broker.')
+      const units = parseAmount(amount, snapshot.asset.decimals)
+      const proof = await crypto.prepareDraw({ broker, amount: units, expectedSpendingVersion: broker.spendingVersion })
+      await action.run('Draw vault liquidity', () => adapters.protocol.draw({ brokerId, amount: units, expectedSpendingVersion: broker.spendingVersion, proof }))
+      void refresh()
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Draw preparation failed.') }
+  }
+  return <Card className="form-card"><SectionHeading eyebrow="Public draw" title="Draw vault liquidity" description="A draw increases public broker debt and credits the broker's encrypted spending rail. A proof binds the current spending version." /><form onSubmit={submit} className="form-stack"><Field label="Broker" htmlFor="draw-broker"><SelectInput id="draw-broker" value={brokerId} onChange={(event) => setBrokerId(event.target.value)}><option value="">Select broker</option>{brokers.map((item) => <option key={item.brokerId} value={item.brokerId}>{item.brokerId}</option>)}</SelectInput></Field><Field label={`Amount (${snapshot.asset.decimals} decimals)`} htmlFor="draw-amount"><TextInput id="draw-amount" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" /></Field>{broker ? <div className="readonly-field"><span>Spending version</span><Mono>{broker.spendingVersion}</Mono></div> : null}{error ? <p className="field-error" role="alert">{error}</p> : null}<Button type="submit" disabled={!broker} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Prepare & draw</Button><ActionFeedback state={action.state} /></form></Card>
+}
+
+function MergeCard({ brokers }: { brokers: BrokerSummary[] }) {
+  const { adapters, refresh } = useAppContext()
+  const crypto = adapters.crypto
+  const [brokerId, setBrokerId] = useState('')
+  const [error, setError] = useState('')
+  const action = useAction()
+  const broker = brokers.find((item) => item.brokerId === brokerId)
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault(); setError('')
+    if (!broker) return setError('Choose a broker.')
+    try {
+      const account = await adapters.protocol.getBrokerPrivateAccount(brokerId)
+      const proof = await crypto.prepareMerge({ account, scope: 'broker' })
+      const receipt = await action.run('Merge broker inbox', () => adapters.protocol.mergeBrokerInbox({ brokerId, expectedInboxVersion: broker.inboxVersion, proof }))
+      if (receipt) void refresh()
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Broker inbox merge preparation failed.') }
+  }
+  return <Card className="form-card"><SectionHeading eyebrow="Inbox stability" title="Merge incoming balance" description="The wallet merges only when needed. After a merge, prepared spending proofs must be rebuilt against the new version." /><form onSubmit={submit} className="form-stack"><Field label="Broker" htmlFor="merge-broker"><SelectInput id="merge-broker" value={brokerId} onChange={(event) => setBrokerId(event.target.value)}><option value="">Select broker</option>{brokers.map((item) => <option key={item.brokerId} value={item.brokerId}>{item.brokerId}</option>)}</SelectInput></Field>{broker ? <><div className="readonly-field"><span>Inbox version</span><Mono>{broker.inboxVersion}</Mono></div><p className="field-hint">Merge is owner- or scoped-keeper-authorized; it is not a free-form balance replacement.</p></> : null}{error ? <p className="field-error" role="alert">{error}</p> : null}<Button type="submit" variant="secondary" disabled={!broker} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Merge inbox</Button><ActionFeedback state={action.state} /></form></Card>
+}
+
+function SettlementCard({ brokers }: { brokers: BrokerSummary[] }) {
+  const { snapshot, adapters, accountId, refresh } = useAppContext()
+  const crypto = adapters.crypto
+  const [brokerId, setBrokerId] = useState('')
+  const [amount, setAmount] = useState('')
+  const [error, setError] = useState('')
+  const action = useAction()
+  if (!snapshot) return null
+  const broker = brokers.find((item) => item.brokerId === brokerId)
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault(); setError('')
+    try {
+      if (!broker) throw new Error('Choose a broker.')
+      const units = parseAmount(amount, snapshot.asset.decimals)
+      const receipt = await action.run('Settle broker funds', async () => {
+        let current = broker
+        try {
+          const proof = await crypto.prepareSettlement({ broker: current, amount: units, expectedSpendingVersion: current.spendingVersion })
+          return requireFinalized(await adapters.protocol.settle({ brokerId, amount: units, expectedSpendingVersion: current.spendingVersion, proof }), 'Settlement')
+        } catch (caught) {
+          if (!(caught instanceof ProtocolError) || caught.details.category !== 'STALE_STATE' || !accountId) throw caught
+          const brokerAccount = await adapters.protocol.getBrokerPrivateAccount(brokerId)
+          const mergeProof = await crypto.prepareMerge({ account: brokerAccount, scope: 'broker' })
+          requireFinalized(await adapters.protocol.mergeBrokerInbox({ brokerId, expectedInboxVersion: current.inboxVersion, proof: mergeProof }), 'Broker inbox merge')
+          const refreshed = await adapters.protocol.getDashboard(accountId)
+          current = refreshed.brokers.find((item) => item.brokerId === brokerId) || current
+          const proof = await crypto.prepareSettlement({ broker: current, amount: units, expectedSpendingVersion: current.spendingVersion })
+          return requireFinalized(await adapters.protocol.settle({ brokerId, amount: units, expectedSpendingVersion: current.spendingVersion, proof }), 'Settlement')
+        }
+      })
+      if (receipt) void refresh()
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Settlement preparation failed.') }
+  }
+  return <Card className="form-card"><SectionHeading eyebrow="Public settlement" title="Settle broker funds" description="Settlement repays aggregate broker debt first; only excess cash is recognized as vault yield by the Core accounting checkpoint." /><form onSubmit={submit} className="form-stack"><Field label="Broker" htmlFor="settle-broker"><SelectInput id="settle-broker" value={brokerId} onChange={(event) => setBrokerId(event.target.value)}><option value="">Select broker</option>{brokers.map((item) => <option key={item.brokerId} value={item.brokerId}>{item.brokerId}</option>)}</SelectInput></Field><Field label={`Public settlement amount (${snapshot.asset.decimals} decimals)`} htmlFor="settle-amount"><TextInput id="settle-amount" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" /></Field>{broker ? <div className="readonly-field"><span>Expected spending version</span><Mono>{broker.spendingVersion}</Mono></div> : null}{error ? <p className="field-error" role="alert">{error}</p> : null}<Button type="submit" variant="secondary" disabled={!broker} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Prepare & settle</Button><ActionFeedback state={action.state} /></form></Card>
+}
+
+function ReconcileCard({ brokers }: { brokers: BrokerSummary[] }) {
+  const { adapters, refresh } = useAppContext()
+  const crypto = adapters.crypto
+  const [brokerId, setBrokerId] = useState('')
+  const [prepared, setPrepared] = useState(false)
+  const [error, setError] = useState('')
+  const action = useAction()
+  const broker = brokers.find((item) => item.brokerId === brokerId)
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault(); setError('')
+    try {
+      if (!broker) throw new Error('Choose a broker.')
+      if (!prepared) {
+        const receipt = await action.run('Prepare accounting checkpoint', () => adapters.protocol.prepareReconciliation({ brokerId }))
+        if (receipt) { setPrepared(true); void refresh() }
+      } else {
+        const expectedBookVersion = broker.bookVersion || broker.spendingVersion
+        const proof = await crypto.prepareReconciliation({ broker, expectedBookVersion })
+        const receipt = await action.run('Reconcile credit book', () => adapters.protocol.reconcileCredit({ brokerId, expectedBookVersion, proof }))
+        if (receipt) { setPrepared(false); void refresh() }
+      }
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Reconciliation preparation failed.') }
+  }
+  return <Card className="form-card"><SectionHeading eyebrow="Aggregate accounting" title="Checkpoint credit book" description="Prepare the next authenticated checkpoint, then prove allocation and reconcile it. Individual amounts remain encrypted, though small cohorts can correlate." /><form onSubmit={submit} className="form-stack"><Field label="Broker" htmlFor="reconcile-broker"><SelectInput id="reconcile-broker" value={brokerId} onChange={(event) => { setBrokerId(event.target.value); setPrepared(false) }}><option value="">Select broker</option>{brokers.map((item) => <option key={item.brokerId} value={item.brokerId}>{item.brokerId}</option>)}</SelectInput></Field>{broker ? <div className="readonly-field"><span>Book version</span><Mono>{broker.bookVersion || broker.spendingVersion}</Mono><StateFreshness status={broker.checkpointStatus} /></div> : null}{error ? <p className="field-error" role="alert">{error}</p> : null}<Button type="submit" variant="secondary" disabled={!broker} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>{prepared ? 'Prepare proof & reconcile' : 'Prepare checkpoint'}</Button><ActionFeedback state={action.state} /></form></Card>
+}
+
+function KeeperCard({ brokers, grants }: { brokers: BrokerSummary[]; grants: KeeperGrant[] }) {
+  const { adapters, refresh } = useAppContext()
+  const [brokerId, setBrokerId] = useState('')
+  const [delegateId, setDelegateId] = useState('')
+  const [scope, setScope] = useState<KeeperGrant['scope'][number]>('merge')
+  const [maxAmount, setMaxAmount] = useState('')
+  const [expiryHours, setExpiryHours] = useState('24')
+  const [revokeId, setRevokeId] = useState('')
+  const [error, setError] = useState('')
+  const action = useAction()
+  const broker = brokers.find((item) => item.brokerId === brokerId)
+  const submitGrant = async (event: React.FormEvent) => {
+    event.preventDefault(); setError('')
+    try {
+      if (!broker || !delegateId.trim()) throw new Error('Choose a broker and provide a delegate account.')
+      const max = maxAmount.trim() ? parseNonNegativeAmount(maxAmount, 0) : undefined
+      await action.run('Grant keeper scope', () => adapters.protocol.grantKeeper({ brokerId, delegateId: delegateId.trim(), scope: [scope], maxAmount: max, expiresAt: unixSecondsNow() + Math.max(1, Number.parseInt(expiryHours, 10) || 24) * 3600 }))
+      void refresh()
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Keeper grant could not be prepared.') }
+  }
+  const submitRevoke = async (event: React.FormEvent) => {
+    event.preventDefault(); setError('')
+    const grant = grants.find((item) => item.delegateId === revokeId)
+    if (!grant) return setError('Choose an active grant.')
+    await action.run('Revoke keeper scope', () => adapters.protocol.revokeKeeper({ brokerId: grant.brokerId, delegateId: grant.delegateId, expectedEpoch: grant.epoch }))
+    void refresh()
+  }
+  return <Card className="form-card keeper-card"><SectionHeading eyebrow="Scoped automation" title="Keeper grants" description="Keepers submit already authorized operations; they do not receive private witnesses or broad account authority." /><div className="two-column-inner"><form onSubmit={submitGrant} className="form-stack"><h3>Grant a scope</h3><Field label="Broker" htmlFor="keeper-broker"><SelectInput id="keeper-broker" value={brokerId} onChange={(event) => setBrokerId(event.target.value)}><option value="">Select broker</option>{brokers.map((item) => <option key={item.brokerId} value={item.brokerId}>{item.brokerId}</option>)}</SelectInput></Field><Field label="Delegate account" htmlFor="keeper-delegate"><TextInput id="keeper-delegate" value={delegateId} onChange={(event) => setDelegateId(event.target.value)} placeholder="keeper.testnet" /></Field><Field label="Operation scope" htmlFor="keeper-scope"><SelectInput id="keeper-scope" value={scope} onChange={(event) => setScope(event.target.value as typeof scope)}><option value="merge">Merge inbox</option><option value="settle">Settle</option><option value="reconcile">Reconcile</option><option value="manage_loan">Manage loan</option></SelectInput></Field><Field label="Max amount (optional base units)" htmlFor="keeper-max"><TextInput id="keeper-max" inputMode="numeric" value={maxAmount} onChange={(event) => setMaxAmount(event.target.value)} placeholder="Leave blank for no amount cap" /></Field><Field label="Expires in (hours)" htmlFor="keeper-expiry"><TextInput id="keeper-expiry" inputMode="numeric" value={expiryHours} onChange={(event) => setExpiryHours(event.target.value)} /></Field>{error ? <p className="field-error" role="alert">{error}</p> : null}<Button type="submit" disabled={!brokers.length} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Grant scope</Button></form><form onSubmit={submitRevoke} className="form-stack"><h3>Revoke a grant</h3><Field label="Active delegate" htmlFor="keeper-revoke"><SelectInput id="keeper-revoke" value={revokeId} onChange={(event) => setRevokeId(event.target.value)}><option value="">Select delegate</option>{grants.filter((grant) => !grant.revoked).map((grant) => <option key={`${grant.brokerId}-${grant.delegateId}`} value={grant.delegateId}>{grant.delegateId} · {grant.scope.join(', ')}</option>)}</SelectInput></Field><p className="field-hint">Revocation increments the public epoch. Already submitted operations still follow their own proof and replay rules.</p><Button type="submit" variant="danger" disabled={!grants.some((grant) => !grant.revoked)} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Revoke grant</Button></form></div><ActionFeedback state={action.state} /></Card>
+}
+
+function BrokerTable({ brokers, decimals }: { brokers: BrokerSummary[]; decimals: number }) {
+  return <Table caption="Public broker accounts"><thead><tr><th scope="col">Broker</th><th scope="col">Vault</th><th scope="col">Debt</th><th scope="col">Ceiling</th><th scope="col">State</th></tr></thead><tbody>{brokers.length ? brokers.map((broker) => <tr key={broker.brokerId}><td><Mono>{broker.brokerId}</Mono><small>{broker.ownerId}</small></td><td><Mono>{broker.vaultId}</Mono></td><td><AmountCell units={broker.debtTotal} decimals={decimals} /></td><td><AmountCell units={broker.debtCeiling} decimals={decimals} /></td><td><StateFreshness status={broker.checkpointStatus} /><small>spend v{broker.spendingVersion}</small></td></tr>) : <EmptyRow message="No broker records for this wallet." colSpan={5} />}</tbody></Table>
+}
+
+function VaultList({ vaults, decimals }: { vaults: import('../lib/types').VaultSummary[]; decimals: number }) {
+  return <Table caption="Public vault records"><thead><tr><th scope="col">Vault</th><th scope="col">Owner / broker</th><th scope="col">Assets</th><th scope="col">Available</th><th scope="col">Phase</th></tr></thead><tbody>{vaults.length ? vaults.map((vault) => <tr key={vault.vaultId}><td><Mono>{vault.vaultId}</Mono><small>{vault.assetAccount}</small></td><td><small>{vault.ownerId}</small><small>{vault.brokerId || 'No broker'}</small></td><td><AmountCell units={vault.assetsTotal} decimals={decimals} /></td><td><AmountCell units={vault.assetsAvailable} decimals={decimals} /></td><td><StatusBadge tone={vault.phase === 'open' ? 'success' : 'warning'}>{vault.phase.replace('_', ' ')}</StatusBadge></td></tr>) : <EmptyRow message="No finalized vault records." colSpan={5} />}</tbody></Table>
+}
+
+function LoanTable({ loans }: { loans: LoanSummary[] }) {
+  return <Table caption="Public loan records"><thead><tr><th scope="col">Loan</th><th scope="col">Parties</th><th scope="col">Status</th><th scope="col">Schedule</th><th scope="col">Version</th></tr></thead><tbody>{loans.length ? loans.map((loan) => <tr key={loan.loanId}><td><Mono>{loan.loanId}</Mono><small>proposal {loan.proposalId}</small></td><td><small>Broker {loan.brokerId}</small><small>Borrower {loan.borrowerId}</small></td><td><StatusBadge tone={loan.status === 'active' ? 'success' : loan.status === 'defaulted' ? 'danger' : loan.status === 'impaired' ? 'warning' : 'neutral'}>{loan.status}</StatusBadge></td><td><span>{loan.paymentRemaining}/{loan.paymentCount} remaining</span><small>next due {new Date(loan.nextPaymentDue * 1000).toLocaleDateString()}</small></td><td><Mono>{loan.stateVersion}</Mono></td></tr>) : <EmptyRow message="No finalized loans for this broker." colSpan={5} />}</tbody></Table>
+}
+
+function LoanSummaryList({ loans }: { loans: LoanSummary[] }) {
+  if (!loans.length) return <EmptyState title="No loans in view" description="Jointly authorized proposals and originated loans will appear here." />
+  return <div className="summary-list">{loans.slice(0, 5).map((loan) => <div className="summary-line" key={loan.loanId}><span><Mono>{loan.loanId}</Mono><small>{loan.paymentRemaining}/{loan.paymentCount} payments remaining</small></span><StatusBadge tone={loan.status === 'active' ? 'success' : loan.status === 'defaulted' ? 'danger' : 'warning'}>{loan.status}</StatusBadge></div>)}</div>
+}
+
+function KeeperSummary({ grants }: { grants: KeeperGrant[] }) {
+  const active = grants.filter((grant) => !grant.revoked && grant.expiresAt > unixSecondsNow())
+  if (!active.length) return <EmptyState title="No active delegates" description="Scoped keeper grants can automate merge, settlement and reconciliation when explicitly authorized." />
+  return <div className="summary-list">{active.slice(0, 4).map((grant) => <div className="summary-line" key={`${grant.brokerId}-${grant.delegateId}`}><span><Mono>{grant.delegateId}</Mono><small>{grant.scope.join(' · ')}</small></span><StatusBadge tone="success">until {new Date(grant.expiresAt * 1000).toLocaleDateString()}</StatusBadge></div>)}</div>
+}
+
+function AttentionList({ brokers, loans }: { brokers: BrokerSummary[]; loans: LoanSummary[] }) {
+  const attention = [...brokers.filter((broker) => broker.checkpointStatus !== 'current').map((broker) => `Checkpoint ${broker.brokerId}`), ...loans.filter((loan) => loan.status === 'impaired').map((loan) => `Impaired loan ${loan.loanId}`), ...loans.filter((loan) => loan.status === 'defaulted').map((loan) => `Defaulted loan ${loan.loanId}`)]
+  return attention.length ? <div className="attention-list">{attention.slice(0, 6).map((item) => <div key={item}><span className="attention-dot" />{item}</div>)}</div> : <EmptyState title="No pending alerts" description="The adapter returned no stale checkpoints or impaired records." />
+}
