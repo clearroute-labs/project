@@ -1,0 +1,64 @@
+[package]
+name = "confidential-crypto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Cryptographic profile and proof API for confidential lending"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "confidential-crypto"
+path = "src/bin/confidential-crypto.rs"
+required-features = ["std"]
+
+[features]
+default = ["std"]
+std = [
+    "ark-std/std",
+    "ark-serialize/std",
+    "ark-ff/std",
+    "ark-ec/std",
+    "ark-bn254/std",
+    "ark-ed-on-bn254/std",
+    "ark-groth16/std",
+    "ark-relations/std",
+    "ark-r1cs-std/std",
+    "ark-crypto-primitives/std",
+    "rand/std",
+    "rand/std_rng",
+    "rand_chacha/std",
+    "serde/std",
+]
+wasm = ["wasm-bindgen", "dep:getrandom"]
+browser = ["wasm"]
+
+[dependencies]
+ark-std = { version = "0.5", default-features = false }
+ark-ff = { version = "0.5", default-features = false }
+ark-ec = { version = "0.5", default-features = false }
+ark-bn254 = { version = "0.5", default-features = false, features = ["curve"] }
+ark-ed-on-bn254 = { version = "0.5", default-features = false, features = ["r1cs"] }
+ark-serialize = { version = "0.5", default-features = false }
+ark-groth16 = { version = "0.5", default-features = false, features = ["r1cs"] }
+ark-relations = { version = "0.5", default-features = false }
+ark-r1cs-std = { version = "0.5", default-features = false }
+ark-snark = { version = "0.5", default-features = false }
+ark-crypto-primitives = { version = "0.5", default-features = false, features = ["crh", "r1cs"] }
+borsh.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+rand = { version = "0.8", default-features = false }
+getrandom = { version = "0.2", optional = true, features = ["js"] }
+zeroize = { version = "1.8", features = ["derive"] }
+rand_chacha = { version = "0.3", default-features = false }
+wasm-bindgen = { version = "0.2", optional = true }
+
+[dev-dependencies]
+rand_chacha = { version = "0.3", default-features = false }
+
