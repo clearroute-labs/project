@@ -5,6 +5,7 @@
 /.worktrees/
 /.artifacts/
 /.local/
+/.pnpm-store/
 /.env
 /.env.*
 !/.env.example

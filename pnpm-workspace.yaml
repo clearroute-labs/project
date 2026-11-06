@@ -1,0 +1,10 @@
+packages:
+  - web
+  - packages/*
+  - services/*
+allowBuilds:
+  esbuild: true
+  near-sandbox: false
+  near-workspaces: false
+  secp256k1: false
+storeDir: .local/pnpm-store

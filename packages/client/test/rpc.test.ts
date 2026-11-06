@@ -1,0 +1,59 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { NearRpc, RpcError, TransactionPendingError, extractEvents, type FinalOutcome } from '../src/index.js';
+
+function rpcFetch(handler: (request: Record<string, unknown>) => unknown): typeof fetch {
+  return (async (_url, init) => {
+    const request = JSON.parse(init!.body as string) as Record<string, unknown>;
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: handler(request) }), { status: 200 });
+  }) as typeof fetch;
+}
+
+test('contract reads use finalized state and preserve large decimal strings', async () => {
+  const rpc = new NearRpc('https://rpc.testnet.near.org', { fetch: rpcFetch(request => {
+    assert.equal(request.method, 'query');
+    assert.equal((request.params as Record<string, unknown>).finality, 'final');
+    return { result: Array.from(new TextEncoder().encode('{"amount":"9223372036854775807"}')) };
+  }) });
+  assert.deepEqual(await rpc.view('core.testnet', 'get_claim', { account_id: 'alice.testnet' }), { amount: '9223372036854775807' });
+});
+
+test('RPC rejects invalid transport and mismatched response IDs', async () => {
+  assert.throws(() => new NearRpc('http://rpc.testnet.near.org'));
+  const rpc = new NearRpc('http://127.0.0.1:3030', { allowInsecureLocalhost: true,
+    fetch: (async () => new Response('{"jsonrpc":"2.0","id":999,"result":{}}')) as typeof fetch });
+  await assert.rejects(rpc.view('core.testnet', 'get_config'), RpcError);
+});
+
+test('unknown transaction outcome remains pending, never turns into a refund', async () => {
+  let queries = 0;
+  const rpc = new NearRpc('https://rpc.testnet.near.org', { fetch: rpcFetch(request => {
+    queries++;
+    assert.equal(request.method, 'tx');
+    return { final_execution_status: 'EXECUTED', status: { SuccessValue: '' } };
+  }) });
+  await assert.rejects(rpc.waitForFinalOutcome('1'.repeat(44), 'alice.testnet', { attempts: 2, intervalMs: 0 }), TransactionPendingError);
+  assert.equal(queries, 2);
+});
+
+test('final transaction failures stay failures', async () => {
+  const rpc = new NearRpc('https://rpc.testnet.near.org', { fetch: rpcFetch(() => ({
+    final_execution_status: 'FINAL', status: { Failure: { ActionError: 'rejected' } },
+  })) });
+  const result = await rpc.waitForFinalOutcome('1'.repeat(44), 'alice.testnet');
+  assert.ok('Failure' in result.status);
+});
+
+test('event extraction excludes foreign and failed receipt logs', () => {
+  const log = 'EVENT_JSON:{"standard":"confidential_lending","version":"1.0.0","event":"loan_paid","data":{"loan_id":"7"}}';
+  const outcome = {
+    status: { SuccessValue: '' }, transaction: { hash: 'h', signer_id: 'a.near', receiver_id: 'core.near' },
+    transaction_outcome: { id: 'tx', outcome: { executor_id: 'a.near', logs: [], status: { SuccessReceiptId: 'r1' } } },
+    receipts_outcome: [
+      { id: 'r1', outcome: { executor_id: 'core.near', logs: [log], status: { SuccessValue: '' } } },
+      { id: 'r2', outcome: { executor_id: 'evil.near', logs: [log], status: { SuccessValue: '' } } },
+      { id: 'r3', outcome: { executor_id: 'core.near', logs: [log], status: { Failure: {} } } },
+    ],
+  } satisfies FinalOutcome;
+  assert.deepEqual(extractEvents(outcome, 'core.near').map(event => event.receiptId), ['r1']);
+});

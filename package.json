@@ -1,0 +1,25 @@
+{
+  "name": "near-confidential-lending",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.22.0",
+  "engines": { "node": ">=24.11.0" },
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "test:e2e": "tsx --test tests/e2e/*.test.ts",
+    "dev": "pnpm --dir web dev",
+    "build:contracts": "bash scripts/build-contracts.sh",
+    "build:crypto": "bash scripts/build-crypto.sh",
+    "install:sandbox": "node scripts/install-sandbox.mjs",
+    "check:release": "tsx scripts/check-release.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0",
+    "@types/node": "^24.10.1",
+    "near-workspaces": "5.0.0",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}
