@@ -11,6 +11,6 @@ describe('encrypted wallet backups', () => {
   })
 
   it('requires a strong passphrase', async () => {
-    await expect(encryptWalletBackup({ key: 'secret' }, 'too-short')).rejects.toThrow(/12 characters/)
+    await expect(encryptWalletBackup({ key: 'secret' }, 'too-short')).rejects.toThrow(/12 .*characters/)
   })
 })

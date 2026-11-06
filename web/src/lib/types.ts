@@ -1,5 +1,7 @@
 export type Role = 'lender' | 'broker' | 'borrower' | 'auditor'
 
+export const CORE_MAX_PAYMENT_COUNT = 10_000
+
 export type NetworkId = 'mainnet' | 'testnet' | (string & {})
 
 export interface DeploymentConfig {
@@ -7,12 +9,20 @@ export interface DeploymentConfig {
   coreAccountId: string
   tokenAccountId: string
   rpcUrl: string
+  /** Explicitly opt in to HTTP only for a local sandbox RPC. */
+  allowInsecureLocalhost?: boolean
   cryptoProfileHash: string
+  /** Immutable artifact/manifest pin checked by the injected browser prover. */
+  cryptoArtifactHash?: string
+  assetDecimals: number
+  assetSymbol: string
 }
 
 export interface ActionReceipt {
   operationId: string
   transactionHash?: string
+  /** JSON-decoded method return value when Core returns one (for example a checkpoint ID). */
+  returnValue?: string
   status: 'submitted' | 'pending' | 'succeeded' | 'failed' | 'unknown'
   finalized: boolean
 }
@@ -62,7 +72,9 @@ export interface AssetProfile {
   decimals: number
   controllerAccount: string
   issuerKeyId: string
+  issuerPublicKey: string
   tokenAuditorKeyId: string
+  tokenAuditorPublicKey: string
   cryptoProfileHash: string
   tokenTrustPolicy: string
 }
@@ -80,6 +92,7 @@ export interface VaultSummary {
   assetsAvailable: string
   sharesSupply: string
   yourShares?: string
+  shareScale?: number
   accountingVersion: string
   checkpointStatus: 'current' | 'pending' | 'stale' | 'unknown'
 }
@@ -91,9 +104,23 @@ export interface BrokerSummary {
   debtTotal: string
   debtCeiling: string
   spendingVersion: string
-  inboxVersion: string
   bookVersion?: string
   privateBalanceKeyId: string
+  inboxCommitment?: string
+  /** Encrypted state required by the local prover; never plaintext values. */
+  spendingCiphertext?: string
+  inboxCiphertext?: string
+  issuerBalanceCiphertext?: string
+  auditorBalanceCiphertext?: string
+  spendingCommitment?: string
+  activePrincipalCiphertext?: string
+  impairedPrincipalCiphertext?: string
+  activePrincipalCommitment?: string
+  impairedPrincipalCommitment?: string
+  loanBookRoot?: string
+  impairmentProvision?: string
+  accountingVersion?: string
+  riskVersion?: string
   checkpointStatus: 'current' | 'pending' | 'stale' | 'unknown'
   keeperCount: number
 }
@@ -107,6 +134,7 @@ export interface LoanSummary {
   borrowerId: string
   vaultId: string
   auditorKeyId: string
+  auditorPublicKey?: string
   status: LoanStatus
   paymentRemaining: number
   paymentCount: number
@@ -119,6 +147,16 @@ export interface LoanSummary {
   // explicit user action with the appropriate local key.
   principalCiphertextDigest: string
   owedCiphertextDigest: string
+  /** Ciphertext views and authenticated leaf data for the local prover. */
+  principalCiphertexts?: string[]
+  initialOwedCiphertexts?: string[]
+  amountOwedCiphertexts?: string[]
+  periodicPaymentCiphertexts?: string[]
+  principalRemainingCiphertexts?: string[]
+  cumulativeRepaidCiphertexts?: string[]
+  accountingLeaf?: string
+  borrowerKeyId?: string
+  brokerKeyId?: string
 }
 
 export interface ProposalSummary {
@@ -131,6 +169,23 @@ export interface ProposalSummary {
   termsDigest: string
   encryptedAgreement: string
   encryptionKeyId: string
+  encryptedPrincipal?: string[]
+  encryptedOwed?: string[]
+  encryptedPayment?: string[]
+  principalCommitment?: string
+  owedCommitment?: string
+  paymentCommitment?: string
+  loanAuditorPublicKey?: string
+  brokerSignature?: string
+  borrowerSignature?: string
+  borrowerKeyId?: string
+  brokerKeyId?: string
+  brokerAuthorizationEpoch?: string
+  borrowerAuthorizationEpoch?: string
+  brokerAuthorizationKeyId?: string
+  borrowerAuthorizationKeyId?: string
+  brokerDirectAuthorized?: boolean
+  borrowerDirectAuthorized?: boolean
 }
 
 export interface PublicClaim {
@@ -183,9 +238,16 @@ export interface PrivateAccountView {
   balanceCommitment: string
   inboxCiphertext: string
   inboxCommitment: string
+  issuerBalanceCiphertext?: string
+  auditorBalanceCiphertext?: string
   spendingVersion: string
-  inboxVersion: string
   registered: boolean
+}
+
+export interface HolderKeyView {
+  accountId: string
+  encryptionKeyId: string
+  publicKey: string
 }
 
 export interface AuditCiphertextBundle {
@@ -211,19 +273,57 @@ export interface PreparedProof {
   /** Canonical context digest returned by Core.prepare_context. */
   context: string
   proof: string
+  /** Canonical confidential-crypto Statement JSON, transported as UTF-8 bytes to Core. */
+  statement: string
   publicInputs: string[]
   profileHash: string
   artifactHash: string
   statementDigest: string
-  /** Per-operation ciphertexts/roots produced by the worker. Never plaintext witnesses. */
+  /** Optional verifier metadata returned by the pinned crypto artifact. */
+  statementKind?: number
+  verifyingKeyHash?: string
+  /**
+   * Per-operation Core argument fields produced by the worker. Keys use the
+   * Core ABI's snake_case names (for example `new_spending_ciphertext`,
+   * `broker_book_root`, `transfer_views`, or `reconciliation`). Values are
+   * canonical hex ciphertexts/commitments/roots or public decimal counters;
+   * plaintext values, witnesses and secret keys are rejected by the RPC
+   * mapper and must never cross this boundary.
+   */
   operationArgs?: Record<string, unknown>
 }
 
 export interface KeyRegistration {
   encryptionPublicKey: string
   encryptionKeyId: string
-  possessionProof: string
+  possessionProof: PreparedProof
   authorizationPublicKey: string
+  authorizationSignature: string
+}
+
+export interface AuthorizationKeyRegistration {
+  keyId: string
+  publicKey: string
+  proof: PreparedProof
+}
+
+export type RecoveryPair = readonly [string, string]
+
+/** Public encrypted agreement material returned by the browser crypto worker. */
+export interface AgreementDraft {
+  /** Opaque worker-local handle; never sent to Core or persisted in plaintext. */
+  draftId: string
+  principalCiphertexts: string[]
+  initialOwedCiphertexts: string[]
+  periodicPaymentCiphertexts: string[]
+  principalCommitment: string
+  owedCommitment: string
+  paymentCommitment: string
+  encryptedAgreement: string
+  /** Public recovery ciphertext pairs retained for the later origination proof. */
+  transferRecovery: RecoveryPair[]
+  owedRecovery: RecoveryPair[]
+  paymentRecovery: RecoveryPair[]
 }
 
 export interface EncryptedWalletBackup {
@@ -260,6 +360,22 @@ export interface CryptoProvider {
   exportWalletMaterial(): Promise<Record<string, unknown>>
   importWalletMaterial(material: Record<string, unknown>): Promise<void>
   createKeyRegistration(): Promise<KeyRegistration>
+  createAuthorizationKeyRegistration(): Promise<AuthorizationKeyRegistration>
+  prepareAgreement(input: {
+    publicKeys: {
+      borrower: string
+      broker: string
+      issuer: string
+      tokenAuditor: string
+      loanAuditor: string
+    }
+    principal: string
+    initialOwed: string
+    periodicPayment: string
+    paymentCount: number
+    maxPaymentCount: number
+  }): Promise<AgreementDraft>
+  prepareBrokerKeyRegistration(input: { encryptionKeyId: string; encryptionPublicKey: string }): Promise<PreparedProof>
   prepareConfidentialTransfer(input: {
     sender: PrivateAccountView
     destinationAccountId: string
@@ -268,11 +384,7 @@ export interface CryptoProvider {
   }): Promise<PreparedProof>
   prepareMerge(input: { account: PrivateAccountView; scope: 'holder' | 'broker' }): Promise<PreparedProof>
   prepareDraw(input: { broker: BrokerSummary; amount: string; expectedSpendingVersion: string }): Promise<PreparedProof>
-  prepareOrigination(input: {
-    proposal: ProposalSummary
-    broker: BrokerSummary
-    borrower: PrivateAccountView
-  }): Promise<PreparedProof>
+  prepareBrokerOrigination(input: { proposal: ProposalSummary; broker: BrokerSummary }): Promise<PreparedProof>
   prepareRepayment(input: {
     loan: LoanSummary
     borrower: PrivateAccountView
@@ -284,7 +396,7 @@ export interface CryptoProvider {
     amount: string
     expectedSpendingVersion: string
   }): Promise<PreparedProof>
-  prepareReconciliation(input: { broker: BrokerSummary; expectedBookVersion: string }): Promise<PreparedProof>
+  prepareReconciliation(input: { broker: BrokerSummary; expectedBookVersion: string; checkpointId?: string }): Promise<PreparedProof>
   authorizeAgreement(proposal: ProposalSummary): Promise<{ authorizationSignature: string }>
   decryptAgreement(proposal: ProposalSummary): Promise<{ fields: Array<{ label: string; value: string; unit: string }>; digest: string }>
   decryptPrivateBalance(view: PrivateAccountView): Promise<string>
@@ -296,10 +408,13 @@ export interface ProtocolClient {
   getAssetProfile(): Promise<AssetProfile>
   getDashboard(accountId: string): Promise<DashboardSnapshot>
   getPrivateAccount(accountId: string): Promise<PrivateAccountView>
+  getHolderEncryptionKey(accountId: string): Promise<HolderKeyView>
   getBrokerPrivateAccount(brokerId: string): Promise<PrivateAccountView>
   getProposal(proposalId: string): Promise<ProposalSummary>
   getAuditBundle(input: { scope: 'loan' | 'token'; subjectId: string }): Promise<AuditCiphertextBundle>
   registerHolder(input: KeyRegistration): Promise<ActionReceipt>
+  registerAuthorizationKey(input: AuthorizationKeyRegistration): Promise<ActionReceipt>
+  revokeAuthorizationKey(input: { keyId: string }): Promise<ActionReceipt>
   createVault(input: {
     assetAccount: string
     assetsMaximum: string
@@ -309,13 +424,13 @@ export interface ProtocolClient {
     sharesTransferable: boolean
     checkpointPolicy: { epochSeconds: number; disclosurePolicy: string }
   }): Promise<ActionReceipt>
-  createBroker(input: { vaultId: string; brokerEncryptionKey: string; brokerDebtCeiling: string; possessionProof: string }): Promise<ActionReceipt>
+  createBroker(input: { vaultId: string; brokerEncryptionKeyId: string; brokerEncryptionKey: string; brokerDebtCeiling: string; possessionProof: PreparedProof }): Promise<ActionReceipt>
   depositExternal(input: { amount: string; depositId: string }): Promise<ActionReceipt>
   depositToVault(input: { claimId: string; vaultId: string; amount: string; minShares: string; expiresAt: number }): Promise<ActionReceipt>
   redeemShares(input: { vaultId: string; shares: string; minAmount: string; expiresAt: number }): Promise<ActionReceipt>
   requestPayout(input: { claimId: string; operationId: string; recipientId: string }): Promise<ActionReceipt>
-  mergeInbox(input: { accountId: string; expectedInboxVersion: string; proof: PreparedProof }): Promise<ActionReceipt>
-  mergeBrokerInbox(input: { brokerId: string; expectedInboxVersion: string; proof: PreparedProof }): Promise<ActionReceipt>
+  mergeInbox(input: { accountId: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt>
+  mergeBrokerInbox(input: { brokerId: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt>
   draw(input: { brokerId: string; amount: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt>
   createProposal(input: {
     brokerId: string
@@ -323,13 +438,19 @@ export interface ProtocolClient {
     vaultId: string
     borrowerKeyId: string
     brokerKeyId: string
+    borrowerAuthorizationKeyId?: string
+    brokerAuthorizationKeyId?: string
     auditorKeyId: string
     paymentCount: number
     paymentIntervalSeconds: number
     gracePeriodSeconds: number
-    encryptedPrincipal: string
-    encryptedOwed: string
-    encryptedPayment: string
+    encryptedPrincipal: string[]
+    encryptedOwed: string[]
+    encryptedPayment: string[]
+    principalCommitment: string
+    owedCommitment: string
+    paymentCommitment: string
+    auditorPublicKey: string
     encryptedAgreement: string
     termsDigest: string
     brokerSignature: string
@@ -339,6 +460,7 @@ export interface ProtocolClient {
     expiresAt: number
   }): Promise<ActionReceipt>
   authorizeProposal(input: { proposalId: string; authorizationSignature: string }): Promise<ActionReceipt>
+  revokeProposal(input: { proposalId: string }): Promise<ActionReceipt>
   originate(input: { proposalId: string; proof: PreparedProof }): Promise<ActionReceipt>
   confidentialSend(input: {
     senderAccountId: string
@@ -346,12 +468,22 @@ export interface ProtocolClient {
     expectedSpendingVersion: string
     proof: PreparedProof
   }): Promise<ActionReceipt>
-  repay(input: { loanId: string; mode: 'regular' | 'full'; expectedLoanVersion: string; proof: PreparedProof }): Promise<ActionReceipt>
+  repay(input: { loanId: string; mode: 'regular' | 'full'; expectedLoanVersion: string; expectedBorrowerSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt>
   manageLoan(input: { loanId: string; operation: 'impair' | 'unimpair' | 'default'; expectedLoanVersion: string; proof: PreparedProof }): Promise<ActionReceipt>
-  settle(input: { brokerId: string; amount: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt>
+  settle(input: { brokerId: string; amount: string; expectedSpendingVersion: string; expectedAccountingVersion: string; proof: PreparedProof }): Promise<ActionReceipt>
   reconcileCredit(input: { brokerId: string; expectedBookVersion: string; proof: PreparedProof }): Promise<ActionReceipt>
   prepareReconciliation(input: { brokerId: string }): Promise<ActionReceipt>
-  grantKeeper(input: { brokerId: string; delegateId: string; scope: KeeperGrant['scope']; maxAmount?: string; expiresAt: number }): Promise<ActionReceipt>
+  grantKeeper(input: {
+    brokerId: string
+    delegateId: string
+    delegateKeyId: string
+    scope: KeeperGrant['scope']
+    maxAmountPerOperation: string
+    maxAmountPerWindow: string
+    windowSeconds: number
+    delegateEpoch: string
+    expiresAt: number
+  }): Promise<ActionReceipt>
   revokeKeeper(input: { brokerId: string; delegateId: string; expectedEpoch: string }): Promise<ActionReceipt>
 }
 

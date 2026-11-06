@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useAppContext } from '../App'
 import { ActionFeedback, Button, Card, EmptyState, Field, Metric, Mono, Money, Notice, SectionHeading, SelectInput, StatusBadge, Table, TextInput } from '../components/ui'
 import { useAction } from '../lib/actionState'
-import { parseAmount, parseNonNegativeAmount, unixSecondsNow } from '../lib/money'
+import { parseAmount, parseNonNegativeAmount, randomUint64Decimal, unixSecondsNow } from '../lib/money'
 import type { PublicClaim, VaultSummary } from '../lib/types'
 import { AmountCell, ConnectionGate, EmptyRow, IdLabel, PageHeader, PublicPrivateNotice, StateFreshness } from './shared'
 
@@ -67,7 +67,7 @@ function DepositCard({ claims, vaults, decimals, selectedVaultId }: { claims: Pu
     if (!claims.some((claim) => claim.claimId === claimId && ['available', 'restored'].includes(claim.status))) return setError('Choose an available public claim. Fund one below if no claim is listed.')
     try {
       const amountUnits = parseAmount(amount, decimals)
-      const minSharesUnits = parseNonNegativeAmount(minShares || '0', decimals)
+      const minSharesUnits = parseNonNegativeAmount(minShares || '0', vault.shareScale ?? decimals)
       const receipt = await action.run('Deposit claim to vault', () => adapters.protocol.depositToVault({ claimId, vaultId, amount: amountUnits, minShares: minSharesUnits, expiresAt: unixSecondsNow() + 900 }))
       if (receipt) {
         setAmount('')
@@ -112,7 +112,8 @@ function RedeemCard({ vaults, decimals, selectedVaultId }: { vaults: VaultSummar
     setError('')
     if (!vaults.some((vault) => vault.vaultId === vaultId)) return setError('Choose a vault.')
     try {
-      const shareUnits = parseAmount(shares, decimals)
+      const vault = vaults.find((item) => item.vaultId === vaultId)
+      const shareUnits = parseAmount(shares, vault?.shareScale ?? decimals)
       const minAmountUnits = parseNonNegativeAmount(minAmount || '0', decimals)
       const receipt = await action.run('Redeem shares', () => adapters.protocol.redeemShares({ vaultId, shares: shareUnits, minAmount: minAmountUnits, expiresAt: unixSecondsNow() + 900 }))
       if (receipt) {
@@ -146,8 +147,7 @@ function RequestPayoutCard({ claims }: { claims: PublicClaim[] }) {
     if (!claim) return setError('Choose an available claim.')
     if (!recipient.trim()) return setError('Enter the fixed NEAR recipient for this payout.')
     try {
-      const operationId = typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : ''
-      if (!operationId) throw new Error('This browser cannot create a secure payout operation ID.')
+      const operationId = randomUint64Decimal()
       await action.run('Request external payout', () => adapters.protocol.requestPayout({ claimId, operationId, recipientId: recipient.trim() }))
       void refresh()
     } catch (caught) {
@@ -163,7 +163,7 @@ function PayoutStatusCard({ payouts, decimals }: { payouts: import('../lib/types
 }
 
 function VaultTable({ vaults, decimals, onSelect, selectedVaultId }: { vaults: VaultSummary[]; decimals: number; onSelect?: (vault: VaultSummary) => void; selectedVaultId?: string }) {
-  return <Table caption="Public vault positions"><thead><tr><th scope="col">Vault</th><th scope="col">Phase</th><th scope="col">Assets</th><th scope="col">Available</th><th scope="col">Your shares</th><th scope="col">Accounting</th></tr></thead><tbody>{vaults.length ? vaults.map((vault) => <tr key={vault.vaultId} className={selectedVaultId === vault.vaultId ? 'row-selected' : ''} onClick={() => onSelect?.(vault)} tabIndex={onSelect ? 0 : undefined} onKeyDown={(event) => { if (event.key === 'Enter') onSelect?.(vault) }}><td><Mono>{vault.vaultId}</Mono><small>{vault.assetAccount}</small></td><td><StatusBadge tone={vault.phase === 'open' ? 'success' : vault.phase === 'closed' ? 'danger' : 'warning'}>{vault.phase.replace('_', ' ')}</StatusBadge></td><td><AmountCell units={vault.assetsTotal} decimals={decimals} /></td><td><AmountCell units={vault.assetsAvailable} decimals={decimals} /></td><td><AmountCell units={vault.yourShares} decimals={decimals} /></td><td><StateFreshness status={vault.checkpointStatus} /><small>v{vault.accountingVersion}</small></td></tr>) : <EmptyRow message="No finalized vault records for this wallet." colSpan={6} />}</tbody></Table>
+  return <Table caption="Public vault positions"><thead><tr><th scope="col">Vault</th><th scope="col">Phase</th><th scope="col">Assets</th><th scope="col">Available</th><th scope="col">Your shares</th><th scope="col">Accounting</th></tr></thead><tbody>{vaults.length ? vaults.map((vault) => <tr key={vault.vaultId} className={selectedVaultId === vault.vaultId ? 'row-selected' : ''} onClick={() => onSelect?.(vault)} tabIndex={onSelect ? 0 : undefined} onKeyDown={(event) => { if (event.key === 'Enter') onSelect?.(vault) }}><td><Mono>{vault.vaultId}</Mono><small>{vault.assetAccount}</small></td><td><StatusBadge tone={vault.phase === 'open' ? 'success' : vault.phase === 'closed' ? 'danger' : 'warning'}>{vault.phase.replace('_', ' ')}</StatusBadge></td><td><AmountCell units={vault.assetsTotal} decimals={decimals} /></td><td><AmountCell units={vault.assetsAvailable} decimals={decimals} /></td><td><AmountCell units={vault.yourShares} decimals={vault.shareScale ?? decimals} /></td><td><StateFreshness status={vault.checkpointStatus} /><small>v{vault.accountingVersion}</small></td></tr>) : <EmptyRow message="No finalized vault records for this wallet." colSpan={6} />}</tbody></Table>
 }
 
 function ClaimsTable({ claims, decimals }: { claims: PublicClaim[]; decimals: number }) {

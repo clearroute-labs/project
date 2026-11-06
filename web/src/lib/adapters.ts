@@ -1,6 +1,8 @@
 import {
   ProtocolError,
   type ActionReceipt,
+  type AgreementDraft,
+  type AuthorizationKeyRegistration,
   type AppAdapters,
   type AuditCiphertextBundle,
   type BrokerSummary,
@@ -10,6 +12,7 @@ import {
   type DeploymentConfig,
   type KeyRegistration,
   type KeeperGrant,
+  type HolderKeyView,
   type LoanSummary,
   type PrivateAccountView,
   type PreparedProof,
@@ -18,6 +21,8 @@ import {
   type PublicClaim,
   type WalletAdapter,
 } from './types'
+import { createRpcProtocolClient } from './nearClient'
+import { NearWalletSelectorSession } from './nearWallet'
 
 export function deploymentConfigFromEnv(): DeploymentConfig {
   return {
@@ -25,7 +30,11 @@ export function deploymentConfigFromEnv(): DeploymentConfig {
     coreAccountId: import.meta.env.VITE_CORE_ACCOUNT_ID || '',
     tokenAccountId: import.meta.env.VITE_TOKEN_ACCOUNT_ID || '',
     rpcUrl: import.meta.env.VITE_RPC_URL || 'https://rpc.testnet.near.org',
+    allowInsecureLocalhost: import.meta.env.VITE_ALLOW_INSECURE_LOCALHOST === 'true',
     cryptoProfileHash: import.meta.env.VITE_CRYPTO_PROFILE_HASH || '',
+    cryptoArtifactHash: import.meta.env.VITE_CRYPTO_ARTIFACT_HASH || undefined,
+    assetDecimals: Number.parseInt(import.meta.env.VITE_ASSET_DECIMALS || '', 10),
+    assetSymbol: import.meta.env.VITE_ASSET_SYMBOL || 'ASSET',
   }
 }
 
@@ -47,29 +56,33 @@ class UnavailableProtocolClient implements ProtocolClient {
   getAssetProfile(): Promise<never> { return Promise.reject(this.fail()) }
   getDashboard(_accountId: string): Promise<DashboardSnapshot> { return Promise.reject(this.fail()) }
   getPrivateAccount(_accountId: string): Promise<PrivateAccountView> { return Promise.reject(this.fail()) }
+  getHolderEncryptionKey(_accountId: string): Promise<HolderKeyView> { return Promise.reject(this.fail()) }
   getBrokerPrivateAccount(_brokerId: string): Promise<PrivateAccountView> { return Promise.reject(this.fail()) }
   getProposal(_proposalId: string): Promise<ProposalSummary> { return Promise.reject(this.fail()) }
   getAuditBundle(_input: { scope: 'loan' | 'token'; subjectId: string }): Promise<AuditCiphertextBundle> { return Promise.reject(this.fail()) }
   registerHolder(_input: KeyRegistration): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  registerAuthorizationKey(_input: AuthorizationKeyRegistration): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  revokeAuthorizationKey(_input: { keyId: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   createVault(_input: { assetAccount: string; assetsMaximum: string; kind: 'open_ended' | 'closed_ended'; phaseTimes?: { subscriptionStart: number; investmentStart: number; redemptionStart: number; redemptionBuffer: number }; shareScale: number; sharesTransferable: boolean; checkpointPolicy: { epochSeconds: number; disclosurePolicy: string } }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
-  createBroker(_input: { vaultId: string; brokerEncryptionKey: string; brokerDebtCeiling: string; possessionProof: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  createBroker(_input: { vaultId: string; brokerEncryptionKeyId: string; brokerEncryptionKey: string; brokerDebtCeiling: string; possessionProof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   depositExternal(_input: { amount: string; depositId: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   depositToVault(_input: { claimId: string; vaultId: string; amount: string; minShares: string; expiresAt: number }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   redeemShares(_input: { vaultId: string; shares: string; minAmount: string; expiresAt: number }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   requestPayout(_input: { claimId: string; operationId: string; recipientId: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
-  mergeInbox(_input: { accountId: string; expectedInboxVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
-  mergeBrokerInbox(_input: { brokerId: string; expectedInboxVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  mergeInbox(_input: { accountId: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  mergeBrokerInbox(_input: { brokerId: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   draw(_input: { brokerId: string; amount: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
-  createProposal(_input: { brokerId: string; borrowerId: string; vaultId: string; borrowerKeyId: string; brokerKeyId: string; auditorKeyId: string; paymentCount: number; paymentIntervalSeconds: number; gracePeriodSeconds: number; encryptedPrincipal: string; encryptedOwed: string; encryptedPayment: string; encryptedAgreement: string; termsDigest: string; brokerSignature: string; borrowerSignature: string; brokerAuthorizationEpoch: string; borrowerAuthorizationEpoch: string; expiresAt: number }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  createProposal(_input: { brokerId: string; borrowerId: string; vaultId: string; borrowerKeyId: string; brokerKeyId: string; borrowerAuthorizationKeyId?: string; brokerAuthorizationKeyId?: string; auditorKeyId: string; auditorPublicKey: string; paymentCount: number; paymentIntervalSeconds: number; gracePeriodSeconds: number; encryptedPrincipal: string[]; encryptedOwed: string[]; encryptedPayment: string[]; principalCommitment: string; owedCommitment: string; paymentCommitment: string; encryptedAgreement: string; termsDigest: string; brokerSignature: string; borrowerSignature: string; brokerAuthorizationEpoch: string; borrowerAuthorizationEpoch: string; expiresAt: number }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   authorizeProposal(_input: { proposalId: string; authorizationSignature: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  revokeProposal(_input: { proposalId: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   originate(_input: { proposalId: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   confidentialSend(_input: { senderAccountId: string; destinationAccountId: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
-  repay(_input: { loanId: string; mode: 'regular' | 'full'; expectedLoanVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  repay(_input: { loanId: string; mode: 'regular' | 'full'; expectedLoanVersion: string; expectedBorrowerSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   manageLoan(_input: { loanId: string; operation: 'impair' | 'unimpair' | 'default'; expectedLoanVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
-  settle(_input: { brokerId: string; amount: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  settle(_input: { brokerId: string; amount: string; expectedSpendingVersion: string; expectedAccountingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   reconcileCredit(_input: { brokerId: string; expectedBookVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   prepareReconciliation(_input: { brokerId: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
-  grantKeeper(_input: { brokerId: string; delegateId: string; scope: KeeperGrant['scope']; maxAmount?: string; expiresAt: number }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  grantKeeper(_input: { brokerId: string; delegateId: string; delegateKeyId: string; scope: KeeperGrant['scope']; maxAmountPerOperation: string; maxAmountPerWindow: string; windowSeconds: number; delegateEpoch: string; expiresAt: number }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   revokeKeeper(_input: { brokerId: string; delegateId: string; expectedEpoch: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
 }
 
@@ -117,14 +130,17 @@ class UnavailableCryptoProvider implements CryptoProvider {
   exportWalletMaterial(): Promise<never> { return Promise.reject(this.fail()) }
   importWalletMaterial(_material: Record<string, unknown>): Promise<never> { return Promise.reject(this.fail()) }
   createKeyRegistration(): Promise<never> { return Promise.reject(this.fail()) }
+  createAuthorizationKeyRegistration(): Promise<never> { return Promise.reject(this.fail()) }
+  prepareAgreement(_input: { publicKeys: { borrower: string; broker: string; issuer: string; tokenAuditor: string; loanAuditor: string }; principal: string; initialOwed: string; periodicPayment: string; paymentCount: number; maxPaymentCount: number }): Promise<AgreementDraft> { return Promise.reject(this.fail()) }
+  prepareBrokerKeyRegistration(_input: { encryptionKeyId: string; encryptionPublicKey: string }): Promise<never> { return Promise.reject(this.fail()) }
   prepareConfidentialTransfer(_input: { sender: PrivateAccountView; destinationAccountId: string; amount: string; destinationEncryptionKeyId: string }): Promise<never> { return Promise.reject(this.fail()) }
   prepareMerge(_input: { account: PrivateAccountView; scope: 'holder' | 'broker' }): Promise<never> { return Promise.reject(this.fail()) }
   prepareDraw(_input: { broker: BrokerSummary; amount: string; expectedSpendingVersion: string }): Promise<never> { return Promise.reject(this.fail()) }
-  prepareOrigination(_input: { proposal: ProposalSummary; broker: BrokerSummary; borrower: PrivateAccountView }): Promise<never> { return Promise.reject(this.fail()) }
+  prepareBrokerOrigination(_input: { proposal: ProposalSummary; broker: BrokerSummary }): Promise<never> { return Promise.reject(this.fail()) }
   prepareRepayment(_input: { loan: LoanSummary; borrower: PrivateAccountView; mode: 'regular' | 'full' }): Promise<never> { return Promise.reject(this.fail()) }
   prepareLoanManagement(_input: { loan: LoanSummary; operation: 'impair' | 'unimpair' | 'default' }): Promise<never> { return Promise.reject(this.fail()) }
   prepareSettlement(_input: { broker: BrokerSummary; amount: string; expectedSpendingVersion: string }): Promise<never> { return Promise.reject(this.fail()) }
-  prepareReconciliation(_input: { broker: BrokerSummary; expectedBookVersion: string }): Promise<never> { return Promise.reject(this.fail()) }
+  prepareReconciliation(_input: { broker: BrokerSummary; expectedBookVersion: string; checkpointId?: string }): Promise<never> { return Promise.reject(this.fail()) }
   authorizeAgreement(_proposal: ProposalSummary): Promise<never> { return Promise.reject(this.fail()) }
   decryptAgreement(_proposal: ProposalSummary): Promise<never> { return Promise.reject(this.fail()) }
   decryptPrivateBalance(_view: PrivateAccountView): Promise<never> { return Promise.reject(this.fail()) }
@@ -153,6 +169,16 @@ declare global {
 export function createBrowserAdapters(config = deploymentConfigFromEnv()): AppAdapters {
   const fallback = createUnavailableAdapters(config)
   const injected = typeof window !== 'undefined' ? window.__PRIVATE_LEDGER_ADAPTERS__ : undefined
+  const configured = Boolean(config.coreAccountId && config.tokenAccountId && config.cryptoProfileHash && /^[a-f\d]{64}$/i.test(config.cryptoProfileHash) && Number.isInteger(config.assetDecimals) && config.assetDecimals >= 0 && config.assetDecimals <= 38)
+  if (!injected?.protocol && !injected?.wallet && configured) {
+    try {
+      const wallet = new NearWalletSelectorSession(config)
+      const { protocol } = createRpcProtocolClient(config, wallet)
+      return { protocol, wallet, crypto: injected?.crypto ?? fallback.crypto }
+    } catch {
+      // Invalid deployment transport remains visibly disconnected; no fake client is returned.
+    }
+  }
   return {
     protocol: injected?.protocol ?? fallback.protocol,
     wallet: injected?.wallet ?? fallback.wallet,

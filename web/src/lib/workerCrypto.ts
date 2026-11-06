@@ -1,5 +1,7 @@
 import type {
+  AgreementDraft,
   AuditCiphertextBundle,
+  AuthorizationKeyRegistration,
   BrokerSummary,
   CryptoProvider,
   CryptoProviderStatus,
@@ -74,14 +76,17 @@ export class WorkerCryptoProvider implements CryptoProvider {
   exportWalletMaterial(): Promise<Record<string, unknown>> { return this.call('export_wallet_material') }
   importWalletMaterial(material: Record<string, unknown>): Promise<void> { return this.call('import_wallet_material', material) }
   createKeyRegistration(): Promise<KeyRegistration> { return this.call('create_key_registration') }
+  createAuthorizationKeyRegistration(): Promise<AuthorizationKeyRegistration> { return this.call('create_authorization_key_registration') }
+  prepareAgreement(input: { publicKeys: { borrower: string; broker: string; issuer: string; tokenAuditor: string; loanAuditor: string }; principal: string; initialOwed: string; periodicPayment: string; paymentCount: number; maxPaymentCount: number }): Promise<AgreementDraft> { return this.call('prepare_agreement', input) }
+  prepareBrokerKeyRegistration(input: { encryptionKeyId: string; encryptionPublicKey: string }): Promise<PreparedProof> { return this.call('prepare_broker_key_registration', input) }
   prepareConfidentialTransfer(input: { sender: PrivateAccountView; destinationAccountId: string; amount: string; destinationEncryptionKeyId: string }): Promise<PreparedProof> { return this.call('prepare_confidential_transfer', input) }
   prepareMerge(input: { account: PrivateAccountView; scope: 'holder' | 'broker' }): Promise<PreparedProof> { return this.call('prepare_merge', input) }
   prepareDraw(input: { broker: BrokerSummary; amount: string; expectedSpendingVersion: string }): Promise<PreparedProof> { return this.call('prepare_draw', input) }
-  prepareOrigination(input: { proposal: ProposalSummary; broker: BrokerSummary; borrower: PrivateAccountView }): Promise<PreparedProof> { return this.call('prepare_origination', input) }
+  prepareBrokerOrigination(input: { proposal: ProposalSummary; broker: BrokerSummary }): Promise<PreparedProof> { return this.call('prepare_broker_origination', input) }
   prepareRepayment(input: { loan: LoanSummary; borrower: PrivateAccountView; mode: 'regular' | 'full' }): Promise<PreparedProof> { return this.call('prepare_repayment', input) }
   prepareLoanManagement(input: { loan: LoanSummary; operation: 'impair' | 'unimpair' | 'default' }): Promise<PreparedProof> { return this.call('prepare_loan_management', input) }
   prepareSettlement(input: { broker: BrokerSummary; amount: string; expectedSpendingVersion: string }): Promise<PreparedProof> { return this.call('prepare_settlement', input) }
-  prepareReconciliation(input: { broker: BrokerSummary; expectedBookVersion: string }): Promise<PreparedProof> { return this.call('prepare_reconciliation', input) }
+  prepareReconciliation(input: { broker: BrokerSummary; expectedBookVersion: string; checkpointId?: string }): Promise<PreparedProof> { return this.call('prepare_reconciliation', input) }
   authorizeAgreement(proposal: ProposalSummary): Promise<{ authorizationSignature: string }> { return this.call('authorize_agreement', proposal) }
   decryptAgreement(proposal: ProposalSummary): Promise<{ fields: Array<{ label: string; value: string; unit: string }>; digest: string }> { return this.call('decrypt_agreement', proposal) }
   decryptPrivateBalance(view: PrivateAccountView): Promise<string> { return this.call('decrypt_private_balance', view) }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addUnits, compareUnits, formatAmount, parseAmount, parseNonNegativeAmount, subtractUnits } from '../src/lib/money'
+import { addUnits, compareUnits, formatAmount, parseAmount, parseNonNegativeAmount, randomUint64Decimal, subtractUnits } from '../src/lib/money'
 
 describe('exact money helpers', () => {
   it('converts decimal strings without floating point', () => {
@@ -20,5 +20,12 @@ describe('exact money helpers', () => {
     expect(() => addUnits('9223372036854775807', '1')).toThrow(/protocol limit/)
     expect(subtractUnits('10', '4')).toBe('6')
     expect(() => subtractUnits('4', '10')).toThrow(/available balance/)
+  })
+
+  it('creates decimal u64 IDs without lossy Number conversion', () => {
+    const id = randomUint64Decimal()
+    expect(id).toMatch(/^\d+$/)
+    expect(BigInt(id)).toBeGreaterThan(0n)
+    expect(BigInt(id)).toBeLessThanOrEqual((2n ** 64n) - 1n)
   })
 })

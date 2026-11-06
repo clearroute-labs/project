@@ -99,3 +99,11 @@ export function isPositiveUnits(value: string): boolean {
 export function unixSecondsNow(): number {
   return Math.floor(Date.now() / 1000)
 }
+
+/** Generate a Core u64 operation ID without Number precision loss. */
+export function randomUint64Decimal(): string {
+  const words = new Uint32Array(2)
+  globalThis.crypto.getRandomValues(words)
+  const value = (BigInt(words[0]) << 32n) | BigInt(words[1])
+  return (value === 0n ? 1n : value).toString(10)
+}
