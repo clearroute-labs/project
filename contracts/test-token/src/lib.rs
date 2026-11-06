@@ -16,11 +16,35 @@ const ERR_UNAUTHORIZED: &str = "UNAUTHORIZED";
 const ERR_NOT_REGISTERED: &str = "NOT_REGISTERED";
 const ERR_INSUFFICIENT: &str = "INSUFFICIENT_BALANCE";
 const ERR_AMOUNT: &str = "INVALID_AMOUNT";
+const ERR_FROZEN: &str = "ACCOUNT_FROZEN";
+
+#[derive(near_sdk::serde::Serialize, near_sdk::serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(crate = "near_sdk::serde")]
+pub struct StorageBalance {
+    pub total: U128,
+    pub available: U128,
+}
+
+#[derive(near_sdk::serde::Serialize, near_sdk::serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(crate = "near_sdk::serde")]
+pub struct StorageBalanceBounds {
+    pub min: U128,
+    pub max: Option<U128>,
+}
+
+#[derive(BorshSerialize, borsh::BorshDeserialize, Clone, Copy, PartialEq, Eq)]
+pub enum TransferMode {
+    Normal,
+    Fail,
+    OversizedSuccess,
+}
 
 #[derive(BorshSerialize, BorshStorageKey)]
 enum StorageKey {
     Accounts,
     Registered,
+    Storage,
+    Frozen,
 }
 
 #[ext_contract(ext_receiver)]
@@ -50,6 +74,9 @@ pub struct TestToken {
     pub total_supply: u128,
     pub accounts: LookupMap<AccountId, u128>,
     pub registered: LookupMap<AccountId, bool>,
+    pub storage: LookupMap<AccountId, u128>,
+    pub frozen: LookupMap<AccountId, bool>,
+    pub transfer_mode: TransferMode,
 }
 
 #[near_bindgen]
@@ -61,6 +88,9 @@ impl TestToken {
             total_supply: 0,
             accounts: LookupMap::new(StorageKey::Accounts),
             registered: LookupMap::new(StorageKey::Registered),
+            storage: LookupMap::new(StorageKey::Storage),
+            frozen: LookupMap::new(StorageKey::Frozen),
+            transfer_mode: TransferMode::Normal,
         }
     }
 
@@ -68,28 +98,38 @@ impl TestToken {
     pub fn storage_deposit(
         &mut self,
         account_id: Option<AccountId>,
-        _registration_only: Option<bool>,
-    ) -> U128 {
+        registration_only: Option<bool>,
+    ) -> StorageBalance {
         let account = account_id.unwrap_or_else(env::predecessor_account_id);
-        require!(account == env::predecessor_account_id(), ERR_UNAUTHORIZED);
-        require!(
-            env::attached_deposit() > NearToken::from_yoctonear(0),
-            ERR_NOT_REGISTERED
+        let deposit = env::attached_deposit().as_yoctonear();
+        require!(deposit > 0, ERR_NOT_REGISTERED);
+        let _registration_only = registration_only.unwrap_or(false);
+        let current = self.storage.get(&account).unwrap_or(0);
+        self.storage.insert(
+            &account,
+            &current
+                .checked_add(deposit)
+                .unwrap_or_else(|| panic!("{ERR_AMOUNT}")),
         );
         self.registered.insert(&account, &true);
         if self.accounts.get(&account).is_none() {
             self.accounts.insert(&account, &0);
         }
-        U128(1)
+        self.storage_balance(&account)
     }
 
     #[payable]
-    pub fn storage_withdraw(&mut self, _amount: Option<U128>) -> U128 {
+    pub fn storage_withdraw(&mut self, amount: Option<U128>) -> StorageBalance {
         require!(
             env::attached_deposit() == NearToken::from_yoctonear(1),
             ERR_UNAUTHORIZED
         );
-        U128(0)
+        let account = env::predecessor_account_id();
+        let current = self.storage.get(&account).unwrap_or(0);
+        let requested = amount.map(|value| value.0).unwrap_or(current);
+        require!(requested <= current, ERR_INSUFFICIENT);
+        self.storage.insert(&account, &(current - requested));
+        self.storage_balance(&account)
     }
 
     #[payable]
@@ -101,9 +141,31 @@ impl TestToken {
         let account = env::predecessor_account_id();
         let balance = self.accounts.get(&account).unwrap_or(0);
         require!(force.unwrap_or(false) || balance == 0, ERR_INSUFFICIENT);
+        if balance > 0 {
+            self.total_supply = self
+                .total_supply
+                .checked_sub(balance)
+                .unwrap_or_else(|| panic!("{ERR_AMOUNT}"));
+        }
         self.registered.remove(&account);
         self.accounts.remove(&account);
+        self.storage.remove(&account);
+        self.frozen.remove(&account);
         true
+    }
+
+    pub fn storage_balance_bounds(&self) -> StorageBalanceBounds {
+        StorageBalanceBounds {
+            min: U128(1),
+            max: None,
+        }
+    }
+
+    pub fn storage_balance_of(&self, account_id: AccountId) -> Option<StorageBalance> {
+        self.registered
+            .get(&account_id)
+            .filter(|registered| *registered)
+            .map(|_| self.storage_balance(&account_id))
     }
 
     pub fn ft_total_supply(&self) -> U128 {
@@ -115,13 +177,25 @@ impl TestToken {
     }
 
     #[payable]
-    pub fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, _memo: Option<String>) {
+    pub fn ft_transfer(
+        &mut self,
+        receiver_id: AccountId,
+        amount: U128,
+        memo: Option<String>,
+    ) -> Vec<u8> {
         require!(
             env::attached_deposit() == NearToken::from_yoctonear(1),
             ERR_UNAUTHORIZED
         );
         let sender = env::predecessor_account_id();
+        let _ = memo;
+        require!(self.transfer_mode != TransferMode::Fail, ERR_UNAUTHORIZED);
         self.transfer(&sender, &receiver_id, amount.0);
+        if self.transfer_mode == TransferMode::OversizedSuccess {
+            vec![0u8; 8192]
+        } else {
+            Vec::new()
+        }
     }
 
     #[payable]
@@ -129,7 +203,7 @@ impl TestToken {
         &mut self,
         receiver_id: AccountId,
         amount: U128,
-        _memo: Option<String>,
+        memo: Option<String>,
         msg: String,
     ) -> Promise {
         require!(
@@ -137,6 +211,8 @@ impl TestToken {
             ERR_UNAUTHORIZED
         );
         let sender = env::predecessor_account_id();
+        let _ = memo;
+        require!(self.transfer_mode != TransferMode::Fail, ERR_UNAUTHORIZED);
         self.transfer(&sender, &receiver_id, amount.0);
         ext_receiver::ext(receiver_id.clone())
             .with_static_gas(GAS_TRANSFER_CALL)
@@ -216,11 +292,45 @@ impl TestToken {
             .checked_sub(amount.0)
             .unwrap_or_else(|| panic!("{ERR_AMOUNT}"));
     }
+
+    /// Local-test controls. They are owner-only and intentionally absent from
+    /// the Core contract; sandbox tests use them to exercise failed and
+    /// oversized-success payout receipts and token-side freezes.
+    pub fn set_transfer_mode(&mut self, mode: u8) {
+        require!(
+            env::predecessor_account_id() == self.owner_id,
+            ERR_UNAUTHORIZED
+        );
+        self.transfer_mode = match mode {
+            0 => TransferMode::Normal,
+            1 => TransferMode::Fail,
+            2 => TransferMode::OversizedSuccess,
+            _ => panic!("{ERR_AMOUNT}"),
+        };
+    }
+
+    pub fn set_frozen(&mut self, account_id: AccountId, frozen: bool) {
+        require!(
+            env::predecessor_account_id() == self.owner_id,
+            ERR_UNAUTHORIZED
+        );
+        self.frozen.insert(&account_id, &frozen);
+    }
 }
 
 impl TestToken {
+    fn storage_balance(&self, account_id: &AccountId) -> StorageBalance {
+        let total = self.storage.get(account_id).unwrap_or(0);
+        StorageBalance {
+            total: U128(total),
+            available: U128(total),
+        }
+    }
+
     fn transfer(&mut self, sender: &AccountId, receiver: &AccountId, amount: u128) {
         require!(amount > 0, ERR_AMOUNT);
+        require!(!self.frozen.get(sender).unwrap_or(false), ERR_FROZEN);
+        require!(!self.frozen.get(receiver).unwrap_or(false), ERR_FROZEN);
         require!(
             self.registered.get(receiver).unwrap_or(false),
             ERR_NOT_REGISTERED

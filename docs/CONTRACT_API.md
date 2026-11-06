@@ -10,14 +10,18 @@ is accepted as a plaintext argument or returned by a view.
 
 'new(InitArgs)' is the only deployment initializer. The configured NEP-141
 token account, decimals, controller, network ID, asset encryption keys,
-'crypto_profile_hash', verifier key, and verifier manifest hash are immutable.
-The initializer rejects empty profile/artifact values and caps
-'custody_cap' at '2^63 - 1'. There is no unrestricted upgrade, verifier
-replacement, debt reset, or payout redirection method.
+'crypto_profile_hash', and verifier manifest hash are immutable. Verifier keys
+are uploaded one statement kind at a time with 'stage_verifier_key' and become
+immutable only after the owner calls 'activate_verifier_keys'; all required
+statement kinds must be present before any financial method is enabled. The
+legacy single-key initializer is rejected. There is no unrestricted upgrade,
+verifier replacement, debt reset, or payout redirection method.
 
-All public amounts are JSON decimal strings ('U128'). IDs and versions are
-currently monotonic 'u64' values and are unique within a Core. A browser should
-carry them as strings to avoid JavaScript precision loss.
+All public amounts are JSON decimal strings ('U128'). IDs, timestamps, and
+versions are serialized as canonical decimal strings (no JSON numbers, leading
+zeroes, or '+' prefix). Scalar ID/cursor arguments use near-sdk 'U64' and have
+the same string wire form. A browser should carry them as strings to avoid
+JavaScript precision loss.
 
 ## Public lifecycle methods
 
@@ -36,7 +40,7 @@ carry them as strings to avoid JavaScript precision loss.
 | 'transfer_shares' | vault, receiver, shares | share owner | Transfers public shares if enabled |
 | 'shield' | claim, public amount, ciphertexts, commitment, proof | claim owner | Moves claim to holder inbox |
 | 'unshield' | amount, post-spending ciphertexts, proof, expected version | holder | Creates a PublicClaim |
-| 'merge_inbox' | expected version, post-spending ciphertext, optional proof | holder | Moves inbox to spending and increments version |
+| 'merge_inbox' | expected version, exact homomorphic spending+inbox ciphertext | holder | Moves inbox to spending and increments version |
 | 'draw' | broker, public amount, broker/audit ciphertexts, proof | broker owner | Reduces vault liquidity and increases broker debt |
 | 'originate' | proposal, all post-ciphertexts/roots, proof | party or relayer | Creates an Active loan atomically |
 | 'confidential_send' | receiver, expected sender version, five transfer views, post states, proof | sender holder | Credits receiver inbox without changing receiver spending version |
@@ -44,7 +48,7 @@ carry them as strings to avoid JavaScript precision loss.
 | 'manage_loan' | loan, 'Impair'/'Unimpair'/'Default', expected version, aggregate post states, proof | broker owner | Changes public risk state; queues accounting |
 | 'prepare_reconciliation' | broker ID | anyone | Creates the next scheduled checkpoint |
 | 'reconcile_credit' | checkpoint, bounded public outputs, proof | anyone with valid proof | Applies aggregate loss/provision once |
-| 'merge_broker_inbox' | broker, expected version, post spending ciphertext, proof | owner or settlement keeper | Broker-only inbox merge |
+| 'merge_broker_inbox' | broker, expected version, exact homomorphic spending+inbox ciphertext | owner or settlement keeper | Broker-only inbox merge |
 | 'settle' | broker, public amount, expected versions, post states/proof, optional reconciliation | owner or scoped keeper | Returns broker funds to associated vault |
 | 'grant_keeper' / 'revoke_keeper' | broker scope/limits/expiry or delegate | broker owner | Changes settlement/merge grant epoch |
 | 'delete_loan' | closed loan ID and evidence | borrower or broker owner | Removes display entry; retains leaf tombstone |
@@ -62,8 +66,9 @@ Default is terminal. Impairment is allowed only after the next due date, and
 accounting remains pending until the current authenticated book is reconciled.
 
 `merge_broker_inbox` accepts `broker_id` plus `{ expected_spending_version,
-new_spending_ciphertext, proof }`; an empty inbox may use no proof, while a
-nonempty inbox requires the broker ownership/merge statement. `settle` accepts
+new_spending_ciphertext }`; the new ciphertext must equal the homomorphic sum
+of the stored spending and inbox values, and no plaintext or caller-selected
+replacement is accepted. `settle` accepts
 `SettleArgs` with the public `amount`, expected spending/accounting versions,
 the three broker post-state ciphertexts, optional spending/inbox commitments,
 an optional `ReconcileArgs`, and the settlement proof. A keeper may submit this
@@ -94,47 +99,67 @@ and one dispatch attempt, moves the claim to a reservation, and dispatches
 'PromiseResult'; it records success/failure and makes no external call.
 'finalize_payout' is permissionless and idempotent: success consumes the
 reservation, failure restores the exact original claim, and an unresolved
-'InFlight' operation remains locked. There is no timeout refund or resend.
+'InFlight' operation remains locked. A runtime 'PromiseError::TooLong' is
+treated as successful token transfer and records a fixed hash of the outcome
+marker/observed length; only 'PromiseError::Failed' restores the claim. There
+is no timeout refund or resend.
 
 ## Read APIs
 
-'get_asset_profile', 'get_verifier_config', 'get_vault', 'get_broker',
-'get_holder', 'get_loan', 'get_proposal', 'get_claim', 'get_payout',
+'get_asset_profile', 'get_verifier_config', 'get_verifier_key', 'get_vault', 'get_broker',
+'get_holder', 'get_holder_key', 'get_broker_key', 'get_loan', 'get_proposal', 'get_claim', 'get_payout',
 'get_checkpoint', 'get_deposit_receipt', 'get_vault_broker_ids',
 'get_share_balance', 'list_vaults', 'list_brokers', 'list_loans',
-'list_claims', 'list_payouts', and 'public_totals' expose public records and authorized
-encrypted views. 'prepare_context' and 'get_operation_context' return the
+'list_claims', 'list_payouts', 'get_counters', and 'public_totals' expose public
+records and authorized encrypted views. 'get_counters' returns high-water
+marks so range pagination can continue across deleted/filtered IDs. The
+'list_recovery_history' and 'list_recovery_records' pages return immutable
+proof-bound statement records with 'next_cursor'/'end_cursor'. Deterministic
+merge/status transitions carry metadata without a private statement, while
+proof-bearing mutations carry canonical statements. The pages never scan an
+unbounded collection. 'prepare_context' and 'get_operation_context' return the
 immutable asset/profile/network identity, current IDs and versions, and a
 canonical state digest for prover statement construction. 'get_statement_context'
 also returns bounded authoritative ciphertexts, commitments, and public schedule
-values needed to build the typed statement. 'prepare_statement' accepts only
-encrypted post-state values/commitments and public fields, merges them with
-authoritative current storage, and returns the canonical context used by the
-mutating method. A wallet must
+values needed to build the typed statement. 'get_proof_context(ProofContextArgs)'
+is the executable client endpoint: it takes explicit affected account,
+destination, primary ID, broker/checkpoint, action, and public amount and
+returns canonical 'OperationContext' bytes plus current ciphertexts, keys,
+commitments, versions, and the prepared-key hash. It never uses the RPC
+predecessor as an implicit party. 'prepare_statement' accepts a canonical
+typed 'confidential_crypto::Statement' JSON value, validates its kind and
+authoritative context, derives public inputs from that statement, and returns
+the same statement/context for local proving. It does not hash arbitrary
+caller-selected outputs. A wallet must
 refresh these views after a merge or any stale-state error.
 
-Loan records contain five ciphertext views for transfer amounts and three
-ciphertext views for stored P/O/Q terms. Events contain IDs, versions,
+Loan records contain five ciphertext views for transfer amounts and exactly
+three ciphertext views for stored P/O/Q/R terms in the fixed order
+'[borrower, broker, loan auditor]'. Aggregate principal commitments are
+homomorphically updated from verified proof deltas; caller-supplied replacement
+commitments are rejected. Events contain IDs, versions,
 ciphertext references, and public lifecycle/accounting outputs; they never
 contain decrypted witnesses or private plaintext amounts.
 
 ## Proof context
 
-Every proof argument is:
+Every proof argument contains a typed statement:
 
-    { "context": "<canonical digest bytes>", "proof": "<profile proof bytes>" }
+    { "statement": "<canonical Statement JSON>",
+      "verifying_key_hash": "<immutable prepared-key hash>",
+      "proof": "<profile proof bytes>",
+      "context": "<optional consistency bytes>",
+      "public_inputs": "<optional consistency inputs>" }
 
-The contract recomputes the context from the operation domain, immutable
-profile/manifest hashes, exact current pre-state, affected IDs/keys/epochs,
-expected versions, and all caller-supplied post ciphertexts/roots. A context
-that does not match current storage fails before mutation. The verifier
-boundary is intentionally closed until deployment links immutable per-
-statement prepared verification keys and the native/WASM `near-verifier`
-adapter. Once activated, that adapter constructs the authoritative public-input
-vector and calls the prepared key; a context hash, caller-selected key, or
-pairing envelope alone is never sufficient. Proof validity never grants
-authorization: direct predecessor/keeper/party checks and proposal epochs are
-also enforced.
+The method selects the statement kind and recomputes the expected context from
+the operation domain, immutable profile/manifest hashes, exact current
+pre-state, affected IDs/keys/epochs, expected versions, and method-specific
+post ciphertexts. A statement kind, public-input vector, or context hash
+supplied by a caller is only a consistency check; authoritative public inputs
+come from the parsed typed statement itself and are verified against the
+immutable prepared key for that kind. Proof validity never grants
+authorization: direct predecessor/keeper/party checks and proposal
+epochs/nonces are also enforced.
 
 ## Stable error categories
 
