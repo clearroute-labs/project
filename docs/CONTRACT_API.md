@@ -61,6 +61,19 @@ a public repayment amount.
 Default is terminal. Impairment is allowed only after the next due date, and
 accounting remains pending until the current authenticated book is reconciled.
 
+`merge_broker_inbox` accepts `broker_id` plus `{ expected_spending_version,
+new_spending_ciphertext, proof }`; an empty inbox may use no proof, while a
+nonempty inbox requires the broker ownership/merge statement. `settle` accepts
+`SettleArgs` with the public `amount`, expected spending/accounting versions,
+the three broker post-state ciphertexts, optional spending/inbox commitments,
+an optional `ReconcileArgs`, and the settlement proof. A keeper may submit this
+only within its immutable per-operation/per-window limits. `ReconcileArgs`
+contains the checkpoint and broker IDs, expected risk/accounting versions,
+public `new_broker_debt`, `new_broker_provision`, `loss`, and
+`new_vault_total`, plus the reconciliation proof. Those public outputs are
+checked against the authenticated encrypted aggregate by the verifier; they
+are not accepted as an operator-selected write.
+
 ## External NEP-141 boundary
 
 The configured token alone may call:
