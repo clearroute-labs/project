@@ -115,9 +115,11 @@ The contract recomputes the context from the operation domain, immutable
 profile/manifest hashes, exact current pre-state, affected IDs/keys/epochs,
 expected versions, and all caller-supplied post ciphertexts/roots. A context
 that does not match current storage fails before mutation. The verifier
-boundary requires a nonempty immutable production artifact and a valid
-BN254 pairing envelope; the crypto worker owns the per-kind Groth16 statement
-construction and host/native verifier integration. Proof validity never grants
+boundary is intentionally closed until deployment links immutable per-
+statement prepared verification keys and the native/WASM `near-verifier`
+adapter. Once activated, that adapter constructs the authoritative public-input
+vector and calls the prepared key; a context hash, caller-selected key, or
+pairing envelope alone is never sufficient. Proof validity never grants
 authorization: direct predecessor/keeper/party checks and proposal epochs are
 also enforced.
 

@@ -2763,10 +2763,14 @@ impl Core {
 
     /// Verify a reviewed profile proof through the immutable verifier boundary.
     ///
-    /// The wire envelope is domain/profile-bound context followed by the
-    /// verifier's pairing input. The crypto worker replaces this thin host
-    /// boundary with its per-kind arkworks/NEAR BN254 adapter; no method accepts
-    /// an empty proof or a caller-selected success flag.
+    /// Core deliberately fails closed until the deployment-specific prepared
+    /// verifier adapter is installed. The adapter must select the immutable
+    /// statement-kind key, construct the authoritative public-input vector,
+    /// and call `near_verifier::verify_prepared`; a context hash plus a caller
+    /// supplied pairing envelope is not a proof of any financial transition.
+    /// Keeping this boundary closed is important for deployments that compile
+    /// the contract before the native/WASM verifier is linked: no financial
+    /// method can accidentally become a mock-verifier path.
     fn verify_proof(&self, domain: &[u8], context: &[u8], proof: &[u8]) {
         require!(
             self.verifier.production && !self.verifier.verifying_key.is_empty(),
@@ -2774,22 +2778,11 @@ impl Core {
         );
         require!(!domain.is_empty() && !context.is_empty(), ERR_BAD_PROOF);
         require!(
-            proof.len() > 32 && proof.len() <= MAX_PROOF_BYTES,
+            !proof.is_empty() && proof.len() <= MAX_PROOF_BYTES,
             ERR_BAD_PROOF
         );
-        let expected = hash_bytes(&(
-            domain,
-            context,
-            &self.asset.crypto_profile_hash,
-            &self.verifier.manifest_hash,
-        ));
-        require!(proof[..32] == expected[..32], ERR_BAD_PROOF);
-        let pairing = &proof[32..];
-        require!(
-            pairing.len() >= 192 && pairing.len() % 192 == 0,
-            ERR_BAD_PROOF
-        );
-        require!(env::alt_bn128_pairing_check(pairing), ERR_BAD_PROOF);
+        let _ = proof;
+        panic!("{ERR_UNSUPPORTED_PROFILE}");
     }
 
     fn vault_view(&self, vault: Vault) -> VaultView {
