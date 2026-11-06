@@ -391,6 +391,7 @@ impl Core {
         self.emit("AssetFreezeChanged", json!({"frozen": frozen}));
     }
 
+    #[payable]
     pub fn storage_deposit(&mut self, account_id: Option<AccountId>) -> U128 {
         let account = account_id.unwrap_or_else(env::predecessor_account_id);
         require!(account == env::predecessor_account_id(), ERR_UNAUTHORIZED);

@@ -4,8 +4,8 @@ The user authorized implementation of the whole SPEC.md on 2026-11-06. This supe
 
 ## Plan
 
-- [ ] Establish a pinned Rust/TypeScript workspace and exact protocol/cryptographic interfaces.
-- [ ] Implement real confidential encryption, recoverable wallet data, proof circuits, setup/proving and verification.
+- [x] Establish a pinned Rust/TypeScript workspace and exact protocol/cryptographic interfaces.
+- [x] Implement real confidential encryption, recoverable wallet data, proof circuits, setup/proving and verification.
 - [ ] Implement the NEAR Core: assets, holder registration, custody, vaults, shares and authorization.
 - [ ] Implement broker balances, jointly authorized origination, confidential transfers/payments, management and aggregate accounting.
 - [ ] Implement idempotent token ingress, reserved payouts, result recording and finalization.
@@ -28,12 +28,14 @@ Verified components so far (not full protocol acceptance):
 - Real Groth16 host verification in NEAR sandbox; prepared-key optimization measured against a 193-input fixture.
 - Exact lending/share arithmetic: 12 tests, including all financial worked examples and 10,000 full-width integer cases against an independent BigUint oracle.
 - Durable keeper journal and restricted signer: seven crash/retry/identity/finality tests.
-- Contract, cryptographic circuits and application remain in isolated implementation worktrees until their acceptance findings are resolved.
+- Core, cryptographic circuits and the application are integrated on main. Focused worker branches are completing authenticated-book, minimal wallet ABI, browser execution and target-runtime verification findings.
 
 Integration update:
 
 - Client: 12 tests passed, including one-block finalized snapshots and a deployment manifest pin covering every executable artifact.
-- Wallet: 11 tests passed for private key import/export, cancellation, native process isolation, encrypted backups, and incomplete/tampered recovery history. Typed proof construction covers all eight families; actual client-to-prover validation is next.
+- Wallet: 11 tests passed for private key import/export, cancellation, native process isolation, encrypted backups, and incomplete/tampered recovery history. Actual native client validation passed all eight proof families, including both conversion modes and regular/full repayments. Public statements, envelopes and timings are in `.artifacts/integration-v2/client-operations.json` and `client-validation.json`.
 - Development setup resumes without regenerating keys, validates all resumed artifacts, and refuses changed binaries/deployment identity. Its restart/tampering test passed.
 - Cryptographic worker crate: 11 tests passed, including real key-possession and confidential-transfer proofs; direct circuit checks cover conversion solvency, full repayment and reconciliation. Full client, browser and contract execution remain pending.
 - Contract review is resolving typed statement/state binding, three-reader loan terms, authenticated book updates, durable recovery history, and callback storage allocation.
+- Native crypto and WASM browser artifacts build; strict crypto Clippy passes. Core/test-token/probe WASM builds pass. Workspace TypeScript checks and 56 tests pass (12 client, 11 wallet, 10 keeper, 21 web, two tooling).
+- Actual sandbox custody integration exposed the missing payable annotation on Core storage deposits. The fix is applied and the token callback/recovery test is being rerun; successful deployment alone is not custody acceptance.

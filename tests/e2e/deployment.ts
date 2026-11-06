@@ -68,6 +68,6 @@ export async function deployProtocol(directory = process.env.CRYPTO_ARTIFACT_DIR
       if (account !== core) await account.call(core, 'storage_deposit', { account_id: account.accountId }, { attachedDeposit: 20n * near });
     }
     for (const actor of [actors.lender, actors.borrower]) await worker.rootAccount.call(token, 'mint', { receiver_id: actor.accountId, amount: '1000000000' });
-    return { worker, core, token, actors, rpc: new NearRpc(worker.provider.connection.url), crypto, keys, proofs: new ProofBuilder(crypto, keys), manifest, manifestHash: pin.manifestHash };
+    return { worker, core, token, actors, rpc: new NearRpc(worker.provider.connection.url, { allowInsecureLocalhost: true }), crypto, keys, proofs: new ProofBuilder(crypto, keys), manifest, manifestHash: pin.manifestHash };
   } catch (error) { await worker.tearDown(); throw error; }
 }

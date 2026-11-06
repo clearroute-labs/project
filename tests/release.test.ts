@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { checkEntry, checkRelease, PROOF_KINDS, type ReleaseManifest } from '../scripts/release.js';
 import type { ArtifactEntry, CryptoManifest } from '../packages/client/src/artifacts.js';
+import { manifestHash } from '../packages/client/src/artifacts.js';
 
 test('release checks verify bytes and reject symlink escape, missing proof families and unfunded setup claims', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lending-release-'));
@@ -23,23 +24,27 @@ test('release checks verify bytes and reject symlink escape, missing proof famil
     const deployment = { networkId: 'sandbox', coreAccountId: 'core.test.near', tokenAccountId: 'token.test.near', profileHash: 'b'.repeat(64), funded: false };
     const crypto: CryptoManifest = { schema: 'confidential-lending-artifacts/v1', ...deployment, setup: 'development-single-party', artifacts: {} };
     const manifest: ReleaseManifest = {
-      schema: 'confidential-lending-release/v1', deployment, cryptoManifest: 'crypto.json', coreWasm: entry, sourceCommit: 'c'.repeat(40),
-      setupEvidence: entry, reviewEvidence: null, invariantEvidence: entry, custodyRecoveryEvidence: entry,
+      schema: 'confidential-lending-release/v1', deployment, cryptoManifest: 'crypto.json', cryptoManifestHash: '', coreWasm: entry, sourceCommit: 'c'.repeat(40),
+      setupEvidence: entry, reviewEvidence: null, invariantEvidence: entry, custodyRecoveryEvidence: entry, vectorsEvidence: entry,
       upgradePolicy: 'No upgrade access key.', issuerPolicy: 'Issuer controls the token.', auditorPolicy: 'Separate token and loan auditors.', keeperPolicy: 'Scoped settlement permissions.', measurements: {},
     };
     for (const kind of PROOF_KINDS) {
-      for (const suffix of ['proving_key', 'verifying_key', 'vectors']) crypto.artifacts[`${kind}.${suffix}`] = entry;
+      for (const suffix of ['pk', 'vk', 'prepared-vk']) crypto.artifacts[`${kind}.${suffix}`] = entry;
       manifest.measurements[kind] = { maxGas: '100000000000000', publicInputs: 193, transactionBytes: 10_000, proverMilliseconds: 1_000, proverPeakBytes: 100_000, recoveryMilliseconds: 100 };
     }
-    const save = async () => { await writeFile(join(root, 'crypto.json'), JSON.stringify(crypto)); await writeFile(join(root, 'release.json'), JSON.stringify(manifest)); };
+    for (const name of ['native.prover', 'browser.wasm', 'browser.glue']) crypto.artifacts[name] = entry;
+    const save = async () => { manifest.cryptoManifestHash = await manifestHash(crypto); await writeFile(join(root, 'crypto.json'), JSON.stringify(crypto)); await writeFile(join(root, 'release.json'), JSON.stringify(manifest)); };
     await save();
-    assert.equal((await checkRelease(join(root, 'release.json'))).checkedArtifacts, 28);
+    assert.equal((await checkRelease(join(root, 'release.json'))).checkedArtifacts, 32);
+    manifest.cryptoManifestHash = 'f'.repeat(64);
+    await writeFile(join(root, 'release.json'), JSON.stringify(manifest));
+    await assert.rejects(checkRelease(join(root, 'release.json')), /manifest hash mismatch/);
     manifest.deployment.funded = true;
     await save();
     await assert.rejects(checkRelease(join(root, 'release.json')), /Funded release/);
     manifest.deployment.funded = false;
-    delete crypto.artifacts['repayment.verifying_key'];
+    delete crypto.artifacts['repayment.vk'];
     await save();
-    await assert.rejects(checkRelease(join(root, 'release.json')), /Missing repayment.verifying_key/);
+    await assert.rejects(checkRelease(join(root, 'release.json')), /Missing repayment.vk/);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

@@ -2,20 +2,23 @@ import { createReadStream } from 'node:fs';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { assertAccountId, type ArtifactEntry, type CryptoManifest } from '../packages/client/src/index.js';
+import { assertAccountId, verifyManifestPin, type ArtifactEntry, type CryptoManifest } from '../packages/client/src/index.js';
+import { proofFamilies } from './development-artifacts.js';
 
-export const PROOF_KINDS = ['key_possession', 'public_conversion', 'confidential_transfer', 'origination', 'repayment', 'reconciliation', 'zero_balance', 'ownership'] as const;
+export const PROOF_KINDS = proofFamilies;
 
 export interface ReleaseManifest {
   schema: 'confidential-lending-release/v1';
   deployment: { networkId: string; coreAccountId: string; tokenAccountId: string; profileHash: string; funded: boolean };
   cryptoManifest: string;
+  cryptoManifestHash: string;
   coreWasm: ArtifactEntry;
   sourceCommit: string;
   setupEvidence: ArtifactEntry;
   reviewEvidence: ArtifactEntry | null;
   invariantEvidence: ArtifactEntry;
   custodyRecoveryEvidence: ArtifactEntry;
+  vectorsEvidence: ArtifactEntry;
   upgradePolicy: string;
   issuerPolicy: string;
   auditorPolicy: string;
@@ -59,17 +62,18 @@ export async function checkRelease(manifestPath: string): Promise<{ manifest: Re
   for (const name of ['upgradePolicy', 'issuerPolicy', 'auditorPolicy', 'keeperPolicy'] as const) boundedText(manifest[name], name);
   const cryptoPath = await confinedPath(root, manifest.cryptoManifest);
   const crypto = JSON.parse(await readFile(cryptoPath, 'utf8')) as CryptoManifest;
+  await verifyManifestPin(crypto, manifest.cryptoManifestHash);
   if (crypto.schema !== 'confidential-lending-artifacts/v1' || crypto.profileHash !== deployment.profileHash || crypto.networkId !== deployment.networkId || crypto.coreAccountId !== deployment.coreAccountId) throw new Error('Crypto manifest deployment mismatch');
   if (!['development-single-party', 'reviewed-ceremony'].includes(crypto.setup)) throw new Error('Unknown setup provenance');
   if (deployment.funded && (crypto.setup !== 'reviewed-ceremony' || !manifest.reviewEvidence)) throw new Error('Funded release requires reviewed setup and independent review evidence');
-  const entries = [manifest.coreWasm, manifest.setupEvidence, manifest.invariantEvidence, manifest.custodyRecoveryEvidence];
+  const entries = [manifest.coreWasm, manifest.setupEvidence, manifest.invariantEvidence, manifest.custodyRecoveryEvidence, manifest.vectorsEvidence];
   if (manifest.reviewEvidence) entries.push(manifest.reviewEvidence);
   for (const entry of entries) await checkEntry(root, entry);
   const wasmPath = await confinedPath(root, manifest.coreWasm.path);
   const wasm = await readFile(wasmPath);
   if (!wasm.subarray(0, 8).equals(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]))) throw new Error('Core artifact is not WebAssembly v1');
   for (const kind of PROOF_KINDS) {
-    for (const suffix of ['proving_key', 'verifying_key', 'vectors']) {
+    for (const suffix of ['pk', 'vk', 'prepared-vk']) {
       const entry = crypto.artifacts[`${kind}.${suffix}`];
       if (!entry) throw new Error(`Missing ${kind}.${suffix}`);
     }
@@ -81,6 +85,7 @@ export async function checkRelease(manifestPath: string): Promise<{ manifest: Re
       || !Number.isSafeInteger(measurement.proverPeakBytes) || measurement.proverPeakBytes <= 0
       || !Number.isFinite(measurement.recoveryMilliseconds) || measurement.recoveryMilliseconds <= 0) throw new Error(`Missing or invalid worst-case measurements: ${kind}`);
   }
+  for (const name of ['native.prover', 'browser.wasm', 'browser.glue']) if (!crypto.artifacts[name]) throw new Error(`Missing ${name}`);
   for (const [name, entry] of Object.entries(crypto.artifacts)) {
     if (/toxic|secret|witness|private[-_]?key/i.test(name) || /(?:^|\/)(?:secrets?|witness|toxic)(?:[./_-]|$)/i.test(entry.path)) throw new Error('Secret material must not appear in a release bundle');
     await checkEntry(dirname(cryptoPath), entry);
