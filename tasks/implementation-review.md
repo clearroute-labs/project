@@ -26,7 +26,16 @@ This is an internal engineering checklist, not an independent security audit.
 - [ ] JSON-facing u64 IDs/versions are safe across Rust and TypeScript.
 - [ ] Web has actual wallet, RPC and browser-prover adapters; disconnected fallbacks do not substitute for integrations.
 - [ ] Keeper durably journals transaction hashes before broadcast and never retries an unknown outcome as a new spend.
-- [ ] Real NEAR sandbox validates host verifier encodings, rejection paths and gas limits.
+- [ ] First impairment can increase U with zero realized loss and zero prior U; reconciliation must not apply the false bound `new_U <= loss + old_U`.
+- [ ] Vault pending-accounting state clears only when every required broker checkpoint is current, without unbounded scans.
+- [ ] Positive-U settlement reconciles the same broker against its post-settlement state, including when its risk version was already reconciled.
+- [ ] Zero-balance closure uses verified plaintext-zero evidence, not equality with a canonical ciphertext; worthless-share burn and final dust rules are implemented.
+- [ ] Every persistent record is charged to an authorized storage payer; global custody cap includes all claims, vault cash, private balances and in-flight payouts.
+- [ ] An oversized successful payout return never becomes a failure/refund; duplicate finalization is idempotent even after the claim was consumed.
+- [ ] Deleted brokers do not break vault enumeration/final redemption. Terminal loan deletion relies on authenticated removal evidence.
+- [ ] Standard events include the `EVENT_JSON:` prefix and decimal-string wide integers.
+- [ ] Recovery correctness is enforced in proofs: a sender's signature over an incorrect recovery hint is not sufficient.
+- [x] Real NEAR sandbox validates host verifier encodings and rejection paths for a 193-input fixture. Full lending circuit gas remains to be checked.
 
 ## Evidence so far
 
@@ -34,3 +43,5 @@ This is an internal engineering checklist, not an independent security audit.
 - `verifier-probe` built for wasm32 with NEAR SDK 5.30.1 / Rust 1.95.0.
 - Client typecheck and 10 unit tests passed for exact amounts, artifact hash/size validation, finalized RPC reads, pending outcomes and receipt-event filtering.
 - Official current NEAR sandbox release 2.14.0 selected. Its archive is installed via `scripts/install-sandbox.mjs`, with bounded parallel ranges and official S3 ETag validation. The old near-workspaces dependency's auto-downloader is disabled; runtime uses an explicit local binary path.
+- Real sandbox verification passed for valid/modified/malformed proofs. For 193 public inputs, raw VK decompression cost 241,940,723,110,140 gas; prepared host-coordinate keys reduced verification to 112,353,750,400,779 gas. Prepared-key initialization cost 100,271,579,054,001 gas. Core therefore needs staged immutable per-kind key installation before activation; full circuits may have more inputs and must be measured.
+- Keeper engine/signer: seven tests passed for durable-before-broadcast journaling, lost RPC responses, restart, concurrent processes, identical-byte rebroadcast, restricted function-call keys, signature validation and finalized outcomes. Contract-aware planning remains to be integrated.
