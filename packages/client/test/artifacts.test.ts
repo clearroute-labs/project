@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { loadArtifact, sha256Hex, validateManifest, type CryptoManifest } from '../src/index.js';
+import { loadArtifact, sha256Hex, validateManifest, manifestHash, verifyManifestPin, type CryptoManifest } from '../src/index.js';
 
 test('artifact contents must match their pinned hash and size', async () => {
   const bytes = new TextEncoder().encode('verifier artifact fixture');
@@ -10,6 +10,18 @@ test('artifact contents must match their pinned hash and size', async () => {
   await assert.rejects(loadArtifact('https://example.com/artifacts/', { ...entry, sha256: '0'.repeat(64) }, { fetch }), /hash mismatch/);
   await assert.rejects(loadArtifact('https://example.com/artifacts/', { ...entry, bytes: 1 }, { fetch }), /exceeds/);
   await assert.rejects(loadArtifact('https://example.com/artifacts/', { ...entry, path: '../outside.bin' }, { fetch }), /escapes/);
+});
+
+test('the deployment pin binds every artifact independently of JSON property order', async () => {
+  const manifest: CryptoManifest = {
+    schema: 'confidential-lending-artifacts/v1', profileHash: 'a'.repeat(64),
+    networkId: 'sandbox', coreAccountId: 'core.test.near', setup: 'development-single-party',
+    artifacts: { z: { path: 'z.wasm', sha256: 'b'.repeat(64), bytes: 4 }, a: { path: 'a.js', sha256: 'c'.repeat(64), bytes: 2 } },
+  };
+  const pin = await manifestHash(manifest);
+  await verifyManifestPin({ ...manifest, artifacts: { a: manifest.artifacts.a!, z: manifest.artifacts.z! } }, pin);
+  await assert.rejects(verifyManifestPin({ ...manifest, artifacts: { ...manifest.artifacts, a: { ...manifest.artifacts.a!, sha256: 'd'.repeat(64) } } }, pin), /hash mismatch/);
+  await assert.rejects(verifyManifestPin({ ...manifest, setup: 'reviewed-ceremony' }, pin), /hash mismatch/);
 });
 
 test('development setup and wrong-deployment artifacts are rejected for funded releases', () => {

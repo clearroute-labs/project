@@ -52,7 +52,28 @@ export async function loadArtifact(baseUrl: string, entry: ArtifactEntry, option
 }
 
 export function validateManifest(manifest: CryptoManifest, expected: { profileHash: string; networkId: string; coreAccountId: string; funded: boolean }): void {
+  if (!/^[a-f0-9]{64}$/.test(manifest.profileHash) || !manifest.artifacts || typeof manifest.artifacts !== 'object' || Array.isArray(manifest.artifacts)) throw new Error('Invalid artifact manifest');
   if (manifest.schema !== 'confidential-lending-artifacts/v1' || manifest.profileHash !== expected.profileHash || manifest.networkId !== expected.networkId || manifest.coreAccountId !== expected.coreAccountId) throw new Error('Artifact manifest does not match this deployment');
   if (manifest.setup !== 'reviewed-ceremony' && manifest.setup !== 'development-single-party') throw new Error('Unknown setup provenance');
   if (expected.funded && manifest.setup !== 'reviewed-ceremony') throw new Error('Development setup is not permitted for a funded deployment');
+}
+
+/** Stable deployment pin: UTF-8 JSON, fixed fields, lexicographically sorted artifact names, no newline. */
+export function canonicalManifest(manifest: CryptoManifest): string {
+  return JSON.stringify({
+    schema: manifest.schema, profileHash: manifest.profileHash, networkId: manifest.networkId,
+    coreAccountId: manifest.coreAccountId, setup: manifest.setup,
+    artifacts: Object.fromEntries(Object.keys(manifest.artifacts).sort().map(name => {
+      const entry = manifest.artifacts[name]!;
+      return [name, { path: entry.path, sha256: entry.sha256, bytes: entry.bytes }];
+    })),
+  });
+}
+
+export async function manifestHash(manifest: CryptoManifest): Promise<string> {
+  return sha256Hex(new TextEncoder().encode(canonicalManifest(manifest)));
+}
+
+export async function verifyManifestPin(manifest: CryptoManifest, expectedHash: string): Promise<void> {
+  if (!/^[a-f0-9]{64}$/.test(expectedHash) || await manifestHash(manifest) !== expectedHash) throw new Error('Artifact manifest hash mismatch');
 }

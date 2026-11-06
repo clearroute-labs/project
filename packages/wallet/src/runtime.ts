@@ -1,4 +1,4 @@
-import { loadArtifact, validateManifest, type CryptoManifest } from '@confidential-lending/client';
+import { loadArtifact, validateManifest, verifyManifestPin, type CryptoManifest } from '@confidential-lending/client';
 
 export interface WasmBindings {
   default(input: { module_or_path: Uint8Array }): Promise<unknown>;
@@ -9,19 +9,22 @@ export interface WasmBindings {
 export interface RuntimeConfiguration {
   baseUrl: string;
   manifest: CryptoManifest;
-  expected: { profileHash: string; networkId: string; coreAccountId: string; funded: boolean };
+  expected: { profileHash: string; manifestHash: string; networkId: string; coreAccountId: string; funded: boolean };
 }
 
 export class CryptoRuntime {
   readonly #artifacts = new Map<string, Uint8Array>();
   #wasm: WasmBindings | undefined;
+  readonly #configuration: RuntimeConfiguration;
 
-  constructor(readonly configuration: RuntimeConfiguration) {
+  constructor(configuration: RuntimeConfiguration) {
     validateManifest(configuration.manifest, configuration.expected);
+    this.#configuration = structuredClone(configuration);
   }
 
   async initialize(): Promise<void> {
     if (this.#wasm) return;
+    await verifyManifestPin(this.#configuration.manifest, this.#configuration.expected.manifestHash);
     const glue = await this.artifact('browser.glue');
     const binary = await this.artifact('browser.wasm');
     // Import the verified bytes, not the original URL, to prevent a second unverified fetch.
@@ -30,7 +33,7 @@ export class CryptoRuntime {
       const module = await import(/* @vite-ignore */ url) as WasmBindings;
       if (typeof module.default !== 'function' || typeof module.execute !== 'function' || typeof module.profile_hash !== 'function') throw new Error('Unsupported WASM interface');
       await module.default({ module_or_path: binary });
-      if (module.profile_hash() !== this.configuration.expected.profileHash) throw new Error('WASM profile mismatch');
+      if (module.profile_hash() !== this.#configuration.expected.profileHash) throw new Error('WASM profile mismatch');
       this.#wasm = module;
     } finally { URL.revokeObjectURL(url); }
   }
@@ -49,9 +52,9 @@ export class CryptoRuntime {
   private async artifact(name: string): Promise<Uint8Array> {
     const cached = this.#artifacts.get(name);
     if (cached) return cached;
-    const entry = this.configuration.manifest.artifacts[name];
+    const entry = this.#configuration.manifest.artifacts[name];
     if (!entry) throw new Error(`Missing crypto artifact: ${name}`);
-    const bytes = await loadArtifact(this.configuration.baseUrl, entry);
+    const bytes = await loadArtifact(this.#configuration.baseUrl, entry);
     this.#artifacts.set(name, bytes);
     return bytes;
   }
