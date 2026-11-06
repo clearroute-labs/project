@@ -9,9 +9,6 @@
 //! that statement family.
 
 use ark_bn254::Fr;
-use ark_ed_on_bn254::EdwardsAffine;
-use ark_serialize::{CanonicalDeserialize, Compress, Validate};
-use ark_std::io::Cursor;
 use borsh::{BorshDeserialize, BorshSerialize};
 use confidential_crypto::{
     Ciphertext, Commitment, FieldHex, PROFILE_HASH, PROFILE_ID, PointHex, ProofEnvelope,
@@ -172,9 +169,9 @@ impl VerifierProbe {
 
 /// Derive public inputs without re-running subgroup validation for every
 /// point. `Statement` deserialization has already performed strict canonical
-/// decoding and subgroup checks. The second decode below deliberately uses
-/// `Validate::No` only to recover the affine coordinates from that validated,
-/// canonical wire value; it never accepts a point before the typed parse.
+/// decoding and subgroup checks. `PointHex::to_affine` reuses the bounded
+/// validated-point cache, so this traversal recovers coordinates without
+/// weakening the wire validation policy.
 fn statement_public_inputs(statement: &Statement) -> Option<Vec<FieldHex>> {
     let mut values = statement.context().canonical_fields();
     values.push(Fr::from(statement.kind().as_u8() as u64));
@@ -367,13 +364,7 @@ fn push_commitment(values: &mut Vec<Fr>, commitment: &Commitment) -> Option<()> 
 }
 
 fn push_point(values: &mut Vec<Fr>, point: &PointHex) -> Option<()> {
-    let bytes = hex::decode(&point.0).ok()?;
-    let mut cursor = Cursor::new(bytes.as_slice());
-    let affine =
-        EdwardsAffine::deserialize_with_mode(&mut cursor, Compress::Yes, Validate::No).ok()?;
-    if cursor.position() != bytes.len() as u64 {
-        return None;
-    }
+    let affine = point.to_affine().ok()?;
     values.push(affine.x);
     values.push(affine.y);
     Some(())

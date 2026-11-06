@@ -3,9 +3,24 @@ use ark_ed_on_bn254::{EdwardsAffine, EdwardsProjective, Fr};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress, Validate};
 use ark_std::io::Cursor;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::CryptoError;
+
+const MAX_VALIDATED_POINT_CACHE_ENTRIES: usize = 1024;
+
+thread_local! {
+    /// Decoding a compressed Edwards point with `Validate::Yes` performs the
+    /// subgroup check. Statement deserialization and public-slot derivation
+    /// commonly encounter the same point twice, so retain only the affine
+    /// result of a *fully validated canonical* wire value. The bounded map is
+    /// per execution thread and does not affect the wire format or protocol
+    /// state.
+    static VALIDATED_POINT_CACHE: RefCell<BTreeMap<String, EdwardsAffine>> =
+        RefCell::new(BTreeMap::new());
+}
 
 /// Canonical JSON decimal helpers for monetary values, versions, and times.
 /// JSON numbers are intentionally rejected so browser code cannot silently
@@ -251,6 +266,15 @@ pub(crate) fn encode_point(point: &EdwardsAffine) -> Result<String, CryptoError>
 
 pub(crate) fn decode_point(value: &str, non_identity: bool) -> Result<EdwardsAffine, CryptoError> {
     let bytes = decode_lower_hex(value, 32)?;
+    if let Some(point) = VALIDATED_POINT_CACHE.with(|cache| cache.borrow().get(value).cloned()) {
+        // Identity is valid for generic PointHex values but not for public
+        // keys. Re-apply this cheap policy check on every cache hit rather
+        // than allowing a generic parse to weaken parse_non_identity.
+        if non_identity && point.is_zero() {
+            return Err(CryptoError::IdentityPoint);
+        }
+        return Ok(point);
+    }
     let mut cursor = Cursor::new(bytes.as_slice());
     let point = EdwardsAffine::deserialize_with_mode(&mut cursor, Compress::Yes, Validate::Yes)
         .map_err(|_| CryptoError::MalformedPoint)?;
@@ -262,11 +286,20 @@ pub(crate) fn decode_point(value: &str, non_identity: bool) -> Result<EdwardsAff
         return Err(CryptoError::NonCanonicalEncoding);
     }
     // `Validate::Yes` performs the canonical on-curve and subgroup checks for
-    // this arkworks affine type. Do not repeat those checks here: this decoder
-    // is also used on every public statement point by the contract adapter.
+    // this arkworks affine type. Apply the identity policy before caching so
+    // no rejected identity can be promoted to a cached valid public key.
     if non_identity && point.is_zero() {
         return Err(CryptoError::IdentityPoint);
     }
+    VALIDATED_POINT_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= MAX_VALIDATED_POINT_CACHE_ENTRIES {
+            if let Some(oldest) = cache.keys().next().cloned() {
+                cache.remove(&oldest);
+            }
+        }
+        cache.insert(value.to_owned(), point.clone());
+    });
     Ok(point)
 }
 
@@ -323,4 +356,22 @@ fn decode_circuit_scalar(value: &str) -> Result<CircuitFr, CryptoError> {
         return Err(CryptoError::NonCanonicalEncoding);
     }
     Ok(scalar)
+}
+
+#[cfg(test)]
+mod tests {
+    use ark_ec::CurveGroup;
+    use ark_ff::Zero;
+
+    use super::*;
+
+    #[test]
+    fn cached_identity_cannot_satisfy_non_identity_policy() {
+        let identity = PointHex::from(EdwardsProjective::zero().into_affine());
+        assert!(PointHex::parse(&identity.0).is_ok());
+        assert!(matches!(
+            PointHex::parse_non_identity(&identity.0),
+            Err(CryptoError::IdentityPoint)
+        ));
+    }
 }

@@ -24,7 +24,7 @@ type Manifest = {
 type GasMeasurement = { publicInputs: number; gasBurnt: string; within300T: boolean; durationMs: number | undefined };
 
 const fixtureDirectory = resolve(process.env.CRYPTO_ARTIFACT_DIR ?? '.artifacts/integration-v2');
-const benchmarkGas = 1_000_000_000_000_000n;
+const benchmarkGas = 300_000_000_000_000n;
 
 async function available(path: string): Promise<boolean> {
   try {
@@ -101,7 +101,7 @@ test('typed NEAR host verification accepts all real proof families and rejects c
     t.skip(`real crypto fixtures are not installed at ${fixtureDirectory}`);
     return;
   }
-  const wasmPath = resolve('target/wasm32-unknown-unknown/release/verifier_probe.wasm');
+  const wasmPath = resolve(process.env.CRYPTO_PROBE_WASM ?? 'target/wasm32-unknown-unknown/release/verifier_probe.wasm');
   assert.ok(await available(wasmPath), 'build verifier-probe.wasm before running this test');
 
   const operations = JSON.parse(await readFile(operationsPath, 'utf8')) as OperationFixture[];
