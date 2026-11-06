@@ -10,6 +10,7 @@ import type {
   HolderKeyView,
   KeeperGrant,
   KeyRegistration,
+  LoanManagementPreparation,
   PrivateAccountView,
   PreparedProof,
   ProposalSummary,
@@ -107,6 +108,12 @@ function optionalHexToBytes(value: string): number[] {
   return value.trim() ? hexToBytes(value) : []
 }
 
+function mergeArgs(proof: PreparedProof, expectedSpendingVersion: string): Record<string, unknown> {
+  const value = proof.operationArgs?.new_spending_ciphertext
+  if (typeof value !== 'string' || !value.trim()) throw new ProtocolError({ category: 'INVALID_ENCODING', message: 'Inbox merge requires the homomorphic new spending ciphertext.' })
+  return { expected_spending_version: expectedSpendingVersion, new_spending_ciphertext: hexToBytes(value), proof: null }
+}
+
 const CORE_OPERATION_KEYS = new Set([
   'new_spending_ciphertext', 'issuer_ciphertext', 'auditor_ciphertext', 'broker_ciphertext', 'broker_spending_commitment', 'broker_inbox_commitment',
   'borrower_spending_ciphertext', 'borrower_issuer_ciphertext', 'borrower_auditor_ciphertext', 'broker_spending_ciphertext', 'broker_issuer_ciphertext', 'broker_auditor_ciphertext',
@@ -179,16 +186,11 @@ function optionalDecimal(value: unknown): string | undefined {
   return decimal(value)
 }
 
-/**
- * Current Core pagination/lookup methods use plain u64 parameters while the
- * response and mutating argument ABI use decimal strings. Keep small IDs
- * compatible with that deployed view ABI, and preserve a string if a future
- * string-aware view is asked to address an ID beyond JavaScript's safe range.
- */
-function wireId(value: string): number | string {
+/** Core's U64 JSON adapter accepts canonical decimal strings for every ID. */
+function wireId(value: string): string {
   if (!/^\d+$/.test(value)) throw new TypeError('Core IDs must be canonical decimal strings')
-  const integer = BigInt(value)
-  return integer <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(integer) : value
+  if (value.length > 1 && value.startsWith('0')) throw new TypeError('Core IDs must be canonical decimal strings')
+  return value
 }
 
 function safeNumber(value: unknown, label: string): number {
@@ -218,9 +220,51 @@ type RawBroker = { broker_id: string | number; owner: string; vault_id: string |
 type RawVault = { vault_id: string | number; owner: string; asset_id: string; assets_total: unknown; assets_available: unknown; shares_total: unknown; share_scale?: number; accounting_pending: boolean; accounting_version: string | number; phase?: string | null; kind?: string }
 type RawLoan = { loan_id: string | number; broker_id: string | number; borrower: string; proposal_id: string | number; payment_interval: string | number; grace_period: string | number; next_due?: string | number | null; payment_total: number; payment_remaining: number; status: string; impaired?: boolean; loan_version: string | number; borrower_key_id?: string | number; broker_key_id?: string | number; loan_auditor_key_id?: string | number; loan_auditor_public_key?: unknown; principal_ciphertexts?: unknown[]; initial_owed_ciphertexts?: unknown[]; amount_owed_ciphertexts?: unknown[]; periodic_payment_ciphertexts?: unknown[]; principal_remaining_ciphertexts?: unknown[]; cumulative_repaid_ciphertexts?: unknown[]; accounting_leaf?: unknown }
 type RawProposal = { proposal_id: string | number; borrower: string; broker_id: string | number; vault_id: string | number; borrower_key_id?: string | number; broker_key_id?: string | number; expiry: string | number; agreement_digest: unknown; principal_ciphertexts?: unknown[]; initial_owed_ciphertexts?: unknown[]; periodic_payment_ciphertexts?: unknown[]; principal_commitment?: unknown; owed_commitment?: unknown; payment_commitment?: unknown; loan_auditor_public_key?: unknown; consumed: boolean; revoked: boolean; broker_signature?: unknown; borrower_signature?: unknown; broker_authorization_epoch?: string | number; borrower_authorization_epoch?: string | number; broker_authorization_key_id?: string | number | null; borrower_authorization_key_id?: string | number | null; broker_direct_authorized?: boolean; borrower_direct_authorized?: boolean; loan_auditor_key_id: string | number }
+type RawCounters = { proposal_high_water: string | number }
 type RawClaim = { claim_id: string | number; owner: string; amount: unknown; reserved_by?: string | number | null }
 type RawPayout = { operation_id: string | number; owner: string; recipient: string; amount: unknown; claim_id: string | number; attempt: number; status: string; created_at: string | number }
-type RawKeeper = { delegate_account: string; delegate_key_id: string | number; allowed_settlement_per_operation: unknown; allowed_settlement_per_window: unknown; expires_at: string | number; revocation_epoch: string | number; active: boolean; scope?: string[] }
+type RawKeeper = { delegate_account: string; delegate_key_id: string | number; allowed_operations?: string[]; allowed_settlement_per_operation: unknown; allowed_settlement_per_window: unknown; expires_at: string | number; revocation_epoch: string | number; active: boolean }
+
+function mapKeeperScope(values: string[] | undefined): KeeperGrant['scope'] {
+  const result: KeeperGrant['scope'] = []
+  for (const value of values || []) {
+    if (value === 'MergeInbox' && !result.includes('merge')) result.push('merge')
+    if (value === 'Settle' && !result.includes('settle')) result.push('settle')
+  }
+  return result
+}
+
+const DASHBOARD_PROPOSAL_SCAN_LIMIT = 128
+
+async function readDashboardProposals(transport: NearContractTransport, accountId: string, brokerIds: string[]): Promise<RawProposal[]> {
+  const brokerIdSet = new Set(brokerIds)
+  try {
+    const pages = await Promise.all([
+      transport.view<RawProposal[]>('list_proposals', { cursor: '0', borrower: accountId, broker_id: null, limit: 100 }),
+      ...brokerIds.map((brokerId) => transport.view<RawProposal[]>('list_proposals', { cursor: '0', borrower: null, broker_id: wireId(brokerId), limit: 100 })),
+    ])
+    return pages.flat()
+  } catch {
+    // Current Core exposes bounded ID lookups plus get_counters rather than a
+    // proposal list view. Scan only the most recent bounded range and filter
+    // by the connected account; no proposal data is inferred locally.
+    try {
+      const counters = await transport.view<RawCounters>('get_counters')
+      const highWater = safeNumber(counters.proposal_high_water, 'proposal high-water mark')
+      const first = Math.max(1, highWater - DASHBOARD_PROPOSAL_SCAN_LIMIT + 1)
+      const records = await Promise.all(Array.from({ length: highWater - first + 1 }, (_, index) => {
+        const proposalId = String(first + index)
+        return transport.view<RawProposal | null>('get_proposal', { proposal_id: proposalId }).catch(() => null)
+      }))
+      return records.flatMap((proposal) => {
+        if (!proposal) return []
+        return proposal.borrower === accountId || brokerIdSet.has(decimal(proposal.broker_id)) ? [proposal] : []
+      })
+    } catch {
+      return []
+    }
+  }
+}
 
 function mapAsset(raw: RawAssetProfile): AssetProfile {
   return { tokenAccount: raw.token_account, decimals: raw.decimals, controllerAccount: raw.controller_account, issuerKeyId: decimal(raw.issuer_key.key_id), issuerPublicKey: bytesToHex(raw.issuer_key.public_key), tokenAuditorKeyId: decimal(raw.token_auditor_key.key_id), tokenAuditorPublicKey: bytesToHex(raw.token_auditor_key.public_key), cryptoProfileHash: bytesToHex(raw.crypto_profile_hash), tokenTrustPolicy: raw.token_trust_policy }
@@ -301,23 +345,19 @@ export class NearProtocolClient implements ProtocolClient {
   async getDashboard(accountId: string): Promise<DashboardSnapshot> {
     const asset = await this.getAssetProfile()
     const [rawVaults, rawBrokers, rawClaims, rawPayouts] = await Promise.all([
-      this.transport.view<RawVault[]>('list_vaults', { cursor: 0, limit: 100 }),
-      this.transport.view<RawBroker[]>('list_brokers', { cursor: 0, owner: accountId, limit: 100 }),
-      this.transport.view<RawClaim[]>('list_claims', { cursor: 0, owner: accountId, limit: 100 }),
-      this.transport.view<RawPayout[]>('list_payouts', { cursor: 0, owner: accountId, limit: 100 }),
+      this.transport.view<RawVault[]>('list_vaults', { cursor: '0', limit: 100 }),
+      this.transport.view<RawBroker[]>('list_brokers', { cursor: '0', owner: accountId, limit: 100 }),
+      this.transport.view<RawClaim[]>('list_claims', { cursor: '0', owner: accountId, limit: 100 }),
+      this.transport.view<RawPayout[]>('list_payouts', { cursor: '0', owner: accountId, limit: 100 }),
     ])
     const brokers = rawBrokers.map((broker) => mapBroker(broker, asset.tokenAccount))
     const loanReads = [
-      this.transport.view<RawLoan[]>('list_loans', { cursor: 0, borrower: accountId, broker_id: null, limit: 100 }),
-      ...brokers.map((broker) => this.transport.view<RawLoan[]>('list_loans', { cursor: 0, borrower: null, broker_id: wireId(broker.brokerId), limit: 100 })),
+      this.transport.view<RawLoan[]>('list_loans', { cursor: '0', borrower: accountId, broker_id: null, limit: 100 }),
+      ...brokers.map((broker) => this.transport.view<RawLoan[]>('list_loans', { cursor: '0', borrower: null, broker_id: wireId(broker.brokerId), limit: 100 })),
     ]
     const rawLoans = (await Promise.all(loanReads)).flat()
     const uniqueLoans = [...new Map(rawLoans.map((loan) => [decimal(loan.loan_id), loan])).values()]
-    const proposalReads = [
-      this.transport.view<RawProposal[]>('list_proposals', { cursor: 0, borrower: accountId, broker_id: null, limit: 100 }).catch(() => [] as RawProposal[]),
-      ...brokers.map((broker) => this.transport.view<RawProposal[]>('list_proposals', { cursor: 0, borrower: null, broker_id: wireId(broker.brokerId), limit: 100 }).catch(() => [] as RawProposal[])),
-    ]
-    const proposals = (await Promise.all(proposalReads)).flat()
+    const proposals = await readDashboardProposals(this.transport, accountId, brokers.map((broker) => broker.brokerId))
     const uniqueProposals = [...new Map(proposals.map((proposal) => [decimal(proposal.proposal_id), proposal])).values()]
     const vaults = await Promise.all(rawVaults.map(async (vault) => {
       let shares: string | undefined
@@ -329,11 +369,15 @@ export class NearProtocolClient implements ProtocolClient {
       asset,
       vaults,
       brokers,
-      loans: uniqueLoans.map(mapLoan),
+      loans: uniqueLoans.map((loan) => {
+        const mapped = mapLoan(loan)
+        mapped.vaultId = brokers.find((broker) => broker.brokerId === mapped.brokerId)?.vaultId || ''
+        return mapped
+      }),
       proposals: uniqueProposals.map(mapProposal),
       claims: rawClaims.map((claim) => ({ claimId: decimal(claim.claim_id), ownerId: claim.owner, amount: decimal(claim.amount), assetAccount: asset.tokenAccount, status: claim.reserved_by === null || claim.reserved_by === undefined ? 'available' : 'reserved', payoutOperationId: optionalDecimal(claim.reserved_by) })),
       payouts: rawPayouts.map((payout) => ({ operationId: decimal(payout.operation_id), claimId: decimal(payout.claim_id), amount: decimal(payout.amount), recipientId: payout.recipient, status: payout.status === 'Succeeded' ? 'succeeded' : payout.status === 'Failed' || payout.status === 'ResultRecordedFailure' ? 'failed' : payout.status === 'InFlight' ? 'in_flight' : payout.status === 'ResultRecordedSuccess' ? 'result_recorded' : 'unknown', attempt: payout.attempt, lastUpdatedAt: safeNumber(payout.created_at, 'payout timestamp') })),
-      keeperGrants: rawBrokers.flatMap((broker) => (broker.delegates || []).map((delegate) => ({ delegateId: delegate.delegate_account, brokerId: decimal(broker.broker_id), scope: (delegate.scope || ['merge', 'settle']) as KeeperGrant['scope'], maxAmount: decimal(delegate.allowed_settlement_per_operation), expiresAt: safeNumber(delegate.expires_at, 'keeper expiry'), epoch: decimal(delegate.revocation_epoch), revoked: !delegate.active }))),
+      keeperGrants: rawBrokers.flatMap((broker) => (broker.delegates || []).map((delegate) => ({ delegateId: delegate.delegate_account, brokerId: decimal(broker.broker_id), scope: mapKeeperScope(delegate.allowed_operations), maxAmount: decimal(delegate.allowed_settlement_per_operation), expiresAt: safeNumber(delegate.expires_at, 'keeper expiry'), epoch: decimal(delegate.revocation_epoch), revoked: !delegate.active }))),
       publicNotice: uniqueProposals.length || rawBrokers.some((broker) => broker.delegates?.length) ? undefined : 'This deployment returned no optional proposal/keeper index entries. Core get_proposal/get_broker reads remain available by ID; the UI never invents records.',
     }
   }
@@ -346,19 +390,22 @@ export class NearProtocolClient implements ProtocolClient {
 
   async getHolderEncryptionKey(accountId: string): Promise<HolderKeyView> {
     try {
-      const holder = await this.transport.view<{ owner: string; key_id: string | number; public_key: unknown }>('get_holder_encryption_key', { owner: accountId })
-      return { accountId: holder.owner, encryptionKeyId: String(holder.key_id), publicKey: bytesToHex(holder.public_key) }
+      const holder = await this.transport.view<{ key_id: string | number; public_key: unknown } | null>('get_holder_key', { owner: accountId, key_id: null })
+      if (holder) return { accountId, encryptionKeyId: decimal(holder.key_id), publicKey: bytesToHex(holder.public_key) }
     } catch {
-      try {
-        const holder = await this.transport.view<RawHolder | null>('get_holder', { owner: accountId })
-        const publicKey = holder?.public_key ?? holder?.encryption_public_key ?? holder?.encryption_key?.public_key
-        if (holder && publicKey !== undefined) return { accountId: holder.owner, encryptionKeyId: decimal(holder.key_id), publicKey: bytesToHex(publicKey) }
-      } catch {
-        // Preserve the explicit unsupported-profile result below; no key is
-        // ever inferred from a ciphertext or authorization key.
-      }
-      throw new ProtocolError({ category: 'UNSUPPORTED_PROFILE', message: 'This Core deployment does not expose registered holder encryption public keys for recipient lookup.' })
+      // Older Core deployments may not expose get_holder_key. Fall through to
+      // the holder's registered public record instead of accepting a key from
+      // the caller.
     }
+    try {
+      const holder = await this.transport.view<RawHolder | null>('get_holder', { owner: accountId })
+      const publicKey = holder?.public_key ?? holder?.encryption_public_key ?? holder?.encryption_key?.public_key
+      if (holder && publicKey !== undefined) return { accountId: holder.owner, encryptionKeyId: decimal(holder.key_id), publicKey: bytesToHex(publicKey) }
+    } catch {
+      // Preserve the explicit unsupported-profile result below; no key is
+      // ever inferred from a ciphertext or authorization key.
+    }
+    throw new ProtocolError({ category: 'UNSUPPORTED_PROFILE', message: 'This Core deployment does not expose registered holder encryption public keys for recipient lookup.' })
   }
 
   async getBrokerPrivateAccount(brokerId: string): Promise<PrivateAccountView> {
@@ -401,7 +448,7 @@ export class NearProtocolClient implements ProtocolClient {
   }
 
   registerHolder(input: KeyRegistration): Promise<ActionReceipt> {
-    return this.call('register_holder', { key_id: input.encryptionKeyId, public_key: hexToBytes(input.encryptionPublicKey), proof_of_possession: proofArgs(input.possessionProof).proof, authorization_signature: hexToBytes(input.authorizationSignature) })
+    return this.call('register_holder', { key_id: input.encryptionKeyId, encryption_public_key: hexToBytes(input.encryptionPublicKey), public_key: hexToBytes(input.authorizationPublicKey), proof_of_possession: proofArgs(input.possessionProof).proof, authorization_signature: hexToBytes(input.authorizationSignature) })
   }
 
   registerAuthorizationKey(input: AuthorizationKeyRegistration): Promise<ActionReceipt> {
@@ -437,23 +484,23 @@ export class NearProtocolClient implements ProtocolClient {
   }
 
   mergeInbox(input: { accountId: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> {
-    return this.call('merge_inbox', { expected_spending_version: input.expectedSpendingVersion, ...proofArgs(input.proof) })
+    return this.call('merge_inbox', mergeArgs(input.proof, input.expectedSpendingVersion))
   }
 
   mergeBrokerInbox(input: { brokerId: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> {
-    return this.call('merge_broker_inbox', { broker_id: input.brokerId, args: { expected_spending_version: input.expectedSpendingVersion, ...proofArgs(input.proof) } })
+    return this.call('merge_broker_inbox', { broker_id: input.brokerId, args: mergeArgs(input.proof, input.expectedSpendingVersion) })
   }
 
   draw(input: { brokerId: string; amount: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> {
     return this.call('draw', { broker_id: input.brokerId, amount: input.amount, ...proofArgs(input.proof) })
   }
 
-  createProposal(input: { brokerId: string; borrowerId: string; vaultId: string; borrowerKeyId: string; brokerKeyId: string; borrowerAuthorizationKeyId?: string; brokerAuthorizationKeyId?: string; auditorKeyId: string; auditorPublicKey: string; paymentCount: number; paymentIntervalSeconds: number; gracePeriodSeconds: number; encryptedPrincipal: string[]; encryptedOwed: string[]; encryptedPayment: string[]; principalCommitment: string; owedCommitment: string; paymentCommitment: string; encryptedAgreement: string; termsDigest: string; brokerSignature: string; borrowerSignature: string; brokerAuthorizationEpoch: string; borrowerAuthorizationEpoch: string; expiresAt: number }): Promise<ActionReceipt> {
-    return this.call('create_proposal', { borrower: input.borrowerId, broker_id: input.brokerId, vault_id: input.vaultId, borrower_key_id: input.borrowerKeyId, broker_key_id: input.brokerKeyId, ...(input.brokerAuthorizationKeyId ? { broker_authorization_key_id: input.brokerAuthorizationKeyId } : {}), ...(input.borrowerAuthorizationKeyId ? { borrower_authorization_key_id: input.borrowerAuthorizationKeyId } : {}), loan_auditor_key_id: input.auditorKeyId, loan_auditor_public_key: hexToBytes(input.auditorPublicKey), payment_count: input.paymentCount, payment_interval: decimal(input.paymentIntervalSeconds), grace_period: decimal(input.gracePeriodSeconds), expiry: decimal(input.expiresAt), principal_ciphertexts: input.encryptedPrincipal.map(hexToBytes), initial_owed_ciphertexts: input.encryptedOwed.map(hexToBytes), periodic_payment_ciphertexts: input.encryptedPayment.map(hexToBytes), principal_commitment: hexToBytes(input.principalCommitment), owed_commitment: hexToBytes(input.owedCommitment), payment_commitment: hexToBytes(input.paymentCommitment), agreement_digest: input.termsDigest.trim() ? hexToBytes(input.termsDigest) : [], broker_signature: optionalHexToBytes(input.brokerSignature), borrower_signature: optionalHexToBytes(input.borrowerSignature), broker_authorization_epoch: input.brokerAuthorizationEpoch, borrower_authorization_epoch: input.borrowerAuthorizationEpoch })
+  createProposal(input: { brokerId: string; borrowerId: string; vaultId: string; borrowerKeyId: string; brokerKeyId: string; borrowerAuthorizationKeyId?: string; brokerAuthorizationKeyId?: string; auditorKeyId: string; auditorPublicKey: string; paymentCount: number; paymentIntervalSeconds: number; gracePeriodSeconds: number; encryptedPrincipal: string[]; encryptedOwed: string[]; encryptedPayment: string[]; principalCommitment: string; owedCommitment: string; paymentCommitment: string; encryptedAgreement: string; termsDigest: string; brokerSignature: string; borrowerSignature: string; brokerAuthorizationEpoch: string; borrowerAuthorizationEpoch: string; brokerAuthorizationNonce?: string; borrowerAuthorizationNonce?: string; expiresAt: number }): Promise<ActionReceipt> {
+    return this.call('create_proposal', { borrower: input.borrowerId, broker_id: input.brokerId, vault_id: input.vaultId, borrower_key_id: input.borrowerKeyId, broker_key_id: input.brokerKeyId, ...(input.brokerAuthorizationKeyId ? { broker_authorization_key_id: input.brokerAuthorizationKeyId } : {}), ...(input.borrowerAuthorizationKeyId ? { borrower_authorization_key_id: input.borrowerAuthorizationKeyId } : {}), loan_auditor_key_id: input.auditorKeyId, loan_auditor_public_key: hexToBytes(input.auditorPublicKey), payment_count: input.paymentCount, payment_interval: decimal(input.paymentIntervalSeconds), grace_period: decimal(input.gracePeriodSeconds), expiry: decimal(input.expiresAt), principal_ciphertexts: input.encryptedPrincipal.map(hexToBytes), initial_owed_ciphertexts: input.encryptedOwed.map(hexToBytes), periodic_payment_ciphertexts: input.encryptedPayment.map(hexToBytes), principal_commitment: hexToBytes(input.principalCommitment), owed_commitment: hexToBytes(input.owedCommitment), payment_commitment: hexToBytes(input.paymentCommitment), agreement_digest: input.termsDigest.trim() ? hexToBytes(input.termsDigest) : [], broker_signature: optionalHexToBytes(input.brokerSignature), borrower_signature: optionalHexToBytes(input.borrowerSignature), broker_authorization_epoch: input.brokerAuthorizationEpoch, borrower_authorization_epoch: input.borrowerAuthorizationEpoch, broker_authorization_nonce: input.brokerAuthorizationNonce || '0', borrower_authorization_nonce: input.borrowerAuthorizationNonce || '0' })
   }
 
   authorizeProposal(input: { proposalId: string; authorizationSignature: string }): Promise<ActionReceipt> {
-    return this.call('sign_proposal', { proposal_id: input.proposalId, signature: hexToBytes(input.authorizationSignature) })
+    return this.call('sign_proposal', { proposal_id: input.proposalId, signature: optionalHexToBytes(input.authorizationSignature) })
   }
 
   revokeProposal(input: { proposalId: string }): Promise<ActionReceipt> {
@@ -472,8 +519,12 @@ export class NearProtocolClient implements ProtocolClient {
     return this.call('repay', { loan_id: input.loanId, mode: input.mode === 'regular' ? 'Regular' : 'Full', expected_loan_version: input.expectedLoanVersion, expected_borrower_spending_version: input.expectedBorrowerSpendingVersion, ...proofArgs(input.proof) })
   }
 
-  manageLoan(input: { loanId: string; operation: 'impair' | 'unimpair' | 'default'; expectedLoanVersion: string; proof: PreparedProof }): Promise<ActionReceipt> {
-    return this.call('manage_loan', { loan_id: input.loanId, action: input.operation === 'impair' ? 'Impair' : input.operation === 'unimpair' ? 'Unimpair' : 'Default', expected_loan_version: input.expectedLoanVersion, ...proofArgs(input.proof) })
+  manageLoan(input: { loanId: string; operation: 'impair' | 'unimpair' | 'default'; expectedLoanVersion: string; preparation?: LoanManagementPreparation; proof?: PreparedProof }): Promise<ActionReceipt> {
+    const preparation = input.preparation
+    if (preparation && (preparation.loanId !== input.loanId || preparation.operation !== input.operation || preparation.expectedLoanVersion !== input.expectedLoanVersion)) throw new ProtocolError({ category: 'STALE_STATE', message: 'Loan management preparation does not match the submitted loan version.' })
+    const args: Record<string, unknown> = { loan_id: input.loanId, action: input.operation === 'impair' ? 'Impair' : input.operation === 'unimpair' ? 'Unimpair' : 'Default', expected_loan_version: input.expectedLoanVersion }
+    if (input.proof) Object.assign(args, proofArgs(input.proof))
+    return this.call('manage_loan', args)
   }
 
   settle(input: { brokerId: string; amount: string; expectedSpendingVersion: string; expectedAccountingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> {
@@ -489,6 +540,7 @@ export class NearProtocolClient implements ProtocolClient {
   }
 
   grantKeeper(input: { brokerId: string; delegateId: string; delegateKeyId: string; scope: KeeperGrant['scope']; maxAmountPerOperation: string; maxAmountPerWindow: string; windowSeconds: number; delegateEpoch: string; expiresAt: number }): Promise<ActionReceipt> {
+    if (!input.scope.length || input.scope.some((scope) => scope !== 'merge' && scope !== 'settle')) throw new ProtocolError({ category: 'INVALID_ENCODING', message: 'Core keeper grants support only merge and settle operations.' })
     return this.call('grant_keeper', {
       broker_id: input.brokerId,
       delegate_account: input.delegateId,
@@ -498,6 +550,7 @@ export class NearProtocolClient implements ProtocolClient {
       window_seconds: decimal(input.windowSeconds),
       expires_at: decimal(input.expiresAt),
       delegate_epoch: input.delegateEpoch,
+      allowed_operations: input.scope.map((scope) => scope === 'merge' ? 'MergeInbox' : 'Settle'),
     })
   }
 

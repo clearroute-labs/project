@@ -12,8 +12,14 @@ export interface DeploymentConfig {
   /** Explicitly opt in to HTTP only for a local sandbox RPC. */
   allowInsecureLocalhost?: boolean
   cryptoProfileHash: string
-  /** Immutable artifact/manifest pin checked by the injected browser prover. */
+  /** Immutable browser artifact manifest SHA-256 pin. */
   cryptoArtifactHash?: string
+  /** Public URL for the deployment-pinned crypto manifest. */
+  cryptoManifestUrl?: string
+  /** Optional base URL when artifacts are served separately from the manifest. */
+  cryptoArtifactBaseUrl?: string
+  /** Development manifests are unfunded; production deployments must opt in explicitly. */
+  cryptoFunded?: boolean
   assetDecimals: number
   assetSymbol: string
 }
@@ -210,7 +216,8 @@ export interface PayoutSummary {
 export interface KeeperGrant {
   delegateId: string
   brokerId: string
-  scope: Array<'merge' | 'settle' | 'reconcile' | 'manage_loan'>
+  /** Core's keeper ABI currently permits only inbox merge and settlement. */
+  scope: Array<'merge' | 'settle'>
   maxAmount?: string
   expiresAt: number
   epoch: string
@@ -301,6 +308,26 @@ export interface KeyRegistration {
   authorizationSignature: string
 }
 
+/** Browser-local preparation for allocating a broker encryption key and its
+ * proof-bound Core broker ID. The public key is returned by the worker after
+ * key generation; callers never paste or invent it. */
+export interface BrokerKeyPreparation {
+  brokerId: string
+  encryptionKeyId: string
+  encryptionPublicKey: string
+  possessionProof: PreparedProof
+  /** True only when this call generated key material not already in the worker. */
+  newKeyGenerated: boolean
+}
+
+/** Management is direct broker-owner authority in the current Core ABI. It
+ * still refreshes and pins the public loan version before submission. */
+export interface LoanManagementPreparation {
+  loanId: string
+  operation: 'impair' | 'unimpair' | 'default'
+  expectedLoanVersion: string
+}
+
 export interface AuthorizationKeyRegistration {
   keyId: string
   publicKey: string
@@ -342,9 +369,15 @@ export interface WalletAdapter {
   readonly accountId?: string
   readonly networkId?: NetworkId
   readonly error?: string
+  /**
+   * Local sandbox-only credential import. Implementations must keep the
+   * secret in memory and must never persist or transmit the credential file.
+   */
+  readonly credentialImport?: { label: string; accept: string }
   connect(): Promise<void>
   disconnect(): Promise<void>
   subscribe(listener: () => void): () => void
+  importCredentialFile?(file: File): Promise<void>
 }
 
 export interface CryptoProviderStatus {
@@ -362,6 +395,8 @@ export interface CryptoProvider {
   createKeyRegistration(): Promise<KeyRegistration>
   createAuthorizationKeyRegistration(): Promise<AuthorizationKeyRegistration>
   prepareAgreement(input: {
+    brokerId?: string
+    borrowerId?: string
     publicKeys: {
       borrower: string
       broker: string
@@ -375,14 +410,15 @@ export interface CryptoProvider {
     paymentCount: number
     maxPaymentCount: number
   }): Promise<AgreementDraft>
-  prepareBrokerKeyRegistration(input: { encryptionKeyId: string; encryptionPublicKey: string }): Promise<PreparedProof>
+  prepareBrokerKeyRegistration(input: { ownerId: string; vaultId: string; encryptionKeyId: string; debtMaximum: string }): Promise<BrokerKeyPreparation>
   prepareConfidentialTransfer(input: {
     sender: PrivateAccountView
     destinationAccountId: string
     amount: string
     destinationEncryptionKeyId: string
+    destinationEncryptionPublicKey?: string
   }): Promise<PreparedProof>
-  prepareMerge(input: { account: PrivateAccountView; scope: 'holder' | 'broker' }): Promise<PreparedProof>
+  prepareMerge(input: { account: PrivateAccountView; scope: 'holder' | 'broker'; brokerId?: string }): Promise<PreparedProof>
   prepareDraw(input: { broker: BrokerSummary; amount: string; expectedSpendingVersion: string }): Promise<PreparedProof>
   prepareBrokerOrigination(input: { proposal: ProposalSummary; broker: BrokerSummary }): Promise<PreparedProof>
   prepareRepayment(input: {
@@ -390,7 +426,7 @@ export interface CryptoProvider {
     borrower: PrivateAccountView
     mode: 'regular' | 'full'
   }): Promise<PreparedProof>
-  prepareLoanManagement(input: { loan: LoanSummary; operation: 'impair' | 'unimpair' | 'default' }): Promise<PreparedProof>
+  prepareLoanManagement(input: { loan: LoanSummary; operation: 'impair' | 'unimpair' | 'default' }): Promise<LoanManagementPreparation>
   prepareSettlement(input: {
     broker: BrokerSummary
     amount: string
@@ -457,6 +493,8 @@ export interface ProtocolClient {
     borrowerSignature: string
     brokerAuthorizationEpoch: string
     borrowerAuthorizationEpoch: string
+    brokerAuthorizationNonce?: string
+    borrowerAuthorizationNonce?: string
     expiresAt: number
   }): Promise<ActionReceipt>
   authorizeProposal(input: { proposalId: string; authorizationSignature: string }): Promise<ActionReceipt>
@@ -469,7 +507,7 @@ export interface ProtocolClient {
     proof: PreparedProof
   }): Promise<ActionReceipt>
   repay(input: { loanId: string; mode: 'regular' | 'full'; expectedLoanVersion: string; expectedBorrowerSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt>
-  manageLoan(input: { loanId: string; operation: 'impair' | 'unimpair' | 'default'; expectedLoanVersion: string; proof: PreparedProof }): Promise<ActionReceipt>
+  manageLoan(input: { loanId: string; operation: 'impair' | 'unimpair' | 'default'; expectedLoanVersion: string; preparation?: LoanManagementPreparation; proof?: PreparedProof }): Promise<ActionReceipt>
   settle(input: { brokerId: string; amount: string; expectedSpendingVersion: string; expectedAccountingVersion: string; proof: PreparedProof }): Promise<ActionReceipt>
   reconcileCredit(input: { brokerId: string; expectedBookVersion: string; proof: PreparedProof }): Promise<ActionReceipt>
   prepareReconciliation(input: { brokerId: string }): Promise<ActionReceipt>

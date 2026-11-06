@@ -134,7 +134,7 @@ function TransferCard({ view }: { view: PrivateAccountView | null }) {
       const receipt = await action.run('Send private transfer', async () => {
         let sender = await adapters.protocol.getPrivateAccount(accountId)
         try {
-          const proof = await crypto.prepareConfidentialTransfer({ sender, destinationAccountId: destination.trim(), destinationEncryptionKeyId: destinationKey.encryptionKeyId, amount: amountUnits })
+          const proof = await crypto.prepareConfidentialTransfer({ sender, destinationAccountId: destination.trim(), destinationEncryptionKeyId: destinationKey.encryptionKeyId, destinationEncryptionPublicKey: destinationKey.publicKey, amount: amountUnits })
           return requireFinalized(await adapters.protocol.confidentialSend({ senderAccountId: accountId, destinationAccountId: destination.trim(), expectedSpendingVersion: sender.spendingVersion, proof }), 'Private transfer')
         } catch (caught) {
           if (!(caught instanceof ProtocolError) || caught.details.category !== 'STALE_STATE') throw caught
@@ -146,7 +146,7 @@ function TransferCard({ view }: { view: PrivateAccountView | null }) {
             requireFinalized(await adapters.protocol.mergeInbox({ accountId, expectedSpendingVersion: refreshed.spendingVersion, proof: mergeProof }), 'Inbox merge')
             sender = await adapters.protocol.getPrivateAccount(accountId)
           }
-          const proof = await crypto.prepareConfidentialTransfer({ sender, destinationAccountId: destination.trim(), destinationEncryptionKeyId: destinationKey.encryptionKeyId, amount: amountUnits })
+          const proof = await crypto.prepareConfidentialTransfer({ sender, destinationAccountId: destination.trim(), destinationEncryptionKeyId: destinationKey.encryptionKeyId, destinationEncryptionPublicKey: destinationKey.publicKey, amount: amountUnits })
           return requireFinalized(await adapters.protocol.confidentialSend({ senderAccountId: accountId, destinationAccountId: destination.trim(), expectedSpendingVersion: sender.spendingVersion, proof }), 'Private transfer')
         }
       })

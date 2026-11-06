@@ -12,6 +12,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "buffer": "^6.0.3",
+    "@scure/base": "^1.2.6",
+    "@near-js/crypto": "^2.5.1",
+    "@near-js/signers": "^2.5.1",
+    "@near-js/transactions": "^2.5.1",
+    "@near-js/utils": "^2.5.1",
     "@confidential-lending/client": "workspace:*",
     "@confidential-lending/wallet": "workspace:*",
     "@near-wallet-selector/core": "^10.1.4",

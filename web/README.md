@@ -10,7 +10,7 @@ npm install --cache /tmp/near-lending-npm
 npm run dev
 ```
 
-With a complete deployment configuration, the app creates a real Wallet Selector session (MyNearWallet and Meteor) and a finalized JSON-RPC `ProtocolClient`. Without the required Core/token/profile values it starts in an intentionally disconnected, empty state. It does not invent balances, claims, proof results or transaction success.
+With a complete `mainnet` or `testnet` deployment configuration, the app creates a real Wallet Selector session (MyNearWallet and Meteor) and a finalized JSON-RPC `ProtocolClient`. For the local demo, set `VITE_NETWORK_ID=sandbox`, use an explicitly enabled localhost RPC, and import one of the demo credential JSON files from the wallet button. The file must contain `account_id` and an `ed25519:` `private_key` (an optional matching `public_key` is checked); it is held in memory only and is cleared on disconnect. This path signs real NEAR transactions and is never enabled for public networks. Without the required Core/token/profile values it starts in an intentionally disconnected, empty state. It does not invent balances, claims, proof results or transaction success.
 
 ## Integration boundary
 
@@ -18,11 +18,11 @@ With a complete deployment configuration, the app creates a real Wallet Selector
 
 - `ProtocolClient` reads finalized public/ciphertext state and submits typed Core actions. `src/lib/nearClient.ts` maps every action to the documented Core ABI through `@confidential-lending/client`'s HTTPS JSON-RPC and final-outcome transport.
 - `WalletAdapter` owns NEAR wallet-selector/session connection state. The default `NearWalletSelectorSession` uses supported MyNearWallet and Meteor modules and returns only actual connection state; no account is embedded in the app.
-- `CryptoProvider` owns browser-local key material, WASM artifact/profile validation, key-registration/PoP preparation, proof preparation (including merge, draw, broker-only origination, repayment, management, settlement and reconciliation) and explicit decryption. Witnesses and decrypted values must not be sent to RPC or telemetry.
+- `CryptoProvider` owns browser-local key material, WASM artifact/profile validation, key-registration/PoP preparation, proof preparation (including merge, draw, broker-only origination, repayment, settlement and reconciliation), direct loan-management preparation, and explicit decryption. Witnesses and decrypted values must not be sent to RPC or telemetry.
 
 `src/lib/nearClient.ts` maps those typed operations to the Core method names from `SPEC.md`. `src/lib/workerCrypto.ts` is the fail-closed worker transport for the reviewed WASM module; a module is accepted only when its profile and artifact hashes match the deployment manifest. Root integration may inject a reviewed crypto provider before mounting the app.
 
-Deployment values are read from `VITE_NETWORK_ID`, `VITE_CORE_ACCOUNT_ID`, `VITE_TOKEN_ACCOUNT_ID`, `VITE_RPC_URL`, `VITE_ALLOW_INSECURE_LOCALHOST`, `VITE_CRYPTO_PROFILE_HASH`, `VITE_CRYPTO_ARTIFACT_HASH`, `VITE_ASSET_DECIMALS` and `VITE_ASSET_SYMBOL`. RPC URLs must not contain credentials; production RPC must use HTTPS. The localhost HTTP opt-in is only for an explicitly local sandbox.
+Deployment values are read from `VITE_NETWORK_ID`, `VITE_CORE_ACCOUNT_ID`, `VITE_TOKEN_ACCOUNT_ID`, `VITE_RPC_URL`, `VITE_ALLOW_INSECURE_LOCALHOST`, `VITE_CRYPTO_PROFILE_HASH`, `VITE_CRYPTO_ARTIFACT_HASH`, `VITE_CRYPTO_MANIFEST_URL`, `VITE_CRYPTO_ARTIFACT_BASE_URL`, `VITE_FUNDED_DEPLOYMENT`, `VITE_ASSET_DECIMALS` and `VITE_ASSET_SYMBOL`. RPC URLs must not contain credentials; production RPC must use HTTPS. The localhost HTTP opt-in is only for an explicitly local sandbox.
 
 The browser crypto bridge must implement the `CryptoProvider` interface in
 `src/lib/types.ts`. Every `PreparedProof` carries canonical Statement JSON,
@@ -35,6 +35,14 @@ their three commitments, and the auditor public key. Broker origination
 uses `prepareBrokerOrigination`; borrowers only decrypt/review and call
 `authorizeAgreement`. Holder and broker key registration proofs are nested
 Core `ProofArgs` envelopes, not fabricated signature strings.
+
+`packages/wallet/src/core.ts` contains the reusable finalized-read/proof-context
+`CoreWallet` boundary used by the worker and native keeper. Its constructor is
+`new CoreWallet(rpc, configuration, crypto, keys, proofs, recovery?)`; the
+important methods are `read`, `getProofContext`, `listRecoveryHistory` and
+`prove`. The browser worker then composes that boundary with the concrete
+`LedgerWallet` from `@confidential-lending/wallet` for registration, merge,
+draw, transfer, origination, repayment, settlement and recovery.
 
 `CryptoProvider.prepareAgreement` is the broker-side draft boundary. It
 receives base-unit decimal strings and registered reader public keys, keeps

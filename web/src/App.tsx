@@ -55,6 +55,11 @@ export function App({ adapters: providedAdapters }: { adapters?: AppAdapters }) 
 
   const accountId = adapters.wallet.accountId
 
+  useEffect(() => {
+    const provider = adapters.crypto as typeof adapters.crypto & { setSubject?: (accountId: string | undefined) => void }
+    provider.setSubject?.(accountId)
+  }, [accountId, adapters.crypto])
+
   const refresh = useCallback(async () => {
     if (!accountId || adapters.wallet.status !== 'connected') {
       setSnapshot(null)

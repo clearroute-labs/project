@@ -5,6 +5,7 @@ import {
   type AuthorizationKeyRegistration,
   type AppAdapters,
   type AuditCiphertextBundle,
+  type BrokerKeyPreparation,
   type BrokerSummary,
   type CryptoProvider,
   type CryptoProviderStatus,
@@ -14,6 +15,7 @@ import {
   type KeeperGrant,
   type HolderKeyView,
   type LoanSummary,
+  type LoanManagementPreparation,
   type PrivateAccountView,
   type PreparedProof,
   type ProposalSummary,
@@ -22,7 +24,8 @@ import {
   type WalletAdapter,
 } from './types'
 import { createRpcProtocolClient } from './nearClient'
-import { NearWalletSelectorSession } from './nearWallet'
+import { isSandboxCredentialDeployment, NearWalletSelectorSession, SandboxCredentialWallet } from './nearWallet'
+import { createWorkerCryptoProvider } from './workerCrypto'
 
 export function deploymentConfigFromEnv(): DeploymentConfig {
   return {
@@ -33,6 +36,9 @@ export function deploymentConfigFromEnv(): DeploymentConfig {
     allowInsecureLocalhost: import.meta.env.VITE_ALLOW_INSECURE_LOCALHOST === 'true',
     cryptoProfileHash: import.meta.env.VITE_CRYPTO_PROFILE_HASH || '',
     cryptoArtifactHash: import.meta.env.VITE_CRYPTO_ARTIFACT_HASH || undefined,
+    cryptoManifestUrl: import.meta.env.VITE_CRYPTO_MANIFEST_URL || '/crypto/manifest.json',
+    cryptoArtifactBaseUrl: import.meta.env.VITE_CRYPTO_ARTIFACT_BASE_URL || undefined,
+    cryptoFunded: import.meta.env.VITE_FUNDED_DEPLOYMENT === 'true',
     assetDecimals: Number.parseInt(import.meta.env.VITE_ASSET_DECIMALS || '', 10),
     assetSymbol: import.meta.env.VITE_ASSET_SYMBOL || 'ASSET',
   }
@@ -72,13 +78,13 @@ class UnavailableProtocolClient implements ProtocolClient {
   mergeInbox(_input: { accountId: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   mergeBrokerInbox(_input: { brokerId: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   draw(_input: { brokerId: string; amount: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
-  createProposal(_input: { brokerId: string; borrowerId: string; vaultId: string; borrowerKeyId: string; brokerKeyId: string; borrowerAuthorizationKeyId?: string; brokerAuthorizationKeyId?: string; auditorKeyId: string; auditorPublicKey: string; paymentCount: number; paymentIntervalSeconds: number; gracePeriodSeconds: number; encryptedPrincipal: string[]; encryptedOwed: string[]; encryptedPayment: string[]; principalCommitment: string; owedCommitment: string; paymentCommitment: string; encryptedAgreement: string; termsDigest: string; brokerSignature: string; borrowerSignature: string; brokerAuthorizationEpoch: string; borrowerAuthorizationEpoch: string; expiresAt: number }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  createProposal(_input: { brokerId: string; borrowerId: string; vaultId: string; borrowerKeyId: string; brokerKeyId: string; borrowerAuthorizationKeyId?: string; brokerAuthorizationKeyId?: string; auditorKeyId: string; auditorPublicKey: string; paymentCount: number; paymentIntervalSeconds: number; gracePeriodSeconds: number; encryptedPrincipal: string[]; encryptedOwed: string[]; encryptedPayment: string[]; principalCommitment: string; owedCommitment: string; paymentCommitment: string; encryptedAgreement: string; termsDigest: string; brokerSignature: string; borrowerSignature: string; brokerAuthorizationEpoch: string; borrowerAuthorizationEpoch: string; brokerAuthorizationNonce?: string; borrowerAuthorizationNonce?: string; expiresAt: number }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   authorizeProposal(_input: { proposalId: string; authorizationSignature: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   revokeProposal(_input: { proposalId: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   originate(_input: { proposalId: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   confidentialSend(_input: { senderAccountId: string; destinationAccountId: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   repay(_input: { loanId: string; mode: 'regular' | 'full'; expectedLoanVersion: string; expectedBorrowerSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
-  manageLoan(_input: { loanId: string; operation: 'impair' | 'unimpair' | 'default'; expectedLoanVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  manageLoan(_input: { loanId: string; operation: 'impair' | 'unimpair' | 'default'; expectedLoanVersion: string; preparation?: LoanManagementPreparation; proof?: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   settle(_input: { brokerId: string; amount: string; expectedSpendingVersion: string; expectedAccountingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   reconcileCredit(_input: { brokerId: string; expectedBookVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   prepareReconciliation(_input: { brokerId: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
@@ -131,14 +137,14 @@ class UnavailableCryptoProvider implements CryptoProvider {
   importWalletMaterial(_material: Record<string, unknown>): Promise<never> { return Promise.reject(this.fail()) }
   createKeyRegistration(): Promise<never> { return Promise.reject(this.fail()) }
   createAuthorizationKeyRegistration(): Promise<never> { return Promise.reject(this.fail()) }
-  prepareAgreement(_input: { publicKeys: { borrower: string; broker: string; issuer: string; tokenAuditor: string; loanAuditor: string }; principal: string; initialOwed: string; periodicPayment: string; paymentCount: number; maxPaymentCount: number }): Promise<AgreementDraft> { return Promise.reject(this.fail()) }
-  prepareBrokerKeyRegistration(_input: { encryptionKeyId: string; encryptionPublicKey: string }): Promise<never> { return Promise.reject(this.fail()) }
+  prepareAgreement(_input: { brokerId?: string; borrowerId?: string; publicKeys: { borrower: string; broker: string; issuer: string; tokenAuditor: string; loanAuditor: string }; principal: string; initialOwed: string; periodicPayment: string; paymentCount: number; maxPaymentCount: number }): Promise<AgreementDraft> { return Promise.reject(this.fail()) }
+  prepareBrokerKeyRegistration(_input: { ownerId: string; vaultId: string; encryptionKeyId: string; debtMaximum: string }): Promise<BrokerKeyPreparation> { return Promise.reject(this.fail()) }
   prepareConfidentialTransfer(_input: { sender: PrivateAccountView; destinationAccountId: string; amount: string; destinationEncryptionKeyId: string }): Promise<never> { return Promise.reject(this.fail()) }
-  prepareMerge(_input: { account: PrivateAccountView; scope: 'holder' | 'broker' }): Promise<never> { return Promise.reject(this.fail()) }
+  prepareMerge(_input: { account: PrivateAccountView; scope: 'holder' | 'broker'; brokerId?: string }): Promise<never> { return Promise.reject(this.fail()) }
   prepareDraw(_input: { broker: BrokerSummary; amount: string; expectedSpendingVersion: string }): Promise<never> { return Promise.reject(this.fail()) }
   prepareBrokerOrigination(_input: { proposal: ProposalSummary; broker: BrokerSummary }): Promise<never> { return Promise.reject(this.fail()) }
   prepareRepayment(_input: { loan: LoanSummary; borrower: PrivateAccountView; mode: 'regular' | 'full' }): Promise<never> { return Promise.reject(this.fail()) }
-  prepareLoanManagement(_input: { loan: LoanSummary; operation: 'impair' | 'unimpair' | 'default' }): Promise<never> { return Promise.reject(this.fail()) }
+  prepareLoanManagement(_input: { loan: LoanSummary; operation: 'impair' | 'unimpair' | 'default' }): Promise<LoanManagementPreparation> { return Promise.reject(this.fail()) }
   prepareSettlement(_input: { broker: BrokerSummary; amount: string; expectedSpendingVersion: string }): Promise<never> { return Promise.reject(this.fail()) }
   prepareReconciliation(_input: { broker: BrokerSummary; expectedBookVersion: string; checkpointId?: string }): Promise<never> { return Promise.reject(this.fail()) }
   authorizeAgreement(_proposal: ProposalSummary): Promise<never> { return Promise.reject(this.fail()) }
@@ -169,12 +175,30 @@ declare global {
 export function createBrowserAdapters(config = deploymentConfigFromEnv()): AppAdapters {
   const fallback = createUnavailableAdapters(config)
   const injected = typeof window !== 'undefined' ? window.__PRIVATE_LEDGER_ADAPTERS__ : undefined
-  const configured = Boolean(config.coreAccountId && config.tokenAccountId && config.cryptoProfileHash && /^[a-f\d]{64}$/i.test(config.cryptoProfileHash) && Number.isInteger(config.assetDecimals) && config.assetDecimals >= 0 && config.assetDecimals <= 38)
+  const manifestUrl = config.cryptoManifestUrl || '/crypto/manifest.json'
+  const configured = Boolean(config.coreAccountId && config.tokenAccountId && config.cryptoProfileHash && /^[a-f\d]{64}$/i.test(config.cryptoProfileHash) && config.cryptoArtifactHash && /^[a-f\d]{64}$/i.test(config.cryptoArtifactHash) && Number.isInteger(config.assetDecimals) && config.assetDecimals >= 0 && config.assetDecimals <= 38)
   if (!injected?.protocol && !injected?.wallet && configured) {
     try {
-      const wallet = new NearWalletSelectorSession(config)
+      const wallet = isSandboxCredentialDeployment(config)
+        ? new SandboxCredentialWallet(config)
+        : new NearWalletSelectorSession(config)
       const { protocol } = createRpcProtocolClient(config, wallet)
-      return { protocol, wallet, crypto: injected?.crypto ?? fallback.crypto }
+      let crypto = injected?.crypto
+      if (!crypto && config.cryptoArtifactHash && typeof Worker !== 'undefined') {
+        crypto = createWorkerCryptoProvider({
+          expectedProfileHash: config.cryptoProfileHash,
+          expectedArtifactHash: config.cryptoArtifactHash,
+          manifestUrl,
+          artifactBaseUrl: config.cryptoArtifactBaseUrl,
+          networkId: config.networkId,
+          coreAccountId: config.coreAccountId,
+          assetId: config.tokenAccountId,
+          funded: config.cryptoFunded === true,
+          rpcUrl: config.rpcUrl,
+          allowInsecureLocalhost: config.allowInsecureLocalhost,
+        })
+      }
+      return { protocol, wallet, crypto: crypto ?? fallback.crypto }
     } catch {
       // Invalid deployment transport remains visibly disconnected; no fake client is returned.
     }

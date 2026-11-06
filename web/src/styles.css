@@ -133,6 +133,7 @@ h3 { font-size: 1rem; margin-bottom: 8px; color: var(--ink); }
 .form-stack { display: grid; gap: 14px; }
 .checkbox-field { display: flex; align-items: center; gap: 8px; color: #c5d5d5; font-size: .76rem; }
 .checkbox-field input { accent-color: var(--emerald); }
+.checkbox-list { display: grid; gap: 8px; padding: 4px 0 2px; }
 .form-card .section-heading { margin-bottom: 20px; }
 .form-footnote { color: var(--muted-2); font-size: .7rem; margin: 15px 0 0; }
 .readonly-field { min-height: 39px; border: 1px dashed var(--line-strong); border-radius: 7px; padding: 9px 11px; display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: .75rem; flex-wrap: wrap; }
@@ -140,6 +141,7 @@ h3 { font-size: 1rem; margin-bottom: 8px; color: var(--ink); }
 .readonly-field > span:first-child { margin-right: auto; }
 .file-input { color: var(--muted); font-size: .75rem; width: 100%; }
 .file-input::file-selector-button { border: 1px solid var(--line-strong); border-radius: 6px; background: var(--navy-800); color: var(--ink); padding: 8px 10px; margin-right: 8px; font-size: .72rem; cursor: pointer; }
+.credential-file-input { display: none; }
 .mono, code { font-family: 'DM Mono', monospace; font-size: .7rem; color: #a8cbc7; word-break: break-all; }
 .table-wrap { overflow: auto; margin: -5px -9px -8px; }
 table { width: 100%; border-collapse: collapse; text-align: left; font-size: .76rem; min-width: 560px; }

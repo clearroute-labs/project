@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { Button, Mono, Notice, SelectInput, StatusBadge } from './ui'
 import type { Role, WalletAdapter } from '../lib/types'
 
@@ -64,9 +64,18 @@ export function Layout({ role, path, onNavigate, onRoleChange, wallet, children,
 }) {
   const meta = roleMeta[role]
   const [walletError, setWalletError] = useState('')
+  const credentialInput = useRef<HTMLInputElement>(null)
   const connect = async () => {
     setWalletError('')
     try { await wallet.connect() } catch (error) { setWalletError(error instanceof Error ? error.message : 'Wallet connection failed.') }
+  }
+  const importCredentials = async (file: File) => {
+    setWalletError('')
+    try {
+      await wallet.importCredentialFile?.(file)
+    } catch (error) {
+      setWalletError(error instanceof Error ? error.message : 'Sandbox credential import failed.')
+    }
   }
   return (
     <div className="app-shell">
@@ -99,7 +108,9 @@ export function Layout({ role, path, onNavigate, onRoleChange, wallet, children,
           <div className="topbar-context"><span className="topbar-dot" />{meta.label} workspace<span className="slash">/</span><span className="muted">NEAR {wallet.networkId || 'testnet'}</span></div>
           <div className="topbar-actions">
             <StatusBadge tone={adapterReady ? 'success' : 'warning'}>{adapterReady ? 'Ready' : 'Disconnected'}</StatusBadge>
-            {wallet.status === 'connected' && wallet.accountId ? <button className="account-chip" onClick={() => onNavigate('/settings')}><span className="account-dot" />{shortAccount(wallet.accountId)}</button> : <Button variant="secondary" onClick={() => void connect()}>Connect wallet</Button>}
+            {wallet.status === 'connected' && wallet.accountId ? <button className="account-chip" onClick={() => onNavigate('/settings')}><span className="account-dot" />{shortAccount(wallet.accountId)}</button> : null}
+            {wallet.credentialImport && wallet.importCredentialFile ? <Button variant="secondary" onClick={() => credentialInput.current?.click()}>{wallet.status === 'connected' ? 'Switch sandbox account' : wallet.credentialImport.label}</Button> : wallet.status !== 'connected' ? <Button variant="secondary" onClick={() => void connect()}>Connect wallet</Button> : null}
+            {wallet.credentialImport && wallet.importCredentialFile ? <input ref={credentialInput} className="credential-file-input" type="file" accept={wallet.credentialImport.accept} aria-label={wallet.credentialImport.label} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void importCredentials(file) }} /> : null}
           </div>
         </header>
         <main className="main-content">

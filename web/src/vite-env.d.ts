@@ -8,6 +8,9 @@ interface ImportMetaEnv {
   readonly VITE_ALLOW_INSECURE_LOCALHOST?: string
   readonly VITE_CRYPTO_PROFILE_HASH?: string
   readonly VITE_CRYPTO_ARTIFACT_HASH?: string
+  readonly VITE_CRYPTO_MANIFEST_URL?: string
+  readonly VITE_CRYPTO_ARTIFACT_BASE_URL?: string
+  readonly VITE_FUNDED_DEPLOYMENT?: string
   readonly VITE_ASSET_DECIMALS?: string
   readonly VITE_ASSET_SYMBOL?: string
 }
