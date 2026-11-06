@@ -1,0 +1,10 @@
+[package]
+name = "authenticated-book"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Bounded sparse Merkle accounting book for confidential loans"
+
+[dev-dependencies]
+sha2.workspace = true

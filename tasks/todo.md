@@ -1,4 +1,16 @@
-# Confidential lending on NEAR: feasibility review
+# Confidential lending on NEAR
+
+## Current task: implement the whole specification
+
+The user authorized full implementation after approving `SPEC.md`. Earlier research-only and specification-only scope statements below are historical, not current restrictions. The active implementation checklist and verification results are in [implementation.md](implementation.md); unresolved review findings are in [implementation-review.md](implementation-review.md).
+
+- [x] Establish the implementation workspace and dispatch isolated contract, cryptography and web work.
+- [x] Validate the NEAR host proof verifier and implement tested accounting/client/keeper foundations.
+- [ ] Integrate complete, sound proof relations with authoritative contract state.
+- [ ] Complete the application, recovery and keeper flows using the actual artifacts and contract.
+- [ ] Verify complete scenarios, resolve review findings, and document reproducible operation.
+
+## Historical feasibility review
 
 - [x] Establish available project and hackathon context.
 - [x] Verify NEAR privacy, token, proof verification, and confidential execution capabilities against primary sources.

@@ -334,3 +334,106 @@ fn bounds_reject_overflow_and_invalid_interpretations() {
     assert_eq!(validate_schedule(100, 60, 4, 5), Ok((160, 340)));
     assert_eq!(allocate_payment(10, 11, 1), Err(Error::InvalidAmount));
 }
+
+#[test]
+fn randomized_book_interleavings_preserve_cash_basis_and_checkpoint_idempotence() {
+    #[derive(Clone)]
+    struct Position {
+        remaining: u128,
+        owed: u128,
+        active: bool,
+        impaired: bool,
+    }
+    let mut rng = StdRng::seed_from_u64(68123);
+    for _ in 0..100 {
+        let mut vault = Vault {
+            total: 10_000,
+            available: 10_000,
+            provision: 0,
+            shares: 10_000,
+        };
+        let mut cash = 0u128;
+        let mut debt = 0u128;
+        let mut provision = 0u128;
+        let mut positions: Vec<Position> = Vec::new();
+        for _ in 0..200 {
+            match rng.gen_range(0..7) {
+                0 if vault.available > 0 => {
+                    let amount = rng.gen_range(1..=vault.available.min(500));
+                    vault.available -= amount;
+                    debt += amount;
+                    cash += amount;
+                }
+                1 if cash > 0 => {
+                    let principal = rng.gen_range(1..=cash.min(500));
+                    cash -= principal;
+                    positions.push(Position {
+                        remaining: principal,
+                        owed: principal + principal / 10,
+                        active: true,
+                        impaired: false,
+                    });
+                }
+                2..=5 if !positions.is_empty() => {
+                    let index = rng.gen_range(0..positions.len());
+                    let position = &mut positions[index];
+                    if position.active {
+                        match rng.gen_range(0..4) {
+                            0 => {
+                                let payment = rng.gen_range(1..=position.owed);
+                                let allocation =
+                                    allocate_payment(position.owed, position.remaining, payment)
+                                        .unwrap();
+                                position.owed = allocation.remaining_owed;
+                                position.remaining = allocation.remaining_principal;
+                                cash += payment;
+                                if position.owed == 0 {
+                                    position.active = false;
+                                    position.impaired = false;
+                                }
+                            }
+                            1 => position.impaired = true,
+                            2 => position.impaired = false,
+                            _ => {
+                                position.active = false;
+                                position.impaired = false;
+                            }
+                        }
+                    }
+                }
+                6 if cash > 0 => {
+                    let amount = rng.gen_range(1..=cash);
+                    let settlement = settle(vault, debt, amount).unwrap();
+                    cash -= amount;
+                    debt = settlement.debt;
+                    vault = settlement.vault;
+                }
+                _ => {}
+            }
+            let active = positions
+                .iter()
+                .filter(|p| p.active)
+                .map(|p| p.remaining)
+                .sum();
+            let impaired = positions
+                .iter()
+                .filter(|p| p.active && p.impaired)
+                .map(|p| p.remaining)
+                .sum();
+            let current = book(cash, active, impaired);
+            let checkpoint = reconcile(vault, debt, provision, current).unwrap();
+            vault = checkpoint.vault;
+            debt = checkpoint.debt;
+            provision = checkpoint.broker_provision;
+            assert_eq!(vault.total - vault.available, debt);
+            assert!(provision <= debt);
+            assert!(vault.nav().unwrap() >= vault.available);
+            let repeated = reconcile(vault, debt, provision, current).unwrap();
+            assert_eq!(repeated.realized_loss, 0);
+            assert_eq!(
+                (repeated.vault, repeated.debt, repeated.broker_provision),
+                (vault, debt, provision)
+            );
+        }
+    }
+}
