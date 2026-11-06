@@ -7,6 +7,7 @@ export interface BalanceHistoryEntry {
   keyId: string;
   change:
     | { operation: 'merge' }
+    | { operation: 'noop' }
     | { operation: 'credit' | 'debit'; bucket: 'spending' | 'inbox'; amount: RecoverableAmount };
 }
 export interface BalanceSnapshot {
@@ -55,6 +56,7 @@ export class HistoryRecovery {
       signal?.throwIfAborted();
       sequence++;
       this.checkSequence(entry, sequence, last, snapshot.key);
+      if (entry.change.operation === 'noop') continue;
       if (entry.change.operation === 'merge') { spending += inbox; inbox = 0n; }
       else {
         const amount = await this.amount(entry.change.amount, snapshot.key);
