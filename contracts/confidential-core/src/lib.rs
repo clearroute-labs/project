@@ -2917,6 +2917,8 @@ fn zero_root() -> Vec<u8> {
 /// never treats the delta as a replacement balance: the proof binds the exact
 /// current ciphertext and this function is the only inbox-credit path.
 fn combine_ciphertexts(current: &[u8], delta: &[u8]) -> Vec<u8> {
+    // The crypto worker supplies Baby-Jubjub point addition at this boundary.
+    // Never replace an encrypted balance with a digest of ciphertext bytes.
     validate_ciphertext(current);
     validate_ciphertext(delta);
     if current == zero_ciphertext().as_slice() {
@@ -2925,11 +2927,7 @@ fn combine_ciphertexts(current: &[u8], delta: &[u8]) -> Vec<u8> {
     if delta == zero_ciphertext().as_slice() {
         return current.to_vec();
     }
-    hash_bytes(&(
-        b"homomorphic-add-v1".to_vec(),
-        current.to_vec(),
-        delta.to_vec(),
-    ))
+    panic!("{ERR_UNSUPPORTED_PROFILE}")
 }
 
 fn share_key(vault_id: u64, owner: &AccountId) -> Vec<u8> {
