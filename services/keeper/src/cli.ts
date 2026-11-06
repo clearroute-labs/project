@@ -40,7 +40,7 @@ if (!['run', 'once', 'rebroadcast'].includes(command ?? '') || !configPath || pr
       reported.set(notice.brokerId, notice.state);
       console.log(JSON.stringify({ at: new Date().toISOString(), ...notice }));
     };
-    const planner = new SettlementPlanner(new NativeKeeperWallet(new LedgerWallet(rpc, keys, crypto, config.manifestHash)), signer, config.brokers, report);
+    const planner = new SettlementPlanner(new NativeKeeperWallet(new LedgerWallet(rpc, keys, crypto, config.manifestHash), signer.signerId), signer, config.brokers, report);
     const engine = new KeeperEngine(new Journal(config.journalFile), planner, config.intervalMs);
     do {
       controller.signal.throwIfAborted();

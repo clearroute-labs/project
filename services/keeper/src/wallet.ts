@@ -1,25 +1,30 @@
 import { type Arguments } from '@confidential-lending/client';
-import { LedgerWallet, type LedgerBroker, type LedgerKey, type LedgerVault } from '@confidential-lending/wallet';
+import { LedgerWallet, type LedgerVault } from '@confidential-lending/wallet';
 import type { KeeperGrant, KeeperSnapshot, KeeperWallet } from './planner.js';
 
 export class NativeKeeperWallet implements KeeperWallet {
-  constructor(readonly ledger: LedgerWallet) {}
+  constructor(readonly ledger: LedgerWallet, readonly delegateAccountId: string) {}
 
   async snapshot(brokerId: string, signal: AbortSignal): Promise<KeeperSnapshot> {
     const snapshot = await this.ledger.snapshot(signal);
     const balance = await this.ledger.broker(brokerId, snapshot, signal);
-    const broker = balance.record as LedgerBroker & { last_settlement_at: string };
-    const [grants, key, vault, freeze, block] = await Promise.all([
+    const broker = balance.record;
+    const [grants, vault, freeze, block] = await Promise.all([
       this.ledger.view<KeeperGrant[] | null>(snapshot.block, 'get_keeper_grants', { broker_id: brokerId }, signal),
-      this.ledger.view<LedgerKey | null>(snapshot.block, 'get_broker_key', { broker_id: brokerId, key_id: null }, signal),
       this.ledger.view<LedgerVault | null>(snapshot.block, 'get_vault', { vault_id: broker.vault_id }, signal),
       this.ledger.view<{ asset_frozen: boolean; holder_frozen: boolean }>(snapshot.block, 'get_freeze_status', { account_id: broker.owner }, signal),
       this.ledger.rpc.request<{ header: { hash: string; height: number; timestamp_nanosec: string } }>('block', { block_id: snapshot.block.hash }, signal),
     ]);
-    if (!key || !grants || !vault || block.header.hash !== snapshot.block.hash || block.header.height !== snapshot.block.height) throw new Error('Incomplete finalized keeper snapshot');
+    if (!grants || grants.length > 32 || !vault || block.header.hash !== snapshot.block.hash || block.header.height !== snapshot.block.height) throw new Error('Incomplete finalized keeper snapshot');
+    const authorizedGrants = await Promise.all(grants.map(async grant => {
+      if (grant.delegate_account !== this.delegateAccountId || !grant.active) return grant;
+      const key = await this.ledger.view<{ owner: string; epoch: string; revoked: boolean } | null>(snapshot.block,
+        'get_authorization_key', { owner: grant.delegate_account, key_id: grant.delegate_key_id }, signal);
+      return { ...grant, active: key !== null && key.owner === grant.delegate_account && !key.revoked && key.epoch === grant.delegate_epoch };
+    }));
     const timestampSeconds = BigInt(block.header.timestamp_nanosec) / 1_000_000_000n;
     return { brokerId, owner: broker.owner, timestampSeconds, frozen: freeze.asset_frozen || freeze.holder_frozen,
-      spending: BigInt(balance.spending), inbox: BigInt(balance.inbox), grants, authorizationEpoch: key.authorization_epoch,
+      spending: BigInt(balance.spending), inbox: BigInt(balance.inbox), grants: authorizedGrants, authorizationEpoch: broker.authorization_epoch,
       settlementDue: timestampSeconds >= BigInt(broker.last_settlement_at) + BigInt(vault.checkpoint_policy.epoch_seconds) };
   }
 

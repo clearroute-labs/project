@@ -7,8 +7,10 @@ import { spawn } from 'node:child_process';
 import { KeyPair } from 'near-workspaces';
 import { actionCreators } from '@near-js/transactions';
 import { encryptWalletBackup } from '../packages/wallet/src/backup.js';
+import { Keyring } from '../packages/wallet/src/keyring.js';
+import { LedgerWallet } from '../packages/wallet/src/ledger.js';
 import { confinedPath } from './release.js';
-import { deployProtocol } from '../tests/e2e/deployment.js';
+import { deployProtocol, maximumGas } from '../tests/e2e/deployment.js';
 
 const artifactDirectory = resolve(process.argv[2] ?? '.artifacts/development');
 const output = resolve('.local/demo');
@@ -47,6 +49,18 @@ try {
   const keeperGrant = await deployment.actors.keeper.batch(deployment.actors.keeper)
     .addKey(keeperKey.getPublicKey(), actionCreators.functionCallAccessKey(deployment.core.accountId, ['merge_broker_inbox', 'settle'], 10n ** 24n)).transact();
   if (keeperGrant.failed) throw new Error('Sandbox keeper key installation failed');
+  const keeperKeys = new Keyring(deployment.keys.identity, deployment.crypto);
+  try {
+    const ledger = new LedgerWallet(deployment.rpc, keeperKeys, deployment.crypto, deployment.manifestHash);
+    const registration = await ledger.prepareHolderRegistration(deployment.actors.keeper.accountId, '1');
+    await deployment.actors.keeper.call(deployment.core, registration.method, registration.args, { gas: maximumGas });
+    await deployment.actors.keeper.call(deployment.core, 'register_authorization_key', { args: {
+      key_id: '1', public_key: Array.from(keeperKey.getPublicKey().data),
+    } }, { gas: maximumGas });
+    const backupPassword = randomBytes(32).toString('base64url');
+    await privateFile(join(output, 'keeper-account-backup.json'), JSON.stringify(await encryptWalletBackup(keeperKeys.exportMaterial(), backupPassword), null, 2));
+    await privateFile(join(output, 'keeper-account-backup-passphrase.txt'), `${backupPassword}\n`);
+  } finally { keeperKeys.clear(); }
   for (const [name, account] of Object.entries(deployment.actors)) {
     const key = name === 'keeper' ? keeperKey : await account.getKey();
     if (!key) throw new Error('Sandbox actor has no signing key');
@@ -63,7 +77,9 @@ try {
   const artifactBase = `http://127.0.0.1:${address.port}/`;
   await privateFile(join(output, 'public.json'), JSON.stringify({ networkId: 'sandbox', coreAccountId: deployment.core.accountId,
     tokenAccountId: deployment.token.accountId, rpcUrl: deployment.rpc.url, manifestHash: deployment.manifestHash,
-    profileHash: deployment.manifest.profileHash, artifactBase, loanAuditorKey, accounts: Object.fromEntries(Object.entries(deployment.actors).map(([name, account]) => [name, account.accountId])) }, null, 2));
+    profileHash: deployment.manifest.profileHash, artifactBase, loanAuditorKey,
+    keeperAuthorization: { keyId: '1', epoch: '2', accountId: deployment.actors.keeper.accountId },
+    accounts: Object.fromEntries(Object.entries(deployment.actors).map(([name, account]) => [name, account.accountId])) }, null, 2));
   console.log(`Sandbox ready. Import a signing credential from ${join(output, 'credentials')} in the local wallet. These accounts hold test tokens only.`);
   console.log(`Loan auditor public key and deployment configuration: ${join(output, 'public.json')}`);
   web = spawn('pnpm', ['--dir', 'web', 'dev', '--host', '127.0.0.1', '--port', '5174', '--strictPort'], {

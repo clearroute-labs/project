@@ -25,7 +25,7 @@ scope.onmessage = (event): void => {
         return;
       }
       if (!runtime) throw new Error('Runtime is not initialized');
-      const value = await runtime.execute(request.method, request.params, request.artifactName);
+      const value = request.method === 'runtime_metrics' ? runtime.memoryUsage() : await runtime.execute(request.method, request.params, request.artifactName);
       scope.postMessage({ id: request.id, ok: true, value });
     } catch {
       // WASM/JSON errors may include witness fragments. Return only a stable category.

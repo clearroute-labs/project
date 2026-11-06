@@ -4,6 +4,8 @@ import type { PreparedTransaction } from './journal.js';
 
 export interface KeeperGrant {
   delegate_account: string;
+  delegate_key_id: string;
+  delegate_epoch: string;
   allowed_settlement_per_operation: string;
   allowed_settlement_per_window: string;
   window_seconds: string;

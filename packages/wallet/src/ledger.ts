@@ -12,6 +12,7 @@ export interface LedgerHolder {
 export interface LedgerBroker {
   broker_id: string; owner: string; vault_id: string; encryption_key_id: string; encryption_public_key: number[];
   spending_version: string; accounting_version: string; risk_version: string; book_version: string; accounting_pending: boolean;
+  authorization_epoch: string; last_settlement_at: string;
   spending_ciphertext: number[]; inbox_ciphertext: number[]; issuer_balance_ciphertext: number[]; auditor_balance_ciphertext: number[];
   active_principal_ciphertext: number[]; impaired_principal_ciphertext: number[];
   debt_total: string; impairment_provision: string; loan_book_root: number[];

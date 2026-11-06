@@ -4,7 +4,7 @@ import { SettlementPlanner, type KeeperSnapshot, type KeeperWallet, type Transac
 
 function fixture() {
   const snapshot: KeeperSnapshot = { brokerId: '7', owner: 'broker.near', timestampSeconds: 100n, frozen: false, spending: 500n, inbox: 0n, authorizationEpoch: '1', settlementDue: true,
-    grants: [{ delegate_account: 'keeper.near', active: true, expires_at: '200', allowed_settlement_per_operation: '100', allowed_settlement_per_window: '250', window_seconds: '60', window_started_at: '80', window_spent: '210', revocation_epoch: '1', allowed_operations: ['MergeInbox', 'Settle'] }] };
+    grants: [{ delegate_account: 'keeper.near', delegate_key_id: '1', delegate_epoch: '2', active: true, expires_at: '200', allowed_settlement_per_operation: '100', allowed_settlement_per_window: '250', window_seconds: '60', window_started_at: '80', window_spent: '210', revocation_epoch: '1', allowed_operations: ['MergeInbox', 'Settle'] }] };
   const planned: { action: string; amount?: bigint }[] = [];
   const wallet: KeeperWallet = {
     snapshot: async () => snapshot,

@@ -15,6 +15,7 @@ export interface RuntimeConfiguration {
 export class CryptoRuntime {
   readonly #artifacts = new Map<string, Uint8Array>();
   #wasm: WasmBindings | undefined;
+  #memory: WebAssembly.Memory | undefined;
   readonly #configuration: RuntimeConfiguration;
 
   constructor(configuration: RuntimeConfiguration) {
@@ -32,10 +33,17 @@ export class CryptoRuntime {
     try {
       const module = await import(/* @vite-ignore */ url) as WasmBindings;
       if (typeof module.default !== 'function' || typeof module.execute !== 'function' || typeof module.profile_hash !== 'function') throw new Error('Unsupported WASM interface');
-      await module.default({ module_or_path: binary });
+      const initialized = await module.default({ module_or_path: binary }) as { memory?: unknown };
       if (module.profile_hash() !== this.#configuration.expected.profileHash) throw new Error('WASM profile mismatch');
+      if (initialized.memory instanceof WebAssembly.Memory) this.#memory = initialized.memory;
       this.#wasm = module;
     } finally { URL.revokeObjectURL(url); }
+  }
+
+  /** Allocation sizes only; never exposes witness bytes or memory addresses. */
+  memoryUsage(): { wasmLinearMemoryBytes: number; cachedArtifactBytes: number } {
+    return { wasmLinearMemoryBytes: this.#memory?.buffer.byteLength ?? 0,
+      cachedArtifactBytes: [...this.#artifacts.values()].reduce((total, bytes) => total + bytes.byteLength, 0) };
   }
 
   async execute(method: string, params: unknown, artifactName?: string): Promise<unknown> {
