@@ -143,13 +143,18 @@ impl From<EdwardsAffine> for PointHex {
 
 impl PointHex {
     pub fn parse(value: &str) -> Result<Self, CryptoError> {
-        let point = decode_point(value, false)?;
-        Ok(Self(encode_point(&point)?))
+        // `decode_point` already verifies the compressed representation is
+        // canonical, so preserve the validated wire string instead of
+        // serializing the affine point a second time. This matters for the
+        // contract-side statement parser, where every distinct point is
+        // otherwise decompressed and re-encoded during deserialization.
+        let _ = decode_point(value, false)?;
+        Ok(Self(value.to_owned()))
     }
 
     pub fn parse_non_identity(value: &str) -> Result<Self, CryptoError> {
-        let point = decode_point(value, true)?;
-        Ok(Self(encode_point(&point)?))
+        let _ = decode_point(value, true)?;
+        Ok(Self(value.to_owned()))
     }
 
     pub fn to_affine(&self) -> Result<EdwardsAffine, CryptoError> {

@@ -21,7 +21,14 @@ type OperationFixture = { name: string; statement: unknown; envelope: unknown };
 type Manifest = {
   artifacts: Record<string, { path: string; sha256: string; bytes: number }>;
 };
-type GasMeasurement = { publicInputs: number; gasBurnt: string; within300T: boolean; durationMs: number | undefined };
+type GasMeasurement = {
+  status: 'passed' | 'failed' | 'rejected';
+  publicInputs: number;
+  gasBurnt: string;
+  within300T: boolean;
+  durationMs: number | undefined;
+  error?: string;
+};
 
 const fixtureDirectory = resolve(process.env.CRYPTO_ARTIFACT_DIR ?? '.artifacts/integration-v2');
 const benchmarkGas = 300_000_000_000_000n;
@@ -58,6 +65,23 @@ function gasString(value: unknown): string {
   if (typeof value === 'number' && Number.isSafeInteger(value)) return BigInt(value).toString();
   if (typeof value === 'string' && /^\d+$/.test(value)) return value;
   throw new Error('Sandbox returned an invalid gas value');
+}
+
+function gasStringOrUnknown(value: unknown): string {
+  try {
+    return gasString(value);
+  } catch {
+    return 'unknown';
+  }
+}
+
+function errorString(value: unknown): string {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return 'unknown execution error';
+  }
 }
 
 function mutateStatement(value: unknown): unknown {
@@ -132,23 +156,59 @@ test('typed NEAR host verification accepts all real proof families and rejects c
 
     const families: Record<string, { operations: string[]; measurements: Record<string, GasMeasurement> }> = {};
     for (const kind of KINDS) families[kind] = { operations: [], measurements: {} };
+    const writeMeasurements = async (): Promise<void> => {
+      await writeFile(resolve(fixtureDirectory, 'verifier-probe-gas.json'), `${JSON.stringify({
+        schema: 'confidential-lending-verifier-probe/v1',
+        runtime: 'near-sandbox 2.14.0',
+        gasLimit: '300000000000000',
+        benchmarkGas: benchmarkGas.toString(),
+        initializationGasBurnt: gasString(initialize.gas_burnt),
+        families,
+      }, null, 2)}\n`);
+    };
     for (const operation of operations) {
       const kind = statementKind(operation);
       const statementJson = jsonText(operation.statement);
       const envelopeJson = jsonText(operation.envelope);
       const derived = await worker.rootAccount.callRaw(probe, 'derive_public_inputs', { statement_json: statementJson }, { gas: benchmarkGas });
+      if (!derived.succeeded) {
+        families[kind]!.operations.push(operation.name);
+        families[kind]!.measurements[operation.name] = {
+          status: 'failed', publicInputs: 0, gasBurnt: gasStringOrUnknown(derived.gas_burnt),
+          within300T: false, durationMs: derived.durationMs, error: errorString(derived),
+        };
+        await writeMeasurements();
+      }
       assert.equal(derived.succeeded, true, `derive ${kind} failed`);
       const statementInputs = derived.parseResult<string[]>() ?? [];
       const envelope = typeof operation.envelope === 'string' ? JSON.parse(operation.envelope) as Record<string, unknown> : operation.envelope as Record<string, unknown>;
       assert.deepEqual(statementInputs, envelope.public_inputs, `${kind} Core/public-input derivation mismatch`);
 
       const valid = await worker.rootAccount.callRaw(probe, 'verify_typed', { statement_json: statementJson, envelope_json: envelopeJson }, { gas: benchmarkGas });
+      if (!valid.succeeded) {
+        families[kind]!.operations.push(operation.name);
+        families[kind]!.measurements[operation.name] = {
+          status: 'failed', publicInputs: statementInputs.length, gasBurnt: gasStringOrUnknown(valid.gas_burnt),
+          within300T: false, durationMs: valid.durationMs, error: errorString(valid),
+        };
+        await writeMeasurements();
+      }
       assert.equal(valid.succeeded, true, `verify ${kind} execution failed`);
-      assert.equal(valid.parseResult<boolean>(), true, `real ${kind} proof was rejected`);
+      const validResult = valid.parseResult<boolean>();
+      if (!validResult) {
+        families[kind]!.operations.push(operation.name);
+        families[kind]!.measurements[operation.name] = {
+          status: 'rejected', publicInputs: statementInputs.length, gasBurnt: gasStringOrUnknown(valid.gas_burnt),
+          within300T: false, durationMs: valid.durationMs, error: 'valid proof was rejected',
+        };
+        await writeMeasurements();
+      }
+      assert.equal(validResult, true, `real ${kind} proof was rejected`);
       const gasBurnt = gasString(valid.gas_burnt);
       const within300T = BigInt(gasBurnt) <= 300_000_000_000_000n;
       families[kind]!.operations.push(operation.name);
-      families[kind]!.measurements[operation.name] = { publicInputs: statementInputs.length, gasBurnt, within300T, durationMs: valid.durationMs };
+      families[kind]!.measurements[operation.name] = { status: 'passed', publicInputs: statementInputs.length, gasBurnt, within300T, durationMs: valid.durationMs };
+      await writeMeasurements();
 
       const statementValue = typeof operation.statement === 'string' ? JSON.parse(operation.statement) : operation.statement;
       const changed = await worker.rootAccount.callRaw(probe, 'verify_typed', {
@@ -157,14 +217,7 @@ test('typed NEAR host verification accepts all real proof families and rejects c
       assert.equal(changed.succeeded, true, `changed ${kind} execution failed`);
       assert.equal(changed.parseResult<boolean>(), false, `changed ${kind} statement was accepted`);
     }
-    await writeFile(resolve(fixtureDirectory, 'verifier-probe-gas.json'), `${JSON.stringify({
-      schema: 'confidential-lending-verifier-probe/v1',
-      runtime: 'near-sandbox 2.14.0',
-      gasLimit: '300000000000000',
-      benchmarkGas: benchmarkGas.toString(),
-      initializationGasBurnt: gasString(initialize.gas_burnt),
-      families,
-    }, null, 2)}\n`);
+    await writeMeasurements();
   } finally {
     await worker.tearDown();
   }
