@@ -15,6 +15,7 @@
     "build:contracts": "bash scripts/build-contracts.sh",
     "build:crypto": "bash scripts/build-crypto.sh",
     "setup:development": "tsx scripts/setup-development.ts",
+    "validate:crypto": "tsx scripts/validate-crypto-client.ts",
     "install:sandbox": "node scripts/install-sandbox.mjs",
     "check:release": "tsx scripts/check-release.ts"
   },

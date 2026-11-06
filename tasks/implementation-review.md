@@ -35,6 +35,11 @@ This is an internal engineering checklist, not an independent security audit.
 - [ ] Deleted brokers do not break vault enumeration/final redemption. Terminal loan deletion relies on authenticated removal evidence.
 - [ ] Standard events include the `EVENT_JSON:` prefix and decimal-string wide integers.
 - [ ] Recovery correctness is enforced in proofs: a sender's signature over an incorrect recovery hint is not sufficient.
+- [ ] Public conversion gates sufficient-funds checks on Debit and overflow checks on Credit; first credit from zero must succeed. Direct circuit regression now passes.
+- [ ] Persisted loan P/R and cumulative repayments use borrower/broker/loan-auditor order, while transfer amounts use five readers.
+- [ ] Aggregate commitments update from the proved principal commitment/deltas and are never arbitrary caller replacements.
+- [ ] Runtime manifest hash pins executable browser glue/WASM and proving artifacts separately from the immutable cryptographic suite hash.
+- [ ] Callback/finalization storage is preallocated before an external payout; permissionless finalization needs no fresh caller storage budget.
 - [x] Real NEAR sandbox validates host verifier encodings and rejection paths for a 193-input fixture. Full lending circuit gas remains to be checked.
 
 ## Evidence so far
