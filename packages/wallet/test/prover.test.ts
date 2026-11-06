@@ -58,3 +58,13 @@ test('untrusted exception text never crosses into application errors', async () 
   await assert.rejects(result, error => error instanceof CryptoOperationError && error.message === 'CRYPTO_OPERATION_FAILED');
   prover.close();
 });
+
+test('cancelling while artifacts load closes the worker immediately', async () => {
+  const port = new Port();
+  const prover = new BrowserProver(port, configuration);
+  const controller = new AbortController();
+  const operation = prover.execute('prove', {}, { signal: controller.signal });
+  controller.abort();
+  assert.equal(port.terminated, true);
+  await assert.rejects(operation, /OPERATION_ABORTED/);
+});

@@ -35,8 +35,12 @@ export class BrowserProver {
 
   async execute<T>(method: string, params: unknown, options: { artifactName?: string; signal?: AbortSignal; timeoutMs?: number } = {}): Promise<T> {
     options.signal?.throwIfAborted();
-    await this.ready;
-    return this.request(method, params, options) as Promise<T>;
+    const abort = () => this.close('OPERATION_ABORTED');
+    options.signal?.addEventListener('abort', abort, { once: true });
+    try {
+      await this.ready;
+      return await this.request(method, params, options) as T;
+    } finally { options.signal?.removeEventListener('abort', abort); }
   }
 
   close(code: 'WORKER_CLOSED' | 'OPERATION_ABORTED' = 'WORKER_CLOSED'): void {

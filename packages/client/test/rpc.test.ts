@@ -25,6 +25,24 @@ test('RPC rejects invalid transport and mismatched response IDs', async () => {
   await assert.rejects(rpc.view('core.testnet', 'get_config'), RpcError);
 });
 
+test('recovery snapshots pin all views to the same finalized block', async () => {
+  const hash = '1'.repeat(32);
+  let responseHash = hash;
+  const rpc = new NearRpc('https://rpc.example.org', { fetch: rpcFetch(request => {
+    if (request.method === 'block') {
+      assert.deepEqual(request.params, { finality: 'final' });
+      return { header: { hash, height: 10 } };
+    }
+    assert.equal((request.params as Record<string, unknown>).block_id, hash);
+    assert.equal((request.params as Record<string, unknown>).finality, undefined);
+    return { block_hash: responseHash, block_height: 10, result: Array.from(new TextEncoder().encode('{"version":"42"}')) };
+  }) });
+  const block = await rpc.finalizedBlock();
+  assert.deepEqual(await rpc.viewAt(block, 'core.near', 'get_holder'), { version: '42' });
+  responseHash = '2'.repeat(44);
+  await assert.rejects(rpc.viewAt(block, 'core.near', 'get_holder'), /different block/);
+});
+
 test('unknown transaction outcome remains pending, never turns into a refund', async () => {
   let queries = 0;
   const rpc = new NearRpc('https://rpc.testnet.near.org', { fetch: rpcFetch(request => {

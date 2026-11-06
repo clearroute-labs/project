@@ -34,6 +34,11 @@ export interface RpcOptions {
   allowInsecureLocalhost?: boolean;
 }
 
+export interface FinalizedBlock {
+  hash: string;
+  height: number;
+}
+
 export function assertAccountId(accountId: string): void {
   if (accountId.length < 2 || accountId.length > 64 || !/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(accountId)) {
     throw new TypeError('Invalid NEAR account ID');
@@ -97,12 +102,29 @@ export class NearRpc {
   }
 
   async view<T>(accountId: string, method: string, args: Arguments = {}, signal?: AbortSignal): Promise<T> {
+    return this.queryView<T>(accountId, method, args, undefined, signal);
+  }
+
+  async finalizedBlock(signal?: AbortSignal): Promise<FinalizedBlock> {
+    const block = await this.request<{ header: { hash: string; height: number } }>('block', { finality: 'final' }, signal);
+    if (!block.header || !/^[1-9A-HJ-NP-Za-km-z]{32,64}$/.test(block.header.hash) || !Number.isSafeInteger(block.header.height) || block.header.height < 0) throw new RpcError('encoding', 'Invalid finalized block identity');
+    return { hash: block.header.hash, height: block.header.height };
+  }
+
+  /** Use the same finalized block for state and paginated recovery-history reads. */
+  async viewAt<T>(block: FinalizedBlock, accountId: string, method: string, args: Arguments = {}, signal?: AbortSignal): Promise<T> {
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,64}$/.test(block.hash)) throw new TypeError('Invalid block hash');
+    return this.queryView<T>(accountId, method, args, block, signal);
+  }
+
+  private async queryView<T>(accountId: string, method: string, args: Arguments, block?: FinalizedBlock, signal?: AbortSignal): Promise<T> {
     assertAccountId(accountId);
-    const result = await this.request<{ result: number[] }>('query', {
-      request_type: 'call_function', finality: 'final', account_id: accountId,
+    const result = await this.request<{ result: number[]; block_hash?: string; block_height?: number }>('query', {
+      request_type: 'call_function', ...(block ? { block_id: block.hash } : { finality: 'final' }), account_id: accountId,
       method_name: method,
       args_base64: base64Encode(new TextEncoder().encode(JSON.stringify(args))),
     }, signal);
+    if (block && (result.block_hash !== block.hash || result.block_height !== block.height)) throw new RpcError('encoding', 'Contract view returned a different block');
     if (!Array.isArray(result.result) || result.result.some(n => !Number.isInteger(n) || n < 0 || n > 255)) {
       throw new RpcError('encoding', 'Malformed contract view response');
     }
