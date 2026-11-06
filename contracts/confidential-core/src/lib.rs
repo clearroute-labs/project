@@ -1286,6 +1286,12 @@ impl Core {
             &args.commitment,
         );
         self.verify_bound_proof(b"repay", &args.proof, &dynamic);
+        // Risk accounting is keyed to the pre-transition loan state.  A full
+        // repayment of an impaired loan removes that loan from the broker's
+        // impaired cohort, but still leaves a reconciliation event pending;
+        // clearing the flag before evaluating the pending condition would
+        // silently strand the old aggregate contribution.
+        let was_impaired = loan.impaired;
         if matches!(args.mode, RepayMode::Regular) {
             require!(loan.payment_remaining > 1, ERR_INVALID_AMOUNT);
         }
@@ -1332,6 +1338,12 @@ impl Core {
             loan.payment_remaining = 0;
             loan.next_due = 0;
             loan.impaired = false;
+            if was_impaired {
+                broker.impaired_loan_count = broker
+                    .impaired_loan_count
+                    .checked_sub(1)
+                    .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            }
             broker.active_loan_count = broker
                 .active_loan_count
                 .checked_sub(1)
@@ -1351,7 +1363,7 @@ impl Core {
             .accounting_version
             .checked_add(1)
             .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
-        if loan.impaired || broker.impairment_provision > 0 {
+        if was_impaired || broker.impairment_provision > 0 {
             broker.accounting_pending = true;
             broker.risk_version = broker
                 .risk_version
