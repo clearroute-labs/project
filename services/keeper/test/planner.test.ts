@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { SettlementPlanner, type KeeperSnapshot, type KeeperWallet, type TransactionSigner } from '../src/planner.js';
 
 function fixture() {
-  const snapshot: KeeperSnapshot = { brokerId: '7', owner: 'broker.near', timestampSeconds: 100n, frozen: false, spending: 500n, inbox: 0n, authorizationEpoch: '1',
-    grants: [{ delegate_account: 'keeper.near', active: true, expires_at: '200', allowed_settlement_per_operation: '100', allowed_settlement_per_window: '250', window_seconds: '60', window_started_at: '80', window_spent: '210', revocation_epoch: '1' }] };
+  const snapshot: KeeperSnapshot = { brokerId: '7', owner: 'broker.near', timestampSeconds: 100n, frozen: false, spending: 500n, inbox: 0n, authorizationEpoch: '1', settlementDue: true,
+    grants: [{ delegate_account: 'keeper.near', active: true, expires_at: '200', allowed_settlement_per_operation: '100', allowed_settlement_per_window: '250', window_seconds: '60', window_started_at: '80', window_spent: '210', revocation_epoch: '1', allowed_operations: ['MergeInbox', 'Settle'] }] };
   const planned: { action: string; amount?: bigint }[] = [];
   const wallet: KeeperWallet = {
     snapshot: async () => snapshot,
@@ -48,4 +48,18 @@ test('owner authority, numeric JSON grants and substituted broker snapshots fail
   await assert.rejects(f.planner.prepareNext(new AbortController().signal), /Invalid finalized/);
   f.snapshot.brokerId = '8';
   await assert.rejects(f.planner.prepareNext(new AbortController().signal), /identity/);
+});
+
+test('cadence and operation-specific grant scope survive local policy changes', async () => {
+  const f = fixture();
+  f.snapshot.settlementDue = false;
+  assert.equal(await f.planner.prepareNext(new AbortController().signal), null);
+  f.snapshot.inbox = 5n;
+  assert.equal((await f.planner.prepareNext(new AbortController().signal))?.action, 'merge');
+  f.snapshot.grants[0]!.allowed_operations = ['Settle'];
+  assert.equal(await f.planner.prepareNext(new AbortController().signal), null);
+  f.snapshot.settlementDue = true;
+  assert.equal((await f.planner.prepareNext(new AbortController().signal))?.action, 'settle');
+  f.snapshot.grants[0]!.revocation_epoch = '0';
+  assert.equal(await f.planner.prepareNext(new AbortController().signal), null);
 });

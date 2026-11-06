@@ -13,6 +13,7 @@
     "test": "pnpm -r test && tsx --test tests/*.test.ts",
     "test:e2e": "tsx --test tests/e2e/*.test.ts",
     "dev": "pnpm --dir web dev",
+    "demo": "tsx scripts/local-demo.ts",
     "build:contracts": "bash scripts/build-contracts.sh",
     "build:crypto": "bash scripts/build-crypto.sh",
     "setup:development": "tsx scripts/setup-development.ts",

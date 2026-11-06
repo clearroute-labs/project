@@ -5,6 +5,7 @@ import { actionCreators, createTransaction, decodeSignedTransaction, encodeTrans
 import { base58 } from '@scure/base';
 import { assertAccountId, NearRpc, RpcError, type Arguments } from '@confidential-lending/client';
 import type { PreparedTransaction } from './journal.js';
+import { classifyKeeperError, type KeeperFailure } from './errors.js';
 
 const METHODS = { merge: 'merge_broker_inbox', settle: 'settle' } as const;
 const ALLOWED_METHODS = new Set<string>(Object.values(METHODS));
@@ -17,6 +18,7 @@ interface AccessKeyView {
 }
 
 export class KeeperSigner {
+  lastFailure: KeeperFailure | undefined;
   constructor(readonly rpc: NearRpc, readonly signerId: string, readonly coreAccountId: string, private readonly key: KeyPair) {
     assertAccountId(signerId);
     assertAccountId(coreAccountId);
@@ -80,7 +82,7 @@ export class KeeperSigner {
       if (result.transaction.hash !== prepared.hash || result.transaction.signer_id !== this.signerId || result.transaction.receiver_id !== this.coreAccountId) {
         throw new Error('RPC transaction identity mismatch');
       }
-      if ('Failure' in result.status) return 'failure';
+      if ('Failure' in result.status) { this.lastFailure = classifyKeeperError(JSON.stringify(result.status.Failure)); return 'failure'; }
       if ('SuccessValue' in result.status) return 'success';
       return 'unknown';
     } catch (error) {

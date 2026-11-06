@@ -7,11 +7,12 @@ import type { ArtifactEntry } from '@confidential-lending/client';
 
 /** Local proof process. Witnesses go through stdin and never through command-line arguments. */
 export class NativeCrypto {
-  constructor(readonly root: string, readonly executable: ArtifactEntry, readonly artifacts: Record<string, ArtifactEntry>, readonly timeoutMs = 10 * 60_000) {
+  constructor(readonly root: string, readonly executable: ArtifactEntry, readonly artifacts: Record<string, ArtifactEntry>, readonly timeoutMs = 10 * 60_000, readonly lifetimeSignal?: AbortSignal) {
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000) throw new Error('Invalid native prover timeout');
   }
 
   async execute<T>(method: string, params: unknown, options: { artifactName?: string; signal?: AbortSignal } = {}): Promise<T> {
+    const signal = options.signal && this.lifetimeSignal ? AbortSignal.any([options.signal, this.lifetimeSignal]) : options.signal ?? this.lifetimeSignal;
     if (!/^[a-z][a-z0-9_]{0,63}$/.test(method)) throw new Error('Invalid crypto method');
     const request = JSON.stringify({ method, params });
     if (Buffer.byteLength(request) > 1_000_000) throw new Error('Crypto request exceeds bound');
@@ -19,7 +20,7 @@ export class NativeCrypto {
     const artifact = options.artifactName ? this.artifacts[options.artifactName] : undefined;
     if (options.artifactName && !artifact) throw new Error('Missing native prover artifact');
     const artifactPath = artifact ? await this.checkedPath(artifact) : undefined;
-    options.signal?.throwIfAborted();
+    signal?.throwIfAborted();
     return new Promise<T>((resolveResult, reject) => {
       const child = spawn(binary, ['execute', ...(artifactPath ? ['--artifact', artifactPath] : [])], {
         stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
@@ -38,13 +39,13 @@ export class NativeCrypto {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        options.signal?.removeEventListener('abort', abort);
+        signal?.removeEventListener('abort', abort);
         if (error) { stop(); reject(error); }
         else resolveResult(value as T);
       };
       const abort = () => finish(new Error('Native crypto operation cancelled'));
       const timer = setTimeout(abort, this.timeoutMs);
-      options.signal?.addEventListener('abort', abort, { once: true });
+      signal?.addEventListener('abort', abort, { once: true });
       child.on('error', () => finish(new Error('Native crypto process could not start')));
       child.stdin.on('error', () => finish(new Error('Native crypto process input failed')));
       // Deliberately drain but never forward panic diagnostics that may include witness data.

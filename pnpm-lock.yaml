@@ -43,6 +43,9 @@ importers:
       '@confidential-lending/client':
         specifier: workspace:*
         version: link:../../packages/client
+      '@confidential-lending/wallet':
+        specifier: workspace:*
+        version: link:../../packages/wallet
       '@near-js/crypto':
         specifier: 1.4.2
         version: 1.4.2
