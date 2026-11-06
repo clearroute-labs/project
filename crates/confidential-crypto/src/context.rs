@@ -78,12 +78,13 @@ impl OperationContext {
         asset_id: &str,
         operation_id: &str,
     ) -> Self {
-        let mut context = Self::default();
-        context.network_id = identifier_digest(b"network", network_id);
-        context.core_account = identifier_digest(b"core", core_account);
-        context.asset_id = identifier_digest(b"asset", asset_id);
-        context.operation_id = identifier_digest(b"operation", operation_id);
-        context
+        Self {
+            network_id: identifier_digest(b"network", network_id),
+            core_account: identifier_digest(b"core", core_account),
+            asset_id: identifier_digest(b"asset", asset_id),
+            operation_id: identifier_digest(b"operation", operation_id),
+            ..Self::default()
+        }
     }
 
     pub fn with_ids(mut self, vault: &str, broker: &str, loan: &str, proposal: &str) -> Self {
@@ -277,4 +278,3 @@ mod poseidon_vectors {
         );
     }
 }
-

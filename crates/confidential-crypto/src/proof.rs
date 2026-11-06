@@ -1,5 +1,5 @@
-use std::collections::BTreeMap;
 use ark_std::io::Cursor;
+use std::collections::BTreeMap;
 
 use ark_bn254::{Bn254, Fr};
 use ark_crypto_primitives::sponge::{
@@ -221,8 +221,8 @@ impl ProofEnvelope {
         self.public_inputs
             .iter()
             .map(|field| {
-                let canonical = FieldHex::parse(&field.0)
-                    .map_err(|_| CryptoError::InvalidProofEncoding)?;
+                let canonical =
+                    FieldHex::parse(&field.0).map_err(|_| CryptoError::InvalidProofEncoding)?;
                 hex::decode(canonical.0)
                     .map_err(|_| CryptoError::InvalidProofEncoding)?
                     .try_into()
@@ -636,7 +636,7 @@ fn deserialize_verifying_key(bytes: &[u8]) -> Result<VerifyingKey<Bn254>, Crypto
 
 fn decode_lower_hex(value: &str, max_bytes: usize) -> Result<Vec<u8>, CryptoError> {
     if value.is_empty()
-        || value.len() % 2 != 0
+        || !value.len().is_multiple_of(2)
         || value.len() / 2 > max_bytes
         || value
             .bytes()
@@ -898,6 +898,8 @@ impl LendingCircuit {
     }
 }
 
+type RecoveryPairVar = ((PointVar, PointVar), (PointVar, PointVar));
+
 #[derive(Clone)]
 struct SlotCursor {
     pos: usize,
@@ -945,10 +947,7 @@ impl SlotCursor {
         Ok((self.point(slots)?, self.point(slots)?))
     }
 
-    fn recovery(
-        &mut self,
-        slots: &[FpVar<Fr>],
-    ) -> Result<((PointVar, PointVar), (PointVar, PointVar)), SynthesisError> {
+    fn recovery(&mut self, slots: &[FpVar<Fr>]) -> Result<RecoveryPairVar, SynthesisError> {
         Ok((self.cipher(slots)?, self.cipher(slots)?))
     }
 
@@ -2318,8 +2317,10 @@ mod smoke_tests {
     fn key_possession_proof_round_trip() {
         let mut rng = ChaCha20Rng::from_seed([7u8; 32]);
         let secret = crate::SecretKey::from_scalar(EdFr::from(9u64)).unwrap();
-        let mut context = crate::OperationContext::default();
-        context.operation_id = [7u8; 32];
+        let context = crate::OperationContext {
+            operation_id: [7u8; 32],
+            ..Default::default()
+        };
         let statement = Statement::KeyPossession(KeyPossessionStatement {
             context,
             public_key: secret.public_key(),
@@ -2362,11 +2363,7 @@ mod smoke_tests {
         }
     }
 
-    fn conversion_fixture(
-        mode: ConversionMode,
-        balance: u64,
-        amount: u64,
-    ) -> (Statement, Witness) {
+    fn conversion_fixture(mode: ConversionMode, balance: u64, amount: u64) -> (Statement, Witness) {
         let owner = crate::SecretKey::from_scalar(EdFr::from(31u64)).unwrap();
         let readers = [
             owner.public_key(),
@@ -2412,19 +2409,18 @@ mod smoke_tests {
             ),
         };
         let views = readers.map(|reader_key| {
-            let ciphertext = Ciphertext::encrypt_with_randomness(
-                &reader_key,
-                amount,
-                EdFr::from(107u64),
-            )
-            .unwrap();
+            let ciphertext =
+                Ciphertext::encrypt_with_randomness(&reader_key, amount, EdFr::from(107u64))
+                    .unwrap();
             ReaderView {
                 reader_key,
                 ciphertext,
             }
         });
-        let mut context = crate::OperationContext::default();
-        context.operation_id = [6u8; 32];
+        let context = crate::OperationContext {
+            operation_id: [6u8; 32],
+            ..Default::default()
+        };
         let statement = Statement::PublicConversion(PublicConversionStatement {
             context,
             owner_key: owner.public_key(),
@@ -2452,7 +2448,11 @@ mod smoke_tests {
             LendingCircuit::from_statement(credit.kind(), slots.values, credit_witness).unwrap();
         let cs = ConstraintSystem::new_ref();
         circuit.generate_constraints(cs.clone()).unwrap();
-        assert!(cs.is_satisfied().unwrap(), "{:?}", cs.which_is_unsatisfied());
+        assert!(
+            cs.is_satisfied().unwrap(),
+            "{:?}",
+            cs.which_is_unsatisfied()
+        );
 
         let (debit, debit_witness) = conversion_fixture(ConversionMode::Debit, 0, 25);
         let slots = debit.public_slots().unwrap();
@@ -2517,8 +2517,10 @@ mod smoke_tests {
                 ],
             )
         });
-        let mut context = crate::OperationContext::default();
-        context.operation_id = [8u8; 32];
+        let context = crate::OperationContext {
+            operation_id: [8u8; 32],
+            ..Default::default()
+        };
         let statement = Statement::ConfidentialTransfer(ConfidentialTransferStatement {
             context,
             sender_key: sender.public_key(),
@@ -2580,8 +2582,10 @@ mod smoke_tests {
             Commitment::commit_u128_with_blinding(active, active_blind).unwrap();
         let impaired_commitment =
             Commitment::commit_u128_with_blinding(impaired, impaired_blind).unwrap();
-        let mut context = crate::OperationContext::default();
-        context.operation_id = [44u8; 32];
+        let context = crate::OperationContext {
+            operation_id: [44u8; 32],
+            ..Default::default()
+        };
         let statement = Statement::Reconciliation(ReconciliationStatement {
             context,
             broker_key: broker.public_key(),
@@ -2739,7 +2743,8 @@ mod smoke_tests {
             borrower_after_randomness,
         )
         .unwrap();
-        let (transfer_views, transfer_randomness) = reader_views(transfer_keys.clone(), payment, 79);
+        let (transfer_views, transfer_randomness) =
+            reader_views(transfer_keys.clone(), payment, 79);
         let (transfer_recovery, transfer_recovery_randomness) =
             recovery_pairs(transfer_keys, payment, 89);
         let (owed_before, _) = reader_views(term_keys.clone(), owed, 201);
@@ -2750,14 +2755,17 @@ mod smoke_tests {
         let (periodic_views, _) = reader_views(term_keys.clone(), periodic, 149);
         let (principal_before, _) = reader_views(term_keys.clone(), principal, 263);
         let (principal_after, _) = reader_views(term_keys.clone(), 0, 163);
-        let (principal_delta, principal_delta_randomness) = reader_views(term_keys.clone(), principal, 99);
+        let (principal_delta, principal_delta_randomness) =
+            reader_views(term_keys.clone(), principal, 99);
         let (principal_delta_recovery, principal_delta_recovery_randomness) =
             recovery_pairs(term_keys, principal, 191);
         let principal_paid_blinding = EdFr::from(197u64);
         let principal_delta_commitment =
             Commitment::commit_with_blinding(principal, principal_paid_blinding).unwrap();
-        let mut context = crate::OperationContext::default();
-        context.operation_id = [55u8; 32];
+        let context = crate::OperationContext {
+            operation_id: [55u8; 32],
+            ..Default::default()
+        };
         let statement = Statement::Repayment(RepaymentStatement {
             context,
             borrower_key: borrower.public_key(),
@@ -2813,7 +2821,11 @@ mod smoke_tests {
             LendingCircuit::from_statement(statement.kind(), slots.values, witness).unwrap();
         let cs = ConstraintSystem::new_ref();
         circuit.generate_constraints(cs.clone()).unwrap();
-        assert!(cs.is_satisfied().unwrap(), "{:?}", cs.which_is_unsatisfied());
+        assert!(
+            cs.is_satisfied().unwrap(),
+            "{:?}",
+            cs.which_is_unsatisfied()
+        );
     }
 
     #[test]
@@ -2839,7 +2851,11 @@ mod smoke_tests {
             LendingCircuit::from_statement(statement.kind(), slots.values, witness).unwrap();
         let cs = ConstraintSystem::new_ref();
         circuit.generate_constraints(cs.clone()).unwrap();
-        assert!(cs.is_satisfied().unwrap(), "{:?}", cs.which_is_unsatisfied());
+        assert!(
+            cs.is_satisfied().unwrap(),
+            "{:?}",
+            cs.which_is_unsatisfied()
+        );
 
         let (mut invalid_statement, witness) = repayment_full_fixture();
         if let Statement::Repayment(ref mut s) = invalid_statement {

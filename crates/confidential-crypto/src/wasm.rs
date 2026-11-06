@@ -190,11 +190,10 @@ fn create_recovery_record(params: &Value) -> Result<String, JsValue> {
             .get("metadata")
             .ok_or_else(|| JsValue::from_str("create_recovery_record requires metadata"))?,
     )?;
-    let main_ciphertext: Ciphertext = parse_json(
-        params.get("main_ciphertext").ok_or_else(|| {
+    let main_ciphertext: Ciphertext =
+        parse_json(params.get("main_ciphertext").ok_or_else(|| {
             JsValue::from_str("create_recovery_record requires main_ciphertext")
-        })?,
-    )?;
+        })?)?;
     let signer = parse_secret(
         params
             .get("signer_secret")
@@ -418,7 +417,8 @@ fn execute_inner(request_json: &str, artifact_bytes: &[u8]) -> Result<String, Js
             .map_err(js_error)?
             .to_scalar()
             .map_err(js_error)?;
-            let commitment = Commitment::commit_u128_with_blinding(amount, blind).map_err(js_error)?;
+            let commitment =
+                Commitment::commit_u128_with_blinding(amount, blind).map_err(js_error)?;
             serde_json::to_string(&commitment).map_err(js_error)
         }
         "decrypt_recovery_record" => {

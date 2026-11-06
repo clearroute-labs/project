@@ -336,6 +336,8 @@ pub struct BalanceAssertionWitness {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+// One bounded statement is processed per proof; preserve the direct typed API without heap indirection.
+#[allow(clippy::large_enum_variant)]
 pub enum Statement {
     KeyPossession(KeyPossessionStatement),
     PublicConversion(PublicConversionStatement),

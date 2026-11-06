@@ -268,8 +268,7 @@ impl Ciphertext {
         secret: &SecretKey,
         amount: u128,
     ) -> Result<bool, CryptoError> {
-        let expected = encryption_base()
-            * Fr::from_le_bytes_mod_order(&amount.to_le_bytes());
+        let expected = encryption_base() * Fr::from_le_bytes_mod_order(&amount.to_le_bytes());
         Ok(self.decrypt_point(secret)? == expected)
     }
 
@@ -342,39 +341,6 @@ fn random_nonzero<R: RngCore + CryptoRng>(rng: &mut R) -> Fr {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ark_ed_on_bn254::Fr;
-
-    #[test]
-    fn homomorphic_subtraction_accepts_identity_and_zero_has_canonical_form() {
-        let secret = SecretKey::from_scalar(Fr::from(17u64)).unwrap();
-        let key = secret.public_key();
-        let ciphertext = Ciphertext::encrypt_with_randomness(&key, 0, Fr::from(19u64)).unwrap();
-        let identity = ciphertext.sub(&ciphertext).unwrap();
-        assert!(identity.ephemeral.is_identity().unwrap());
-        assert!(identity.message.is_identity().unwrap());
-        let wire = serde_json::to_string(&identity).unwrap();
-        let decoded: Ciphertext = serde_json::from_str(&wire).unwrap();
-        assert_eq!(decoded, identity);
-
-        let canonical = Ciphertext::canonical_zero(&key, b"network/account/asset").unwrap();
-        assert!(!canonical.ephemeral.is_identity().unwrap());
-        assert!(!canonical.message.is_identity().unwrap());
-        assert_eq!(canonical.decrypt_bounded(&secret, 0).unwrap(), 0);
-    }
-
-    #[test]
-    fn wire_decoding_rejects_noncanonical_key_text() {
-        let secret = SecretKey::from_scalar(Fr::from(23u64)).unwrap();
-        let key = secret.public_key();
-        let encoded = key.point.0.clone();
-        assert!(PublicKey::parse(&encoded.to_uppercase()).is_err());
-        assert!(PublicKey::parse(&encoded[..encoded.len() - 2]).is_err());
-    }
-}
-
 pub(crate) fn discrete_log_bounded(
     target: EdwardsProjective,
     max_amount: u64,
@@ -422,4 +388,37 @@ pub(crate) fn recover_limb_pair(
     )
     .filter(|amount| *amount <= MAX_AMOUNT)
     .ok_or(CryptoError::RecoveryOutOfRange)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ark_ed_on_bn254::Fr;
+
+    #[test]
+    fn homomorphic_subtraction_accepts_identity_and_zero_has_canonical_form() {
+        let secret = SecretKey::from_scalar(Fr::from(17u64)).unwrap();
+        let key = secret.public_key();
+        let ciphertext = Ciphertext::encrypt_with_randomness(&key, 0, Fr::from(19u64)).unwrap();
+        let identity = ciphertext.sub(&ciphertext).unwrap();
+        assert!(identity.ephemeral.is_identity().unwrap());
+        assert!(identity.message.is_identity().unwrap());
+        let wire = serde_json::to_string(&identity).unwrap();
+        let decoded: Ciphertext = serde_json::from_str(&wire).unwrap();
+        assert_eq!(decoded, identity);
+
+        let canonical = Ciphertext::canonical_zero(&key, b"network/account/asset").unwrap();
+        assert!(!canonical.ephemeral.is_identity().unwrap());
+        assert!(!canonical.message.is_identity().unwrap());
+        assert_eq!(canonical.decrypt_bounded(&secret, 0).unwrap(), 0);
+    }
+
+    #[test]
+    fn wire_decoding_rejects_noncanonical_key_text() {
+        let secret = SecretKey::from_scalar(Fr::from(23u64)).unwrap();
+        let key = secret.public_key();
+        let encoded = key.point.0.clone();
+        assert!(PublicKey::parse(&encoded.to_uppercase()).is_err());
+        assert!(PublicKey::parse(&encoded[..encoded.len() - 2]).is_err());
+    }
 }

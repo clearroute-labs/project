@@ -1,9 +1,9 @@
 use ark_bn254::Fr as CircuitFr;
 use ark_ed_on_bn254::{EdwardsAffine, EdwardsProjective, Fr};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress, Validate};
+use ark_std::io::Cursor;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use std::fmt;
-use ark_std::io::Cursor;
 
 use crate::CryptoError;
 

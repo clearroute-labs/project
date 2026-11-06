@@ -547,6 +547,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "confidential-core"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "confidential-crypto",
+ "hex",
+ "near-sdk",
+ "near-verifier",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "confidential-crypto"
 version = "0.1.0"
 dependencies = [
@@ -2709,6 +2723,15 @@ dependencies = [
  "once_cell",
  "rustix",
  "windows-sys",
+]
+
+[[package]]
+name = "test-token"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "near-sdk",
+ "serde",
 ]
 
 [[package]]

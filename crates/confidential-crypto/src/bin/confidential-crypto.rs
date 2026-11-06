@@ -1,8 +1,8 @@
 use confidential_crypto::{
     ArtifactSet, CONTEXT_SLOTS, Ciphertext, Commitment, FieldHex, MAX_AMOUNT, PROFILE_VERSION,
     ProofEnvelope, ProvingArtifacts, PublicKey, ReaderView, RecoveryMetadata, RecoveryPair,
-    RecoveryRecord, SecretKey, SetupMode,
-    Statement, WitnessWire, profile_hash_hex, profile_id, prove, setup, verify_with_vk_bytes,
+    RecoveryRecord, SecretKey, SetupMode, Statement, WitnessWire, profile_hash_hex, profile_id,
+    prove, setup, verify_with_vk_bytes,
 };
 use rand::rngs::OsRng;
 use rand_chacha::{ChaCha20Rng, rand_core::SeedableRng};
@@ -343,13 +343,11 @@ fn execute_request(request_json: &str, artifact_bytes: &[u8]) -> Result<String, 
                     .ok_or_else(|| "create_recovery_record requires metadata".to_string())?,
             )
             .map_err(|_| "invalid recovery metadata".to_string())?;
-            let main_ciphertext: Ciphertext = serde_json::from_value(
-                params
-                    .get("main_ciphertext")
-                    .cloned()
-                    .ok_or_else(|| "create_recovery_record requires main_ciphertext".to_string())?,
-            )
-            .map_err(|_| "invalid main_ciphertext".to_string())?;
+            let main_ciphertext: Ciphertext =
+                serde_json::from_value(params.get("main_ciphertext").cloned().ok_or_else(
+                    || "create_recovery_record requires main_ciphertext".to_string(),
+                )?)
+                .map_err(|_| "invalid main_ciphertext".to_string())?;
             let signer = parse_secret_wire(required_text(&params, "signer_secret", method)?)?;
             let seed = hex::decode(required_text(&params, "seed_hex", method)?)
                 .map_err(|_| "seed must be hex".to_string())?;
@@ -366,8 +364,7 @@ fn execute_request(request_json: &str, artifact_bytes: &[u8]) -> Result<String, 
                 &mut rng,
             )
             .map_err(|e| e.to_string())?;
-            serde_json::to_string(&record)
-                .map_err(|_| "cannot encode recovery record".to_string())
+            serde_json::to_string(&record).map_err(|_| "cannot encode recovery record".to_string())
         }
         "decrypt_recovery_record" => {
             let record: RecoveryRecord = serde_json::from_value(
@@ -498,8 +495,7 @@ fn execute_request(request_json: &str, artifact_bytes: &[u8]) -> Result<String, 
                     .to_scalar()
                     .map_err(|e| e.to_string())?;
             serde_json::to_string(
-                &Commitment::commit_u128_with_blinding(amount, blind)
-                    .map_err(|e| e.to_string())?,
+                &Commitment::commit_u128_with_blinding(amount, blind).map_err(|e| e.to_string())?,
             )
             .map_err(|_| "cannot encode commitment".to_string())
         }
