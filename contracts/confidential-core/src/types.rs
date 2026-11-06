@@ -186,6 +186,24 @@ pub struct AssetProfile {
     pub custody_cap: u128,
 }
 
+/// JSON-facing asset profile.  Storage keeps the cap as a native `u128` for
+/// checked arithmetic, while the public ABI must never emit a JSON number that
+/// can be rounded by a JavaScript client.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(crate = "serde")]
+pub struct AssetProfileView {
+    pub token_account: AccountId,
+    pub decimals: u8,
+    pub controller_account: AccountId,
+    pub issuer_key: EncryptionKey,
+    pub token_auditor_key: EncryptionKey,
+    pub crypto_profile_hash: Vec<u8>,
+    pub network_id: String,
+    pub token_trust_policy: String,
+    pub freeze_policy: String,
+    pub custody_cap: U128,
+}
+
 #[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(crate = "serde")]
 pub enum VaultKind {
@@ -266,6 +284,37 @@ pub struct KeeperGrant {
     #[serde(with = "u64_string")]
     pub delegate_epoch: u64,
     pub active: bool,
+    pub allowed_operations: Vec<KeeperOperation>,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(crate = "serde")]
+pub enum KeeperOperation {
+    MergeInbox,
+    Settle,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(crate = "serde")]
+pub struct KeeperGrantView {
+    pub delegate_account: AccountId,
+    #[serde(with = "u64_string")]
+    pub delegate_key_id: u64,
+    pub allowed_operations: Vec<KeeperOperation>,
+    pub allowed_settlement_per_operation: U128,
+    pub allowed_settlement_per_window: U128,
+    #[serde(with = "u64_string")]
+    pub window_seconds: u64,
+    #[serde(with = "u64_string")]
+    pub window_started_at: u64,
+    pub window_spent: U128,
+    #[serde(with = "u64_string")]
+    pub expires_at: u64,
+    #[serde(with = "u64_string")]
+    pub revocation_epoch: u64,
+    #[serde(with = "u64_string")]
+    pub delegate_epoch: u64,
+    pub active: bool,
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -277,6 +326,12 @@ pub struct Broker {
     #[serde(with = "u64_string")]
     pub vault_id: u64,
     pub encryption_key: EncryptionKey,
+    /// Epoch for keeper/delegate authorization.  This is deliberately
+    /// separate from `encryption_key.authorization_epoch`: granting or
+    /// revoking a keeper must not change the canonical-zero domain of the
+    /// broker's existing ciphertexts.
+    #[serde(with = "u64_string")]
+    pub authorization_epoch: u64,
     pub debt_total: u128,
     pub debt_maximum: u128,
     #[serde(with = "u64_string")]
@@ -313,6 +368,8 @@ pub struct Broker {
     pub reconciled_risk_version: u64,
     pub accounting_pending: bool,
     pub delegates: Vec<KeeperGrant>,
+    #[serde(with = "u64_string")]
+    pub last_settlement_at: u64,
     pub tombstoned: bool,
 }
 
@@ -473,6 +530,21 @@ pub struct DepositReceipt {
     pub payload_hash: Vec<u8>,
     pub status: DepositStatus,
     pub claim_id: u64,
+    pub accepted_at: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(crate = "serde")]
+pub struct DepositReceiptView {
+    pub token_account: AccountId,
+    pub sender: AccountId,
+    pub deposit_id: String,
+    pub amount: U128,
+    pub payload_hash: Vec<u8>,
+    pub status: DepositStatus,
+    #[serde(with = "u64_string")]
+    pub claim_id: u64,
+    #[serde(with = "u64_string")]
     pub accepted_at: u64,
 }
 
@@ -659,9 +731,14 @@ pub struct CreateBrokerArgs {
 pub struct RegisterHolderArgs {
     #[serde(with = "u64_string")]
     pub key_id: u64,
+    #[serde(default)]
     pub encryption_public_key: Vec<u8>,
+    #[serde(default)]
     pub public_key: Vec<u8>,
     pub proof_of_possession: ProofArgs,
+    #[serde(default)]
+    pub zero_proofs: Vec<ProofArgs>,
+    #[serde(default)]
     pub authorization_signature: Vec<u8>,
 }
 
@@ -745,7 +822,7 @@ pub struct ProofArgs {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(crate = "serde")]
+#[serde(crate = "serde", deny_unknown_fields)]
 pub struct DepositMessage {
     pub version: u8,
     pub deposit_id: String,
@@ -785,8 +862,16 @@ pub struct RedeemSharesArgs {
 pub struct BrokerZeroProofArgs {
     #[serde(with = "u64_string")]
     pub broker_id: u64,
-    pub spending_proof: ProofArgs,
-    pub inbox_proof: ProofArgs,
+    /// Preferred closure proof: one zero-balance statement over the
+    /// homomorphic sum of spending, inbox, active-principal and
+    /// impaired-principal.  The four legacy proofs remain optional
+    /// compatibility fields for clients that have not migrated yet.
+    #[serde(default)]
+    pub combined_proof: Option<ProofArgs>,
+    #[serde(default)]
+    pub spending_proof: Option<ProofArgs>,
+    #[serde(default)]
+    pub inbox_proof: Option<ProofArgs>,
     #[serde(default)]
     pub active_principal_proof: Option<ProofArgs>,
     #[serde(default)]
@@ -799,9 +884,13 @@ pub struct ShieldArgs {
     #[serde(with = "u64_string")]
     pub claim_id: u64,
     pub amount: U128,
+    #[serde(default)]
     pub spending_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub issuer_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub auditor_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub commitment: Vec<u8>,
     pub proof: ProofArgs,
 }
@@ -810,9 +899,13 @@ pub struct ShieldArgs {
 #[serde(crate = "serde")]
 pub struct UnshieldArgs {
     pub amount: U128,
+    #[serde(default)]
     pub spending_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub issuer_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub auditor_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub commitment: Vec<u8>,
     pub proof: ProofArgs,
     #[serde(with = "u64_string")]
@@ -824,6 +917,7 @@ pub struct UnshieldArgs {
 pub struct MergeArgs {
     #[serde(with = "u64_string")]
     pub expected_spending_version: u64,
+    #[serde(default)]
     pub new_spending_ciphertext: Vec<u8>,
     pub proof: Option<ProofArgs>,
 }
@@ -834,8 +928,11 @@ pub struct DrawArgs {
     #[serde(with = "u64_string")]
     pub broker_id: u64,
     pub amount: U128,
+    #[serde(default)]
     pub issuer_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub auditor_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub broker_ciphertext: Vec<u8>,
     #[serde(default)]
     pub broker_spending_commitment: Vec<u8>,
@@ -849,14 +946,23 @@ pub struct DrawArgs {
 pub struct OriginateArgs {
     #[serde(with = "u64_string")]
     pub proposal_id: u64,
+    #[serde(default)]
     pub borrower_spending_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub borrower_issuer_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub borrower_auditor_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub broker_spending_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub broker_issuer_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub broker_auditor_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub loan_principal_ciphertexts: Vec<Vec<u8>>,
+    #[serde(default)]
     pub loan_initial_owed_ciphertexts: Vec<Vec<u8>>,
+    #[serde(default)]
     pub loan_periodic_payment_ciphertexts: Vec<Vec<u8>>,
     #[serde(default)]
     pub principal_commitment: Vec<u8>,
@@ -864,9 +970,13 @@ pub struct OriginateArgs {
     pub owed_commitment: Vec<u8>,
     #[serde(default)]
     pub payment_commitment: Vec<u8>,
+    #[serde(default)]
     pub broker_active_principal_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub broker_impaired_principal_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub broker_book_root: Vec<u8>,
+    #[serde(default)]
     pub accounting_leaf: Vec<u8>,
     #[serde(default)]
     pub broker_spending_commitment: Vec<u8>,
@@ -919,18 +1029,31 @@ pub struct RepayArgs {
     pub expected_loan_version: u64,
     #[serde(with = "u64_string")]
     pub expected_borrower_spending_version: u64,
+    #[serde(default)]
     pub borrower_spending_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub borrower_issuer_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub borrower_auditor_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub broker_inbox_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub broker_issuer_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub broker_auditor_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub amount_owed_ciphertexts: Vec<Vec<u8>>,
+    #[serde(default)]
     pub principal_remaining_ciphertexts: Vec<Vec<u8>>,
+    #[serde(default)]
     pub cumulative_repaid_ciphertexts: Vec<Vec<u8>>,
+    #[serde(default)]
     pub broker_active_principal_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub broker_impaired_principal_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub broker_book_root: Vec<u8>,
+    #[serde(default)]
     pub accounting_leaf: Vec<u8>,
     #[serde(default)]
     pub broker_inbox_commitment: Vec<u8>,
@@ -938,8 +1061,18 @@ pub struct RepayArgs {
     pub broker_active_principal_commitment: Vec<u8>,
     #[serde(default)]
     pub broker_impaired_principal_commitment: Vec<u8>,
+    #[serde(default)]
     pub transfer_views: Vec<Vec<u8>>,
+    #[serde(default)]
     pub commitment: Vec<u8>,
+    #[serde(default, with = "option_u64_string")]
+    pub authorization_key_id: Option<u64>,
+    #[serde(default, with = "u64_string")]
+    pub authorization_epoch: u64,
+    #[serde(default, with = "u64_string")]
+    pub authorization_nonce: u64,
+    #[serde(default)]
+    pub authorization_signature: Vec<u8>,
     pub proof: ProofArgs,
 }
 
@@ -959,15 +1092,20 @@ pub struct ManageLoanArgs {
     pub action: LoanManagementAction,
     #[serde(with = "u64_string")]
     pub expected_loan_version: u64,
+    #[serde(default)]
     pub accounting_leaf: Vec<u8>,
+    #[serde(default)]
     pub broker_active_principal_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub broker_impaired_principal_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub broker_book_root: Vec<u8>,
     #[serde(default)]
     pub broker_active_principal_commitment: Vec<u8>,
     #[serde(default)]
     pub broker_impaired_principal_commitment: Vec<u8>,
-    pub proof: ProofArgs,
+    #[serde(default)]
+    pub proof: Option<ProofArgs>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -980,9 +1118,13 @@ pub struct SettleArgs {
     pub expected_spending_version: u64,
     #[serde(with = "u64_string")]
     pub expected_accounting_version: u64,
+    #[serde(default)]
     pub broker_spending_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub broker_issuer_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub broker_auditor_ciphertext: Vec<u8>,
+    #[serde(default)]
     pub settlement_views: Vec<Vec<u8>>,
     #[serde(default)]
     pub broker_spending_commitment: Vec<u8>,
@@ -1032,6 +1174,7 @@ pub struct GrantKeeperArgs {
     pub expires_at: u64,
     #[serde(with = "u64_string")]
     pub delegate_epoch: u64,
+    pub allowed_operations: Vec<KeeperOperation>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1065,6 +1208,11 @@ pub struct VaultView {
     pub loss_unrealized: U128,
     pub nav: U128,
     pub shares_total: U128,
+    pub assets_maximum: U128,
+    pub share_scale: u8,
+    pub shares_transferable: bool,
+    pub checkpoint_policy: CheckpointPolicy,
+    pub phase_times: Option<PhaseTimes>,
     pub accounting_pending: bool,
     #[serde(with = "u64_string")]
     pub pending_broker_count: u64,
@@ -1100,6 +1248,8 @@ pub struct BrokerView {
     #[serde(with = "u64_string")]
     pub encryption_key_id: u64,
     pub encryption_public_key: Vec<u8>,
+    #[serde(with = "u64_string")]
+    pub authorization_epoch: u64,
     pub spending_ciphertext: Vec<u8>,
     pub inbox_ciphertext: Vec<u8>,
     pub issuer_balance_ciphertext: Vec<u8>,
@@ -1118,6 +1268,9 @@ pub struct BrokerView {
     #[serde(with = "u64_string")]
     pub reconciled_risk_version: u64,
     pub accounting_pending: bool,
+    pub delegates: Vec<KeeperGrantView>,
+    #[serde(with = "u64_string")]
+    pub last_settlement_at: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1138,6 +1291,13 @@ pub struct HolderView {
     pub authorization_epoch: u64,
     #[serde(with = "u64_string")]
     pub open_loan_count: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(crate = "serde")]
+pub struct FreezeStatusView {
+    pub asset_frozen: bool,
+    pub holder_frozen: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1223,8 +1383,10 @@ pub struct ProofContextView {
     pub network_id: String,
     pub profile_hash: Vec<u8>,
     pub verifier_manifest_hash: Vec<u8>,
+    #[serde(with = "u64_vec_string")]
     pub ids: Vec<u64>,
     pub account_ids: Vec<AccountId>,
+    #[serde(with = "u64_vec_string")]
     pub versions: Vec<u64>,
     pub ciphertexts: Vec<Vec<u8>>,
     pub commitments: Vec<Vec<u8>>,
@@ -1249,6 +1411,8 @@ pub struct ProofContextArgs {
     pub destination: Option<AccountId>,
     #[serde(default, with = "option_u64_string")]
     pub broker_id: Option<u64>,
+    #[serde(default, with = "option_u64_string")]
+    pub key_id: Option<u64>,
     #[serde(default, with = "option_u64_string")]
     pub checkpoint_id: Option<u64>,
     pub action: Option<LoanManagementAction>,

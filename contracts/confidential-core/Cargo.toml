@@ -17,6 +17,7 @@ sha2.workspace = true
 hex.workspace = true
 near-verifier = { path = "../../crates/near-verifier" }
 confidential-crypto = { path = "../../crates/confidential-crypto", default-features = false }
+authenticated-book = { path = "../../crates/authenticated-book" }
 
 [features]
 unit-testing = ["near-sdk/unit-testing"]

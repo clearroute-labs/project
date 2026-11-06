@@ -21,14 +21,15 @@ All public amounts are JSON decimal strings ('U128'). IDs, timestamps, and
 versions are serialized as canonical decimal strings (no JSON numbers, leading
 zeroes, or '+' prefix). Scalar ID/cursor arguments use near-sdk 'U64' and have
 the same string wire form. A browser should carry them as strings to avoid
-JavaScript precision loss.
+JavaScript precision loss. The JSON-facing `AssetProfile` is returned as a
+view with `custody_cap: U128`; the native storage record is not exposed.
 
 ## Public lifecycle methods
 
 | Method | Input | Authority | Result |
 | --- | --- | --- | --- |
 | 'storage_deposit' | optional self account | account | Records NEAR storage budget |
-| 'register_holder' | key ID, public key, possession proof | holder | Registers an encryption/authorization epoch |
+| 'register_holder' | key ID, public key, possession proof; four zero proofs when rotating | holder | Registers an encryption/authorization epoch |
 | 'register_authorization_key' / 'revoke_authorization_key' | application key and proof, or key ID | account | Advances public auth epoch and revokes a key without touching encrypted balances |
 | 'create_vault' | asset phase/share/checkpoint policy | caller | Vault ID |
 | 'create_broker' | vault, broker key, debt cap, PoP | vault owner | Broker ID |
@@ -38,14 +39,14 @@ JavaScript precision loss.
 | 'deposit_to_vault' | claim ID, vault, amount, slippage, expiry | claim owner | Burns claim and mints shares |
 | 'redeem_shares' | vault, shares, slippage, expiry, sole-shareholder flag | share owner | Burns shares and returns a PublicClaim ID |
 | 'transfer_shares' | vault, receiver, shares | share owner | Transfers public shares if enabled |
-| 'shield' | claim, public amount, ciphertexts, commitment, proof | claim owner | Moves claim to holder inbox |
-| 'unshield' | amount, post-spending ciphertexts, proof, expected version | holder | Creates a PublicClaim |
+| 'shield' | claim, public amount, typed proof | claim owner | Moves claim to holder inbox |
+| 'unshield' | amount, expected spending version, typed proof | holder | Creates a PublicClaim |
 | 'merge_inbox' | expected version, exact homomorphic spending+inbox ciphertext | holder | Moves inbox to spending and increments version |
-| 'draw' | broker, public amount, broker/audit ciphertexts, proof | broker owner | Reduces vault liquidity and increases broker debt |
-| 'originate' | proposal, all post-ciphertexts/roots, proof | party or relayer | Creates an Active loan atomically |
-| 'confidential_send' | receiver, expected sender version, five transfer views, post states, proof | sender holder | Credits receiver inbox without changing receiver spending version |
-| 'repay' | loan/mode, expected loan/spending versions, five views, post states, proof | borrower | Regular or full confidential payment |
-| 'manage_loan' | loan, 'Impair'/'Unimpair'/'Default', expected version, aggregate post states, proof | broker owner | Changes public risk state; queues accounting |
+| 'draw' | broker, public amount, typed proof | broker owner | Reduces vault liquidity and increases broker debt |
+| 'originate' | proposal and typed proof | party or relayer | Creates an Active loan atomically |
+| 'confidential_send' | receiver, expected sender version, typed proof | sender holder | Credits receiver inbox without changing receiver spending version |
+| 'repay' | loan/mode, expected loan/spending versions, typed proof; optional relayed auth key/epoch/nonce/signature | borrower or registered relayer | Regular or full confidential payment |
+| 'manage_loan' | loan, 'Impair'/'Unimpair'/'Default', expected version | broker owner | Changes public risk state; queues accounting |
 | 'prepare_reconciliation' | broker ID | anyone | Creates the next scheduled checkpoint |
 | 'reconcile_credit' | checkpoint, bounded public outputs, proof | anyone with valid proof | Applies aggregate loss/provision once |
 | 'merge_broker_inbox' | broker, expected version, exact homomorphic spending+inbox ciphertext | owner or settlement keeper | Broker-only inbox merge |
@@ -65,19 +66,34 @@ a public repayment amount.
 Default is terminal. Impairment is allowed only after the next due date, and
 accounting remains pending until the current authenticated book is reconciled.
 
+`delete_broker` and final redemption accept a preferred `combined_proof` in
+`BrokerZeroProofArgs`. It proves a zero balance for the homomorphic sum of the
+broker spending, inbox, active-principal and impaired-principal ciphertexts,
+reducing closure verification to one bounded ZeroBalance proof. The four
+per-field proof members remain optional compatibility fields; callers must
+provide either the combined proof or all four legacy proofs.
+
 `merge_broker_inbox` accepts `broker_id` plus `{ expected_spending_version,
 new_spending_ciphertext }`; the new ciphertext must equal the homomorphic sum
 of the stored spending and inbox values, and no plaintext or caller-selected
-replacement is accepted. `settle` accepts
-`SettleArgs` with the public `amount`, expected spending/accounting versions,
-the three broker post-state ciphertexts, optional spending/inbox commitments,
-an optional `ReconcileArgs`, and the settlement proof. A keeper may submit this
-only within its immutable per-operation/per-window limits. `ReconcileArgs`
-contains the checkpoint and broker IDs, expected risk/accounting versions,
-public `new_broker_debt`, `new_broker_provision`, `loss`, and
+replacement is accepted. `settle` accepts `SettleArgs` with the public
+`amount`, expected spending/accounting versions, a typed public-conversion
+proof, and an optional bundled `ReconcileArgs`. The three broker post-state
+ciphertexts, commitments, settlement views, and aggregate/book outputs are
+derived from the verified statement and current storage; legacy fields are
+optional consistency checks only. A keeper may submit this only within its
+immutable per-operation/per-window grant. Grants explicitly list
+`MergeInbox` and/or `Settle`, bind a registered delegate authorization key and
+epoch, and are visible through `delegates` and `get_keeper_grants`; the broker
+view also exposes `authorization_epoch` and `last_settlement_at`.
+`ReconcileArgs` contains the checkpoint and broker IDs, expected risk/accounting
+versions, public `new_broker_debt`, `new_broker_provision`, `loss`, and
 `new_vault_total`, plus the reconciliation proof. Those public outputs are
 checked against the authenticated encrypted aggregate by the verifier; they
-are not accepted as an operator-selected write.
+are not accepted as an operator-selected write. `manage_loan` similarly derives
+principal aggregates and the authenticated sparse-book leaf from stored state;
+its optional proof is an additional typed consistency check, not a replacement
+for broker-owner authorization.
 
 ## External NEP-141 boundary
 
@@ -85,6 +101,10 @@ The configured token alone may call:
 
     ft_on_transfer(sender_id, amount, '{"version":1,"deposit_id":"..."}')
 
+The message is strict JSON containing only `version` and `deposit_id`; Core
+parses it and hashes the canonical Borsh tuple
+`(token, sender, amount, version, deposit_id)` for replay identity. Whitespace,
+JSON key order, or unknown fields cannot create an alternate receipt.
 The first '(token,sender,deposit_id)' receipt creates exactly one
 'PublicClaim' and returns '0'. A duplicate with the same payload returns the
 whole amount with no second credit. A mismatched reuse, unsupported message,
@@ -108,7 +128,7 @@ is no timeout refund or resend.
 
 'get_asset_profile', 'get_verifier_config', 'get_verifier_key', 'get_vault', 'get_broker',
 'get_holder', 'get_holder_key', 'get_broker_key', 'get_loan', 'get_proposal', 'get_claim', 'get_payout',
-'get_checkpoint', 'get_deposit_receipt', 'get_vault_broker_ids',
+'get_checkpoint', 'get_deposit_receipt', 'get_vault_broker_ids(vault_id, cursor, limit)',
 'get_share_balance', 'list_vaults', 'list_brokers', 'list_loans',
 'list_claims', 'list_payouts', 'get_counters', and 'public_totals' expose public
 records and authorized encrypted views. 'get_counters' returns high-water
@@ -117,7 +137,12 @@ marks so range pagination can continue across deleted/filtered IDs. The
 proof-bound statement records with 'next_cursor'/'end_cursor'. Deterministic
 merge/status transitions carry metadata without a private statement, while
 proof-bearing mutations carry canonical statements. The pages never scan an
-unbounded collection. 'prepare_context' and 'get_operation_context' return the
+unbounded collection. 'get_freeze_status(account_id?)' reports asset and
+holder freeze state separately and does not grant an override. 'get_keeper_grants'
+returns bounded delegate views with U128 limits, operation scopes, delegate and
+revocation epochs, expiry and window counters; broker views include the same
+grants, the broker authorization epoch and last settlement timestamp.
+'prepare_context' and 'get_operation_context' return the
 immutable asset/profile/network identity, current IDs and versions, and a
 canonical state digest for prover statement construction. 'get_statement_context'
 also returns bounded authoritative ciphertexts, commitments, and public schedule
@@ -132,6 +157,17 @@ authoritative context, derives public inputs from that statement, and returns
 the same statement/context for local proving. It does not hash arbitrary
 caller-selected outputs. A wallet must
 refresh these views after a merge or any stale-state error.
+
+For wallet registration flows, `get_proof_context` uses operation
+`register-holder` with `{ account_id, key_id }` and `create-broker` with
+`{ account_id, primary_id: vault_id, broker_id, key_id }`; these contexts pin
+the next authorization epoch or globally allocated broker ID. Financial
+mutations intentionally accept only their IDs, expected versions, public
+boundary amount where applicable, and `proof`; all mirrors, aggregate
+commitments, sparse-book roots/leaves and recipient inbox updates are derived
+from the authoritative current state. Incoming confidential credits are added
+to the destination's current inbox, so a concurrent recipient credit does not
+invalidate a sender proof.
 
 Loan records contain five ciphertext views for transfer amounts and exactly
 three ciphertext views for stored P/O/Q/R terms in the fixed order
@@ -160,6 +196,24 @@ come from the parsed typed statement itself and are verified against the
 immutable prepared key for that kind. Proof validity never grants
 authorization: direct predecessor/keeper/party checks and proposal
 epochs/nonces are also enforced.
+
+### Canonical zeros and loan-book roots
+
+Every newly-created or reset ciphertext zero is encrypted with a domain that
+includes the immutable network ID, Core account, configured asset account,
+profile hash, subject label, encryption key ID and key authorization epoch.
+The fixed domain prevents a zero ciphertext from one deployment, account or
+rotation from being replayed as another subject's state. Holder key rotation
+therefore requires four typed zero-balance proofs over the existing spending,
+inbox, issuer-mirror and token-auditor-mirror ciphertexts; byte equality with a
+legacy fixed zero is not accepted.
+
+Each broker has a domain-separated sparse Merkle loan book with depth 64 over
+loan IDs. Origination, repayment, impairment/unimpairment/default and deletion
+update exactly one authenticated path after checking the stored root and
+expected leaf. Closed-loan leaves become tombstones in Core storage, and the
+root is never accepted from a caller. This keeps membership and omission
+checks bounded even when a broker has many historical loans.
 
 ## Stable error categories
 
