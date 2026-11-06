@@ -37,9 +37,11 @@ async function spending(key: KeyReference, amount: string): Promise<SpendingStat
   return { key, amount, version: '0', ciphertext: await encrypted(pk(key), amount) };
 }
 const measurements: Array<{ operation: string; milliseconds: number; proofBytes: number; publicInputs: number }> = [];
+const operations: Array<{ name: string; statement: ProvenOperation['statement']; envelope: ProvenOperation['envelope'] }> = [];
 async function measure(name: string, action: () => Promise<ProvenOperation>): Promise<ProvenOperation> {
   const start = performance.now();
   const result = await action();
+  operations.push({ name, ...result });
   measurements.push({ operation: name, milliseconds: Math.ceil(performance.now() - start), proofBytes: result.envelope.proof.length / 2, publicInputs: result.envelope.public_inputs.length });
   process.stdout.write(`Verified ${name}\n`);
   return result;
@@ -77,4 +79,5 @@ try { await crypto.execute('verify', { statement: JSON.stringify(altered), envel
 catch { rejected = true; }
 if (!rejected) throw new Error('Verifier accepted a modified operation context');
 await writeFile(join(directory, 'client-validation.json'), `${JSON.stringify({ profileHash: manifest.profileHash, manifestHash: pin.manifestHash, measurements, modifiedContextRejected: true }, null, 2)}\n`);
+await writeFile(join(directory, 'client-operations.json'), `${JSON.stringify(operations)}\n`);
 process.stdout.write('All eight proof families passed native client integration.\n');

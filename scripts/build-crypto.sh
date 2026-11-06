@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-cargo build --locked --profile prover -p confidential-crypto --features wasm --target wasm32-unknown-unknown
+cargo build --locked --profile prover -p confidential-crypto --bin confidential-crypto
+cargo build --locked --release -p near-verifier --example prepare_key
+cargo build --locked --profile prover -p confidential-crypto --lib --features browser --target wasm32-unknown-unknown
 mkdir -p .artifacts/browser
 binding_cli=".local/wasm-bindgen/bin/wasm-bindgen"
 if [[ ! -x "$binding_cli" ]]; then

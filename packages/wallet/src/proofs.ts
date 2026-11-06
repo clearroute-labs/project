@@ -241,7 +241,7 @@ export class ProofBuilder {
   private async commit(amount: string, wide = false): Promise<CommittedAmount> {
     integer(amount, wide ? maximum128 : maximumAmount);
     const sample = await this.crypto.execute<{ secret_key: string }>('keygen', { seed_hex: freshSeed() });
-    const commitment = await this.crypto.execute<Commitment>(wide ? 'commitment_create_u128' : 'commitment_create', { amount, blinding: sample.secret_key });
+    const commitment = await this.crypto.execute<Commitment>('commitment_create', { amount, blinding: sample.secret_key });
     return { commitment, blinding: sample.secret_key };
   }
   private async subtractViews(before: ReaderView[], delta: ReaderView[]): Promise<ReaderView[]> {
