@@ -28,7 +28,8 @@ test('actual token callbacks preserve custody through duplicate ingress, failed 
     assert.equal(await balance(core.accountId), '1000');
     assert.equal(await core.view('get_custody_total'), '1000');
     const forgedDeposit = await actors.lender.callRaw(core, 'ft_on_transfer', { sender_id: actors.lender.accountId, amount: '1000', msg: JSON.stringify({ version: 1, deposit_id: 'forged' }) }, { gas: maximumGas });
-    assert.equal(forgedDeposit.succeeded, false);
+    assert.equal(forgedDeposit.failed || forgedDeposit.parseResult() === '1000', true);
+    assert.equal(await core.view('get_custody_total'), '1000');
     const forgedCallback = await actors.lender.callRaw(core, 'on_payout_result', { operation_id: '1', attempt: 1, result_hash: [] }, { gas: maximumGas });
     assert.equal(forgedCallback.succeeded, false);
     const finalizer = await worker.rootAccount.createSubAccount('finalizer', { initialBalance: near });

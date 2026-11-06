@@ -379,4 +379,16 @@ export class LedgerWallet {
     return this.prepared(snapshot, 'settle', { args: { broker_id: brokerId, amount, expected_spending_version: balance.record.spending_version,
       expected_accounting_version: balance.record.accounting_version, reconciliation, proof: proofArguments(proof) } }, proof);
   }
+
+  async prepareBrokerClosure(brokerId: string, signal?: AbortSignal): Promise<PreparedCall> {
+    const balance = await this.broker(brokerId, undefined, signal), snapshot = balance.snapshot;
+    const book = await this.brokerBook(balance, signal);
+    if ([balance.spending, balance.inbox, book.active, book.impaired, balance.record.debt_total, balance.record.impairment_provision].some(value => value !== '0')) throw new Error('Broker still has balances or obligations');
+    const cash = await this.proofs.combine('add', decodeWire(balance.record.spending_ciphertext), decodeWire(balance.record.inbox_ciphertext));
+    const principal = await this.proofs.combine('add', decodeWire(balance.record.active_principal_ciphertext), decodeWire(balance.record.impaired_principal_ciphertext));
+    const proof = await this.proofs.balance(await this.context(snapshot, { operation: 'broker-zero-total', broker_id: brokerId }, signal), {
+      key: balance.key, version: balance.record.spending_version, amount: '0', ciphertext: await this.proofs.combine('add', cash, principal),
+    }, true);
+    return this.prepared(snapshot, 'delete_broker', { broker_id: brokerId, zero_proof: { broker_id: brokerId, combined_proof: proofArguments(proof) } }, proof);
+  }
 }

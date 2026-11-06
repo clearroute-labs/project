@@ -1,0 +1,18 @@
+{
+  "rpcUrl": "http://127.0.0.1:3030",
+  "networkId": "sandbox",
+  "coreAccountId": "core.test.near",
+  "assetId": "token.test.near",
+  "profileHash": "5ba4cf2e37fcc1fe7c97c7dd6efb9848fff93ff4626b2bb5346bb0c56160c070",
+  "manifestHash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "artifactDirectory": "../../.artifacts/development",
+  "credentialsFile": "../../.local/demo/credentials/keeper.json",
+  "encryptedBackupFile": "../../.local/keeper/broker-backup.json",
+  "journalFile": "../../.local/keeper/transactions.json",
+  "intervalMs": 10000,
+  "funded": false,
+  "allowInsecureLocalhost": true,
+  "brokers": [
+    { "brokerId": "1", "minimumSettlement": "1", "maximumSettlement": "1000000000" }
+  ]
+}

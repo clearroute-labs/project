@@ -4,6 +4,8 @@ import { mkdir, open, chmod } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
+import { KeyPair } from 'near-workspaces';
+import { actionCreators } from '@near-js/transactions';
 import { encryptWalletBackup } from '../packages/wallet/src/backup.js';
 import { confinedPath } from './release.js';
 import { deployProtocol } from '../tests/e2e/deployment.js';
@@ -41,8 +43,12 @@ async function privateFile(path: string, value: string): Promise<void> {
   finally { await file.close(); }
 }
 try {
+  const keeperKey = KeyPair.fromRandom('ed25519');
+  const keeperGrant = await deployment.actors.keeper.batch(deployment.actors.keeper)
+    .addKey(keeperKey.getPublicKey(), actionCreators.functionCallAccessKey(deployment.core.accountId, ['merge_broker_inbox', 'settle'], 10n ** 24n)).transact();
+  if (keeperGrant.failed) throw new Error('Sandbox keeper key installation failed');
   for (const [name, account] of Object.entries(deployment.actors)) {
-    const key = await account.getKey();
+    const key = name === 'keeper' ? keeperKey : await account.getKey();
     if (!key) throw new Error('Sandbox actor has no signing key');
     await privateFile(join(output, 'credentials', `${name}.json`), JSON.stringify({ account_id: account.accountId, public_key: key.getPublicKey().toString(), private_key: key.toString() }, null, 2));
   }
