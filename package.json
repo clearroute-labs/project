@@ -6,8 +6,8 @@
   "engines": { "node": ">=24.11.0" },
   "scripts": {
     "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck && tsc -p tsconfig.tools.json",
+    "test": "pnpm -r test && tsx --test tests/*.test.ts",
     "test:e2e": "tsx --test tests/e2e/*.test.ts",
     "dev": "pnpm --dir web dev",
     "build:contracts": "bash scripts/build-contracts.sh",

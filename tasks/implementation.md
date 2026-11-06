@@ -21,3 +21,11 @@ Use isolated git worktrees for independent writing workers. Shared interfaces ar
 ## Review
 
 Pending implementation and verification.
+
+Verified components so far (not full protocol acceptance):
+
+- Pinned Rust/TypeScript workspace, client transport, artifact validation and reproducible sandbox installation.
+- Real Groth16 host verification in NEAR sandbox; prepared-key optimization measured against a 193-input fixture.
+- Exact lending/share arithmetic: 12 tests, including all financial worked examples and 10,000 full-width integer cases against an independent BigUint oracle.
+- Durable keeper journal and restricted signer: seven crash/retry/identity/finality tests.
+- Contract, cryptographic circuits and application remain in isolated implementation worktrees until their acceptance findings are resolved.

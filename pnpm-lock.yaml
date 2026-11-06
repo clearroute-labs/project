@@ -26,6 +26,12 @@ importers:
 
   packages/client: {}
 
+  packages/wallet:
+    dependencies:
+      '@confidential-lending/client':
+        specifier: workspace:*
+        version: link:../client
+
   services/keeper:
     dependencies:
       '@confidential-lending/client':

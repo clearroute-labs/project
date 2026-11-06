@@ -8,7 +8,9 @@ use ark_relations::{
 use ark_serialize::CanonicalSerialize;
 
 #[derive(Clone)]
-struct Product;
+struct Product {
+    context_inputs: u64,
+}
 
 impl ConstraintSynthesizer<Fr> for Product {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fr>) -> Result<(), SynthesisError> {
@@ -16,7 +18,7 @@ impl ConstraintSynthesizer<Fr> for Product {
         let b = cs.new_witness_variable(|| Ok(Fr::from(7u64)))?;
         let product = cs.new_input_variable(|| Ok(Fr::from(42u64)))?;
         cs.enforce_constraint(lc!() + a, lc!() + b, lc!() + product)?;
-        for value in 1u64..=192 {
+        for value in 1u64..=self.context_inputs {
             let context = cs.new_input_variable(|| Ok(Fr::from(value)))?;
             let square = cs.new_witness_variable(|| Ok(Fr::from(value * value)))?;
             cs.enforce_constraint(lc!() + context, lc!() + context, lc!() + square)?;
@@ -34,10 +36,19 @@ fn encoded(value: &impl CanonicalSerialize) -> String {
 }
 
 fn main() {
+    let context_inputs = std::env::args()
+        .nth(1)
+        .map(|value| value.parse::<u64>().expect("context input count"))
+        .unwrap_or(192);
+    assert!(
+        context_inputs < 2048,
+        "fixture exceeds verifier input bound"
+    );
+    let circuit = Product { context_inputs };
     let mut rng = rand::thread_rng();
-    let pk = Groth16::<Bn254>::generate_random_parameters_with_reduction(Product, &mut rng)
+    let pk = Groth16::<Bn254>::generate_random_parameters_with_reduction(circuit.clone(), &mut rng)
         .expect("fixture setup");
-    let proof = Groth16::<Bn254>::create_random_proof_with_reduction(Product, &pk, &mut rng)
+    let proof = Groth16::<Bn254>::create_random_proof_with_reduction(circuit, &pk, &mut rng)
         .expect("fixture proof");
     println!(
         "{}",
@@ -45,8 +56,8 @@ fn main() {
             "development_only": true,
             "verifying_key_hex": hex::encode(near_verifier::prepare_key(&hex::decode(encoded(&pk.vk)).unwrap()).unwrap()),
             "proof_hex": encoded(&proof),
-            "public_inputs": std::iter::once(42u64).chain(1u64..=192).map(|value| encoded(&Fr::from(value))).collect::<Vec<_>>(),
-            "wrong_inputs": std::iter::once(43u64).chain(1u64..=192).map(|value| encoded(&Fr::from(value))).collect::<Vec<_>>()
+            "public_inputs": std::iter::once(42u64).chain(1u64..=context_inputs).map(|value| encoded(&Fr::from(value))).collect::<Vec<_>>(),
+            "wrong_inputs": std::iter::once(43u64).chain(1u64..=context_inputs).map(|value| encoded(&Fr::from(value))).collect::<Vec<_>>()
         })
     );
 }

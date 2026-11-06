@@ -1,0 +1,9 @@
+{
+  "name": "@confidential-lending/wallet",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts", "./worker": "./src/worker.ts" },
+  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit", "test": "tsx --test test/*.test.ts" },
+  "dependencies": { "@confidential-lending/client": "workspace:*" }
+}
