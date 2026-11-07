@@ -288,6 +288,33 @@ describe('real Core client mapping', () => {
     ])
   })
 
+  it('pins membership and broker status reads to one finalized block when supported', async () => {
+    const block = { hash: 'finalized-block', height: 42 }
+    const pinnedCalls: Array<{ block: unknown; method: string }> = []
+    let finalizedBlockReads = 0
+    const transport: NearContractTransport = {
+      view: async () => { throw new Error('closure reads must use the pinned view') },
+      finalizedBlock: async () => {
+        finalizedBlockReads += 1
+        return block
+      },
+      viewAt: async <T>(readBlock: { hash: string; height: number }, method: string, args?: Record<string, unknown>) => {
+        pinnedCalls.push({ block: readBlock, method })
+        if (method === 'get_vault_broker_ids') return ['1', '2'] as T
+        if (method === 'get_broker' && args?.broker_id === '1') return { broker_id: '1', vault_id: '7' } as T
+        if (method === 'get_broker') return null as T
+        if (method === 'get_broker_tombstone') return { broker_id: '2', tombstoned: true } as T
+        throw new Error(`unexpected view ${method}`)
+      },
+      call: async () => { throw new Error('not used') },
+    }
+
+    await expect(new NearProtocolClient(transport, config).getVaultClosureBrokerIds('7')).resolves.toEqual(['1'])
+    expect(finalizedBlockReads).toBe(1)
+    expect(pinnedCalls).toHaveLength(4)
+    expect(pinnedCalls.every(({ block: readBlock }) => readBlock === block)).toBe(true)
+  })
+
   it('keeps live brokers across append-only membership pagination', async () => {
     const firstPage = Array.from({ length: 50 }, (_, index) => String(index + 1))
     const secondPage = ['51', '52']
@@ -346,7 +373,7 @@ describe('real Core client mapping', () => {
         if (method === 'get_proposal') return null as T
         if (nextArgs.limit !== undefined) {
           if (nextArgs.limit !== 50) throw new Error('Core bounded list limit must be 50')
-          if (method === 'list_vaults' && nextArgs.cursor === '50') return [{ vault_id: '51', owner: 'broker.testnet', asset_id: 'token.testnet', assets_total: '0', assets_available: '0', shares_total: '0', accounting_pending: false, accounting_version: '0', phase: 'Investment', kind: 'ClosedEnded' }] as T
+          if (method === 'list_vaults' && nextArgs.cursor === '50') return [{ vault_id: '51', owner: 'broker.testnet', asset_id: 'token.testnet', assets_total: '0', loss_unrealized: '0', assets_available: '0', shares_total: '0', accounting_pending: false, accounting_version: '0', phase: 'Investment', kind: 'ClosedEnded' }] as T
           return [] as T
         }
         if (method === 'get_share_balance') return '0' as T
@@ -357,6 +384,7 @@ describe('real Core client mapping', () => {
     const dashboard = await new NearProtocolClient(transport, config).getDashboard('alice.testnet')
     expect(dashboard.vaults.map((vault) => vault.vaultId)).toEqual(['51'])
     expect(dashboard.vaults[0]?.phase).toBe('investment')
+    expect(dashboard.vaults[0]?.lossUnrealized).toBe('0')
     const pagedMethods = ['list_vaults', 'list_brokers', 'list_claims', 'list_payouts', 'list_loans']
     for (const method of pagedMethods) {
       const pages = requests.filter((request) => request.method === method)

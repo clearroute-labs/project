@@ -103,6 +103,7 @@ export interface VaultSummary {
   assetAccount: string
   decimals: number
   assetsTotal: string
+  lossUnrealized: string
   assetsAvailable: string
   sharesSupply: string
   yourShares?: string

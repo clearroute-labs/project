@@ -19,7 +19,7 @@ import type {
   WalletAdapter,
 } from './types'
 import { ProtocolError } from './types'
-import { ContractClient, NearRpc, type WalletAdapter as RpcWalletAdapter } from '@confidential-lending/client'
+import { ContractClient, NearRpc, type FinalizedBlock, type WalletAdapter as RpcWalletAdapter } from '@confidential-lending/client'
 
 /**
  * Minimal bridge expected from the real NEAR SDK. The root client package
@@ -28,6 +28,9 @@ import { ContractClient, NearRpc, type WalletAdapter as RpcWalletAdapter } from 
  */
 export interface NearContractTransport {
   view<T>(method: string, args?: Record<string, unknown>, signal?: AbortSignal): Promise<T>
+  /** Optional pinned view support used for multi-read consistency checks. */
+  finalizedBlock?(signal?: AbortSignal): Promise<FinalizedBlock>
+  viewAt?<T>(block: FinalizedBlock, method: string, args?: Record<string, unknown>, signal?: AbortSignal): Promise<T>
   call(method: string, args: Record<string, unknown>, options?: { deposit?: string; gas?: string; receiverId?: string; signal?: AbortSignal }): Promise<NearCallResult | undefined>
 }
 
@@ -317,7 +320,7 @@ type RawAssetProfile = { token_account: string; decimals: number; controller_acc
 type RawHolder = { owner: string; asset_id: string; key_id: string | number; authorization_epoch?: string | number; public_key?: unknown; encryption_public_key?: unknown; encryption_key?: { public_key?: unknown }; spending_ciphertext: unknown; inbox_ciphertext: unknown; issuer_balance_ciphertext?: unknown; auditor_balance_ciphertext?: unknown; spending_commitment?: unknown; inbox_commitment?: unknown; spending_version: string | number }
 type RawBroker = { broker_id: string | number; owner: string; vault_id: string | number; debt_total: unknown; debt_maximum: unknown; spending_version: string | number; book_version: string | number; loan_book_root?: unknown; encryption_key_id: string | number; authorization_epoch?: string | number; encryption_public_key?: unknown; spending_ciphertext: unknown; inbox_ciphertext: unknown; issuer_balance_ciphertext?: unknown; auditor_balance_ciphertext?: unknown; spending_commitment?: unknown; inbox_commitment?: unknown; active_principal_ciphertext?: unknown; impaired_principal_ciphertext?: unknown; active_principal_commitment?: unknown; impaired_principal_commitment?: unknown; impairment_provision?: unknown; accounting_pending: boolean; accounting_version: string | number; risk_version?: string | number; delegates?: RawKeeper[] }
 type RawBrokerTombstone = { broker_id: string | number; tombstoned: boolean }
-type RawVault = { vault_id: string | number; owner: string; asset_id: string; assets_total: unknown; assets_available: unknown; shares_total: unknown; share_scale?: number; checkpoint_policy?: { epoch_seconds?: string | number; disclosure_policy?: string }; accounting_pending: boolean; accounting_version: string | number; phase?: string | null; kind?: string }
+type RawVault = { vault_id: string | number; owner: string; asset_id: string; assets_total: unknown; loss_unrealized: unknown; assets_available: unknown; shares_total: unknown; share_scale?: number; checkpoint_policy?: { epoch_seconds?: string | number; disclosure_policy?: string }; accounting_pending: boolean; accounting_version: string | number; phase?: string | null; kind?: string }
 type RawLoan = { loan_id: string | number; broker_id: string | number; borrower: string; proposal_id: string | number; payment_interval: string | number; grace_period: string | number; next_due?: string | number | null; payment_total: number; payment_remaining: number; status: string; impaired?: boolean; loan_version: string | number; borrower_key_id?: string | number; broker_key_id?: string | number; loan_auditor_key_id?: string | number; loan_auditor_public_key?: unknown; principal_ciphertexts?: unknown[]; initial_owed_ciphertexts?: unknown[]; amount_owed_ciphertexts?: unknown[]; periodic_payment_ciphertexts?: unknown[]; principal_remaining_ciphertexts?: unknown[]; cumulative_repaid_ciphertexts?: unknown[]; accounting_leaf?: unknown }
 type RawProposal = { proposal_id: string | number; borrower: string; broker_id: string | number; vault_id: string | number; borrower_key_id?: string | number; broker_key_id?: string | number; expiry: string | number; agreement_digest: unknown; principal_ciphertexts?: unknown[]; initial_owed_ciphertexts?: unknown[]; periodic_payment_ciphertexts?: unknown[]; principal_commitment?: unknown; owed_commitment?: unknown; payment_commitment?: unknown; loan_auditor_public_key?: unknown; consumed: boolean; revoked: boolean; broker_signature?: unknown; borrower_signature?: unknown; broker_authorization_epoch?: string | number; borrower_authorization_epoch?: string | number; broker_authorization_key_id?: string | number | null; borrower_authorization_key_id?: string | number | null; broker_direct_authorized?: boolean; borrower_direct_authorized?: boolean; loan_auditor_key_id: string | number }
 type RawCounters = {
@@ -431,7 +434,7 @@ function mapVault(raw: RawVault, shares?: string): import('./types').VaultSummar
         : raw.phase === 'Redemption'
           ? 'redemption'
           : 'open'
-  return { vaultId: decimal(raw.vault_id), ownerId: raw.owner, assetAccount: raw.asset_id, phase, decimals: 0, assetsTotal: decimal(raw.assets_total), assetsAvailable: decimal(raw.assets_available), sharesSupply: decimal(raw.shares_total), yourShares: shares, shareScale: raw.share_scale, ...(raw.checkpoint_policy?.epoch_seconds === undefined ? {} : { checkpointEpochSeconds: decimal(raw.checkpoint_policy.epoch_seconds) }), ...(raw.checkpoint_policy?.disclosure_policy === undefined ? {} : { checkpointDisclosurePolicy: raw.checkpoint_policy.disclosure_policy }), accountingVersion: decimal(raw.accounting_version), checkpointStatus: raw.accounting_pending ? 'pending' : 'current' }
+  return { vaultId: decimal(raw.vault_id), ownerId: raw.owner, assetAccount: raw.asset_id, phase, decimals: 0, assetsTotal: decimal(raw.assets_total), lossUnrealized: decimal(raw.loss_unrealized), assetsAvailable: decimal(raw.assets_available), sharesSupply: decimal(raw.shares_total), yourShares: shares, shareScale: raw.share_scale, ...(raw.checkpoint_policy?.epoch_seconds === undefined ? {} : { checkpointEpochSeconds: decimal(raw.checkpoint_policy.epoch_seconds) }), ...(raw.checkpoint_policy?.disclosure_policy === undefined ? {} : { checkpointDisclosurePolicy: raw.checkpoint_policy.disclosure_policy }), accountingVersion: decimal(raw.accounting_version), checkpointStatus: raw.accounting_pending ? 'pending' : 'current' }
 }
 
 function mapLoan(raw: RawLoan): import('./types').LoanSummary {
@@ -562,13 +565,13 @@ export class NearProtocolClient implements ProtocolClient {
     return { brokerId, encryptionKeyId: decimal(key.key_id), publicKey: bytesToPointHex(key.public_key, 'broker encryption public key') }
   }
 
-  async getVaultBrokerIds(vaultId: string): Promise<string[]> {
+  private async readVaultBrokerIds(vaultId: string, view: NearContractTransport['view']): Promise<string[]> {
     // This endpoint pages an append-only membership vector by element offset,
     // not by broker ID. Empty/tombstoned entries therefore only terminate the
     // scan when the returned page is shorter than Core's bounded page size.
     const values: unknown[] = []
     for (let cursor = 0n; ; cursor += BigInt(CORE_VIEW_PAGE_LIMIT)) {
-      const page = await this.transport.view<unknown[]>('get_vault_broker_ids', { vault_id: wireId(vaultId), cursor: cursor.toString(), limit: CORE_VIEW_PAGE_LIMIT })
+      const page = await view<unknown[]>('get_vault_broker_ids', { vault_id: wireId(vaultId), cursor: cursor.toString(), limit: CORE_VIEW_PAGE_LIMIT })
       if (!Array.isArray(page)) throw new ProtocolError({ category: 'INVALID_ENCODING', message: 'Core returned an invalid vault broker membership page.' })
       values.push(...page)
       if (page.length < CORE_VIEW_PAGE_LIMIT) break
@@ -576,13 +579,26 @@ export class NearProtocolClient implements ProtocolClient {
     return values.map((value) => decimal(value))
   }
 
+  async getVaultBrokerIds(vaultId: string): Promise<string[]> {
+    return this.readVaultBrokerIds(vaultId, this.transport.view.bind(this.transport))
+  }
+
   async getVaultClosureBrokerIds(vaultId: string): Promise<string[]> {
     const canonicalVaultId = wireId(vaultId)
-    const membership = await this.getVaultBrokerIds(canonicalVaultId)
+    // Membership and status records must describe one finalized state. The
+    // production RPC transport exposes a pinned-view pair; test/injected
+    // transports that only expose finalized `view` retain the safe fallback.
+    const block = this.transport.finalizedBlock && this.transport.viewAt
+      ? await this.transport.finalizedBlock()
+      : undefined
+    const view: NearContractTransport['view'] = block && this.transport.viewAt
+      ? <T>(method: string, args?: Record<string, unknown>, signal?: AbortSignal) => this.transport.viewAt!(block, method, args, signal)
+      : this.transport.view.bind(this.transport)
+    const membership = await this.readVaultBrokerIds(canonicalVaultId, view)
     const liveBrokerIds: string[] = []
 
     for (const brokerId of membership) {
-      const broker = await this.transport.view<RawBroker | null>('get_broker', { broker_id: wireId(brokerId) })
+      const broker = await view<RawBroker | null>('get_broker', { broker_id: wireId(brokerId) })
       if (broker !== null) {
         if (!broker || typeof broker !== 'object' || Array.isArray(broker)) {
           throw new ProtocolError({ category: 'INVALID_ENCODING', message: `Core returned an invalid active broker record for vault ${canonicalVaultId}.` })
@@ -602,7 +618,7 @@ export class NearProtocolClient implements ProtocolClient {
         continue
       }
 
-      const tombstone = await this.transport.view<RawBrokerTombstone | null>('get_broker_tombstone', { broker_id: wireId(brokerId) })
+      const tombstone = await view<RawBrokerTombstone | null>('get_broker_tombstone', { broker_id: wireId(brokerId) })
       if (!tombstone || typeof tombstone !== 'object' || Array.isArray(tombstone)) {
         throw new ProtocolError({ category: 'INVALID_ENCODING', message: `Core returned no tombstone for closed vault broker ${brokerId}.` })
       }
@@ -902,6 +918,8 @@ export function createRpcProtocolClient(config: DeploymentConfig, session: NearW
   })
   const transport: NearContractTransport = {
     view: (method, args, signal) => contract.view(method, args as never, signal),
+    finalizedBlock: (signal) => rpc.finalizedBlock(signal),
+    viewAt: (block, method, args, signal) => rpc.viewAt(block, config.coreAccountId, method, args as never, signal),
     call: async (method, args, options) => {
       const outcome = await contract.call(signer, method, args as never, options)
       if (!outcome) return { status: 'pending', finalized: false }
