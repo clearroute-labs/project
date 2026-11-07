@@ -5480,6 +5480,37 @@ impl Core {
         let operation = args.operation.as_str();
         let mut view;
         let context = match operation {
+            "holder-zero-total" => {
+                let owner = args.account_id?;
+                let holder = self.holders.get(&owner)?;
+                let combined =
+                    combine_ciphertexts(&holder.spending_ciphertext, &holder.inbox_ciphertext);
+                view = self.prepare_context(
+                    args.operation.clone(),
+                    vec![holder.encryption_key.key_id],
+                    vec![owner.clone()],
+                    vec![holder.spending_version, holder.authorization_epoch],
+                    to_vec(&(
+                        holder.encryption_key.key_id,
+                        holder.spending_version,
+                        holder.authorization_epoch,
+                        combined.clone(),
+                    ))
+                    .unwrap_or_default(),
+                );
+                view.ciphertexts = vec![combined, holder.encryption_key.public_key.clone()];
+                self.crypto_context_with_subject(
+                    "holder-zero-total",
+                    0,
+                    0,
+                    0,
+                    0,
+                    [holder.spending_version, 0, 0, 0, 0, 0, 0, 0],
+                    [holder.authorization_epoch, 0, 0, 0],
+                    0,
+                    owner.as_ref(),
+                )
+            }
             "register-holder" => {
                 let owner = args.account_id?;
                 let key_id = args.key_id.or(args.primary_id)?;
@@ -7107,7 +7138,7 @@ fn statement_kind_for_operation(operation: &str) -> Option<u8> {
         "originate" => Some(4),
         "repay" => Some(5),
         "reconcile-credit" | "settle-reconcile" | "manage-loan" => Some(6),
-        "broker-zero" | "broker-zero-total" | "loan-zero" => Some(7),
+        "holder-zero-total" | "broker-zero" | "broker-zero-total" | "loan-zero" => Some(7),
         "holder" => Some(8),
         _ => None,
     }
