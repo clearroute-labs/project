@@ -167,13 +167,20 @@ impl VerifierProbe {
         let Ok(proof) = envelope.proof_bytes() else {
             return false;
         };
-        near_verifier::verify_prepared(key, &proof, &statement_inputs).unwrap_or(false)
+        if !near_verifier::verify_prepared(key, &proof, &statement_inputs).unwrap_or(false) {
+            return false;
+        }
+        // The fixed circuit has now established subgroup membership for every
+        // point in this exact statement. Promote only those fields; unrelated
+        // statement-cache entries remain untrusted and are never promoted.
+        statement.promote_after_verified_proof().is_ok()
     }
 }
 
 /// Derive the authoritative public slots using the same typed builder exposed
 /// to Core. Statement deserialization has already performed strict canonical
-/// decoding and subgroup checks; the bounded point cache makes the subsequent
+/// and on-curve decoding; subgroup membership is established by the verified
+/// fixed-circuit cofactor relation. The bounded point cache makes subsequent
 /// coordinate extraction reusable within the transaction.
 fn statement_public_values(statement: &Statement) -> Option<Vec<Fr>> {
     statement.public_slots_without_hash().ok()

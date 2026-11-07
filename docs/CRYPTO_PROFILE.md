@@ -8,18 +8,19 @@ setup command is not suitable for a funded release.
 ## Suite identity
 
 The suite identifier is
-`near-confidential-lending-bn254-edwards-groth16-v1` and the profile version
-is `1`. `profile_hash()` returns the SHA-256 digest of the following exact
+`near-confidential-lending-bn254-edwards-groth16-v3` and the profile version
+is `3`. `profile_hash()` returns the SHA-256 digest of the following exact
 UTF-8 manifest, including the final newline:
 
 ```text
-near-confidential-lending-bn254-edwards-groth16-v1
-version=1
+near-confidential-lending-bn254-edwards-groth16-v3
+version=3
 curve=ark-ed-on-bn254;subgroup=prime-order;encoding=compressed-32-byte-lower-hex
 elgamal=C=(rG,mG+rPK);pedersen=mG+rH;H=NEAR-CONFIDENTIAL-LENDING/PEDERSEN-H/v1:sha256-try-and-increment:cofactor8
 proof=arkworks-groth16-bn254;proof-compressed=canonical;field-input=canonical-le32
 poseidon=width3;rate2;capacity1;alpha5;full8;partial57;grain-skip0
 transcript=domain-field+slot-count+all-fixed-kind-slots;poseidon-field-output
+point-membership=statement-on-curve-plus-private-cofactor-preimage-[8]Q=P;generic-points=strict-prime-subgroup
 max-amount=9223372036854775807;slot-capacity=320
 transfer-views=5;loan-reader-views=3
 recovery=proof-bound-two-encrypted-u32-limbs;authenticated-records-hints-only
@@ -27,7 +28,7 @@ setup=development-single-party-rejected-funded
 ```
 
 The current suite hash is
-`5ba4cf2e37fcc1fe7c97c7dd6efb9848fff93ff4626b2bb5346bb0c56160c070`.
+`bac68a9fbaefea1228279a3665beeb9f082a520b9886b94c2d9713428122b8db`.
 This is intentionally separate from a deployment artifact-manifest hash. A
 deployment manifest must hash each proving key, verifying key, WASM binary and
 native binary; those artifact hashes are not included in the immutable suite
@@ -53,14 +54,20 @@ specified derivation; an independent review is required before funded use.
 Points, Edwards scalars, and BN254 public-input fields are serialized as
 exactly 32 bytes, lower-case hexadecimal. Decoding rejects wrong lengths,
 upper-case or non-hex characters, non-canonical encodings, off-curve points,
-wrong-subgroup points, and zero keys/secrets where a key is required. Point
-decoding uses arkworks `Validate::Yes`; identity points are accepted in
-homomorphic ciphertext/commitment components and rejected by key constructors.
-After a point has passed all canonical, on-curve, subgroup, and applicable
-identity checks, the Rust implementation may retain its affine value in a
-bounded per-thread cache (at most 1024 exact wire-string keys). Cache hits
-still apply the key/non-identity policy, and the cache is not protocol state
-or a substitute for validation of a cache miss.
+and zero keys/secrets where a key is required. Generic point APIs reject
+non-subgroup points. Statement parsing additionally checks canonical encoding
+and the curve equation; the fixed Groth16 circuit proves prime-subgroup
+membership by allocating a private Q and constraining `[8]Q = P`. This moves
+the expensive subgroup relation into the proof without accepting an
+unvalidated point as a generic key or ciphertext. Statement-only
+canonical/on-curve cache entries are kept separate from the strict
+validated-point cache and are never returned by generic decoding. Cache hits
+still apply the key/non-identity policy, and both caches are bounded per
+thread and are not protocol state.
+After the exact statement's Groth16 proof verifies, the verifier may call
+`Statement::promote_after_verified_proof()` to promote only that statement's
+point fields into the strict cache before homomorphic state updates. No
+thread-local cache-wide promotion is permitted.
 Groth16 proof and verifying-key bytes use arkworks canonical compressed
 serialization. Public BN254 inputs passed to a host verifier are canonical
 little-endian 32-byte field encodings.

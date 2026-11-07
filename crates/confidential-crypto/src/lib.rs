@@ -39,8 +39,8 @@ pub use statement::{
     RecoveryPair, RepaymentStatement, RepaymentWitness, Statement, StatementKind, TransferView,
 };
 
-pub const PROFILE_ID: &str = "near-confidential-lending-bn254-edwards-groth16-v1";
-pub const PROFILE_VERSION: u32 = 1;
+pub const PROFILE_ID: &str = "near-confidential-lending-bn254-edwards-groth16-v3";
+pub const PROFILE_VERSION: u32 = 3;
 pub const MAX_AMOUNT: u64 = (1u64 << 63) - 1;
 /// Fixed slot capacity. Repayment carries five transfer recovery pairs plus
 /// recovery pairs for each owed/principal delta; origination carries principal
@@ -49,10 +49,10 @@ pub const MAX_AMOUNT: u64 = (1u64 << 63) - 1;
 pub const CONTEXT_SLOTS: usize = 320;
 /// Canonical suite description. Artifact/VK/WASM hashes are deployment
 /// artifacts and are intentionally not part of this immutable suite hash.
-pub const PROFILE_MANIFEST: &str = "near-confidential-lending-bn254-edwards-groth16-v1\nversion=1\ncurve=ark-ed-on-bn254;subgroup=prime-order;encoding=compressed-32-byte-lower-hex\nelgamal=C=(rG,mG+rPK);pedersen=mG+rH;H=NEAR-CONFIDENTIAL-LENDING/PEDERSEN-H/v1:sha256-try-and-increment:cofactor8\nproof=arkworks-groth16-bn254;proof-compressed=canonical;field-input=canonical-le32\nposeidon=width3;rate2;capacity1;alpha5;full8;partial57;grain-skip0\ntranscript=domain-field+slot-count+all-fixed-kind-slots;poseidon-field-output\nmax-amount=9223372036854775807;slot-capacity=320\ntransfer-views=5;loan-reader-views=3\nrecovery=proof-bound-two-encrypted-u32-limbs;authenticated-records-hints-only\nsetup=development-single-party-rejected-funded-release\n";
+pub const PROFILE_MANIFEST: &str = "near-confidential-lending-bn254-edwards-groth16-v3\nversion=3\ncurve=ark-ed-on-bn254;subgroup=prime-order;encoding=compressed-32-byte-lower-hex\nelgamal=C=(rG,mG+rPK);pedersen=mG+rH;H=NEAR-CONFIDENTIAL-LENDING/PEDERSEN-H/v1:sha256-try-and-increment:cofactor8\nproof=arkworks-groth16-bn254;proof-compressed=canonical;field-input=canonical-le32\nposeidon=width3;rate2;capacity1;alpha5;full8;partial57;grain-skip0\ntranscript=domain-field+slot-count+all-fixed-kind-slots;poseidon-field-output\npoint-membership=statement-on-curve-plus-private-cofactor-preimage-[8]Q=P;generic-points=strict-prime-subgroup\nmax-amount=9223372036854775807;slot-capacity=320\ntransfer-views=5;loan-reader-views=3\nrecovery=proof-bound-two-encrypted-u32-limbs;authenticated-records-hints-only\nsetup=development-single-party-rejected-funded-release\n";
 pub const PROFILE_HASH: [u8; 32] = [
-    0x5b, 0xa4, 0xcf, 0x2e, 0x37, 0xfc, 0xc1, 0xfe, 0x7c, 0x97, 0xc7, 0xdd, 0x6e, 0xfb, 0x98, 0x48,
-    0xff, 0xf9, 0x3f, 0xf4, 0x62, 0x6b, 0x2b, 0xb5, 0x34, 0x6b, 0xb0, 0xc5, 0x61, 0x60, 0xc0, 0x70,
+    0xba, 0xc6, 0x8a, 0x9f, 0xba, 0xef, 0xea, 0x12, 0x28, 0x27, 0x9a, 0x36, 0x65, 0xbe, 0xeb, 0x9f,
+    0x08, 0x2a, 0x52, 0x0b, 0x98, 0x86, 0xb9, 0x4c, 0x2d, 0x97, 0x13, 0x42, 0x81, 0x22, 0xb8, 0xdb,
 ];
 
 pub fn profile_id() -> &'static str {

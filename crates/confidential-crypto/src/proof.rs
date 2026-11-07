@@ -5,14 +5,15 @@ use ark_bn254::{Bn254, Fr};
 use ark_crypto_primitives::sponge::{
     constraints::CryptographicSpongeVar, poseidon::constraints::PoseidonSpongeVar,
 };
-use ark_ec::CurveGroup;
+use ark_ec::{AffineRepr, CurveGroup};
 use ark_ec::twisted_edwards::TECurveConfig;
 use ark_ed_on_bn254::{EdwardsConfig, constraints::FqVar};
 use ark_ff::{BigInteger, Field, PrimeField, Zero};
 use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey, prepare_verifying_key};
 use ark_r1cs_std::{
-    boolean::Boolean, convert::ToBitsGadget, eq::EqGadget, fields::fp::FpVar, groups::CurveVar,
-    groups::curves::twisted_edwards::AffineVar, prelude::*,
+    alloc::AllocationMode, boolean::Boolean, convert::ToBitsGadget, eq::EqGadget,
+    fields::fp::FpVar, groups::CurveVar, groups::curves::twisted_edwards::AffineVar,
+    prelude::*,
 };
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress, Validate};
@@ -936,6 +937,24 @@ impl SlotCursor {
         let y = self.field(slots);
         let point = PointVar::new(x, y);
         enforce_on_curve(&point)?;
+        // Allocate a private cofactor preimage and constrain [8]Q = P. This
+        // proves prime-subgroup membership inside Groth16 while letting the
+        // contract parser avoid repeating the expensive full-[r] check for
+        // every distinct ciphertext coordinate.
+        let mut preimage = PointVar::new_variable_omit_on_curve_check(
+            point.x.cs(),
+            || {
+                Ok(ark_ed_on_bn254::EdwardsProjective::from(
+                    point.value()?.into_affine().mul_by_cofactor_inv(),
+                ))
+            },
+            AllocationMode::Witness,
+        )?;
+        enforce_on_curve(&preimage)?;
+        for _ in 0..3 {
+            preimage.double_in_place()?;
+        }
+        preimage.enforce_equal(&point)?;
         Ok(point)
     }
 

@@ -1,11 +1,13 @@
 use ark_bn254::Fr;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::CryptoError;
 use crate::commitment::Commitment;
 use crate::context::{OperationContext, PublicSlots, SlotBuilder, transcript_hash};
 use crate::elgamal::{Ciphertext, PublicKey};
-use crate::encoding::{FieldHex, ScalarHex};
+use crate::encoding::{
+    FieldHex, PointHex, ScalarHex, with_statement_point_subgroup_check,
+};
 
 pub const TRANSFER_VIEW_COUNT: usize = 5;
 pub const LOAN_READER_COUNT: usize = 3;
@@ -335,7 +337,7 @@ pub struct BalanceAssertionWitness {
     pub secret_key: crate::SecretKey,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 // One bounded statement is processed per proof; preserve the direct typed API without heap indirection.
 #[allow(clippy::large_enum_variant)]
 pub enum Statement {
@@ -349,7 +351,178 @@ pub enum Statement {
     Ownership(BalanceAssertionStatement),
 }
 
+#[derive(Deserialize)]
+#[allow(clippy::large_enum_variant)]
+enum StatementWire {
+    KeyPossession(KeyPossessionStatement),
+    PublicConversion(PublicConversionStatement),
+    ConfidentialTransfer(ConfidentialTransferStatement),
+    Origination(OriginationStatement),
+    Repayment(RepaymentStatement),
+    Reconciliation(ReconciliationStatement),
+    ZeroBalance(BalanceAssertionStatement),
+    Ownership(BalanceAssertionStatement),
+}
+
+impl<'de> Deserialize<'de> for Statement {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = with_statement_point_subgroup_check(|| StatementWire::deserialize(deserializer))?;
+        Ok(match wire {
+            StatementWire::KeyPossession(value) => Self::KeyPossession(value),
+            StatementWire::PublicConversion(value) => Self::PublicConversion(value),
+            StatementWire::ConfidentialTransfer(value) => Self::ConfidentialTransfer(value),
+            StatementWire::Origination(value) => Self::Origination(value),
+            StatementWire::Repayment(value) => Self::Repayment(value),
+            StatementWire::Reconciliation(value) => Self::Reconciliation(value),
+            StatementWire::ZeroBalance(value) => Self::ZeroBalance(value),
+            StatementWire::Ownership(value) => Self::Ownership(value),
+        })
+    }
+}
+
+fn promote_point(point: &PointHex) -> Result<(), CryptoError> {
+    point.promote_after_verified_statement()
+}
+
+fn promote_public_key(key: &PublicKey) -> Result<(), CryptoError> {
+    promote_point(&key.point)
+}
+
+fn promote_ciphertext(ciphertext: &crate::Ciphertext) -> Result<(), CryptoError> {
+    promote_point(&ciphertext.ephemeral)?;
+    promote_point(&ciphertext.message)
+}
+
+fn promote_commitment(commitment: &Commitment) -> Result<(), CryptoError> {
+    promote_point(&commitment.point)
+}
+
+fn promote_reader_view(view: &ReaderView) -> Result<(), CryptoError> {
+    promote_public_key(&view.reader_key)?;
+    promote_ciphertext(&view.ciphertext)
+}
+
+fn promote_recovery_pair(pair: &RecoveryPair) -> Result<(), CryptoError> {
+    promote_ciphertext(&pair.low_limb)?;
+    promote_ciphertext(&pair.high_limb)
+}
+
 impl Statement {
+    /// Promote only the point fields of this exact statement after its
+    /// complete Groth16 proof has verified. The proof's fixed circuit checks
+    /// the prime-subgroup relation for every point, allowing Core to apply
+    /// homomorphic updates without repeating host subgroup multiplication.
+    ///
+    /// This is an optimization cache, not an authorization primitive. It must
+    /// never be called for an unverified or partially parsed statement.
+    pub fn promote_after_verified_proof(&self) -> Result<(), CryptoError> {
+        match self {
+            Self::KeyPossession(statement) => promote_public_key(&statement.public_key),
+            Self::PublicConversion(statement) => {
+                promote_public_key(&statement.owner_key)?;
+                promote_ciphertext(&statement.spending_before)?;
+                promote_ciphertext(&statement.spending_after)?;
+                for view in &statement.views {
+                    promote_reader_view(view)?;
+                }
+                Ok(())
+            }
+            Self::ConfidentialTransfer(statement) => {
+                promote_public_key(&statement.sender_key)?;
+                promote_public_key(&statement.recipient_key)?;
+                promote_ciphertext(&statement.sender_spending_before)?;
+                promote_ciphertext(&statement.sender_spending_after)?;
+                for view in &statement.transfer_views {
+                    promote_reader_view(view)?;
+                }
+                for pair in &statement.transfer_recovery {
+                    promote_recovery_pair(pair)?;
+                }
+                promote_commitment(&statement.amount_commitment)
+            }
+            Self::Origination(statement) => {
+                promote_public_key(&statement.broker_key)?;
+                promote_public_key(&statement.borrower_key)?;
+                promote_ciphertext(&statement.broker_spending_before)?;
+                promote_ciphertext(&statement.broker_spending_after)?;
+                for view in &statement.transfer_views {
+                    promote_reader_view(view)?;
+                }
+                for pair in &statement.transfer_recovery {
+                    promote_recovery_pair(pair)?;
+                }
+                promote_commitment(&statement.principal_commitment)?;
+                for view in &statement.owed_views {
+                    promote_reader_view(view)?;
+                }
+                for pair in &statement.owed_recovery {
+                    promote_recovery_pair(pair)?;
+                }
+                for view in &statement.payment_views {
+                    promote_reader_view(view)?;
+                }
+                for pair in &statement.payment_recovery {
+                    promote_recovery_pair(pair)?;
+                }
+                promote_commitment(&statement.owed_commitment)?;
+                promote_commitment(&statement.payment_commitment)
+            }
+            Self::Repayment(statement) => {
+                promote_public_key(&statement.borrower_key)?;
+                promote_public_key(&statement.broker_key)?;
+                promote_ciphertext(&statement.borrower_spending_before)?;
+                promote_ciphertext(&statement.borrower_spending_after)?;
+                for view in &statement.transfer_views {
+                    promote_reader_view(view)?;
+                }
+                for pair in &statement.transfer_recovery {
+                    promote_recovery_pair(pair)?;
+                }
+                for view in &statement.owed_before {
+                    promote_reader_view(view)?;
+                }
+                for view in &statement.owed_after {
+                    promote_reader_view(view)?;
+                }
+                for view in &statement.owed_delta {
+                    promote_reader_view(view)?;
+                }
+                for pair in &statement.owed_delta_recovery {
+                    promote_recovery_pair(pair)?;
+                }
+                for view in &statement.periodic_payment {
+                    promote_reader_view(view)?;
+                }
+                for view in &statement.principal_before {
+                    promote_reader_view(view)?;
+                }
+                for view in &statement.principal_after {
+                    promote_reader_view(view)?;
+                }
+                for view in &statement.principal_delta {
+                    promote_reader_view(view)?;
+                }
+                for pair in &statement.principal_delta_recovery {
+                    promote_recovery_pair(pair)?;
+                }
+                promote_commitment(&statement.principal_delta_commitment)
+            }
+            Self::Reconciliation(statement) => {
+                promote_public_key(&statement.broker_key)?;
+                promote_ciphertext(&statement.cash)?;
+                promote_ciphertext(&statement.active_principal)?;
+                promote_ciphertext(&statement.impaired_principal)?;
+                promote_commitment(&statement.cash_commitment)?;
+                promote_commitment(&statement.active_principal_commitment)?;
+                promote_commitment(&statement.impaired_principal_commitment)
+            }
+            Self::ZeroBalance(statement) | Self::Ownership(statement) => {
+                promote_public_key(&statement.owner_key)?;
+                promote_ciphertext(&statement.ciphertext)
+            }
+        }
+    }
+
     pub fn kind(&self) -> StatementKind {
         match self {
             Self::KeyPossession(_) => StatementKind::KeyPossession,
@@ -541,7 +714,7 @@ impl Statement {
     /// these exact slots; contract callers that already carry the canonical
     /// envelope digest can therefore avoid duplicate host hashing.
     pub fn public_slots_without_hash(&self) -> Result<Vec<Fr>, CryptoError> {
-        self.build_slot_values()
+        with_statement_point_subgroup_check(|| self.build_slot_values())
     }
 
     pub fn context_digest(&self) -> Result<FieldHex, CryptoError> {

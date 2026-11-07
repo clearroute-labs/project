@@ -5,13 +5,14 @@ use ark_ff::AdditiveGroup;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress, Validate};
 use ark_std::{io::Cursor, Zero};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::CryptoError;
 
 const MAX_VALIDATED_POINT_CACHE_ENTRIES: usize = 1024;
+const MAX_STATEMENT_POINT_CACHE_ENTRIES: usize = 512;
 
 thread_local! {
     /// Decoding a compressed Edwards point with `Validate::Yes` performs the
@@ -22,6 +23,38 @@ thread_local! {
     /// state.
     static VALIDATED_POINT_CACHE: RefCell<BTreeMap<String, EdwardsAffine>> =
         const { RefCell::new(BTreeMap::new()) };
+    /// Canonical/on-curve statement points are cached separately from prime
+    /// subgroup points. These entries are never returned by generic strict
+    /// decoding and are promoted to the validated cache only after a proof
+    /// path has established subgroup membership.
+    static STATEMENT_POINT_CACHE: RefCell<BTreeMap<String, EdwardsAffine>> =
+        const { RefCell::new(BTreeMap::new()) };
+    /// Statement verification can rely on the proof's cofactor-preimage
+    /// constraints for subgroup membership. Keep this policy scoped to the
+    /// canonical Statement parser/slot builder; all generic point APIs retain
+    /// host subgroup validation.
+    static STATEMENT_POINT_SUBGROUP_CHECK: Cell<bool> = const { Cell::new(true) };
+}
+
+pub(crate) fn with_statement_point_subgroup_check<T>(f: impl FnOnce() -> T) -> T {
+    STATEMENT_POINT_SUBGROUP_CHECK.with(|check| {
+        let _guard = StatementPointSubgroupGuard {
+            cell: check,
+            previous: check.replace(false),
+        };
+        f()
+    })
+}
+
+struct StatementPointSubgroupGuard<'a> {
+    cell: &'a Cell<bool>,
+    previous: bool,
+}
+
+impl Drop for StatementPointSubgroupGuard<'_> {
+    fn drop(&mut self) {
+        self.cell.set(self.previous);
+    }
 }
 
 /// Canonical JSON decimal helpers for monetary values, versions, and times.
@@ -170,6 +203,36 @@ impl PointHex {
     pub fn is_identity(&self) -> Result<bool, CryptoError> {
         Ok(self.to_affine()?.is_zero())
     }
+
+    /// Promote this point into the strict validated cache after the enclosing
+    /// statement's Groth16 proof has verified. The statement circuit enforces
+    /// the prime-subgroup relation, so this avoids repeating that relation
+    /// while applying the already-verified homomorphic state update.
+    ///
+    /// Callers must invoke this only for point fields of that exact verified
+    /// statement. Generic parsing never consults the statement-only cache.
+    pub fn promote_after_verified_statement(&self) -> Result<(), CryptoError> {
+        let cached = VALIDATED_POINT_CACHE
+            .with(|cache| cache.borrow().get(&self.0).cloned())
+            .or_else(|| {
+                STATEMENT_POINT_CACHE.with(|cache| cache.borrow().get(&self.0).cloned())
+            });
+        let point = match cached {
+            Some(point) => point,
+            None => self.to_affine()?,
+        };
+        VALIDATED_POINT_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if cache.len() >= MAX_VALIDATED_POINT_CACHE_ENTRIES
+                && !cache.contains_key(&self.0)
+                && let Some(oldest) = cache.keys().next().cloned()
+            {
+                cache.remove(&oldest);
+            }
+            cache.insert(self.0.clone(), point);
+        });
+        Ok(())
+    }
 }
 
 /// A canonical compressed scalar encoded as lower-case hexadecimal.
@@ -272,10 +335,19 @@ pub(crate) fn encode_point(point: &EdwardsAffine) -> Result<String, CryptoError>
 }
 
 pub(crate) fn decode_point(value: &str, non_identity: bool) -> Result<EdwardsAffine, CryptoError> {
+    let subgroup_check = STATEMENT_POINT_SUBGROUP_CHECK.with(Cell::get);
     if let Some(point) = VALIDATED_POINT_CACHE.with(|cache| cache.borrow().get(value).cloned()) {
         // Identity is valid for generic PointHex values but not for public
         // keys. Re-apply this cheap policy check on every cache hit rather
         // than allowing a generic parse to weaken parse_non_identity.
+        if non_identity && point.is_zero() {
+            return Err(CryptoError::IdentityPoint);
+        }
+        return Ok(point);
+    }
+    if !subgroup_check
+        && let Some(point) = STATEMENT_POINT_CACHE.with(|cache| cache.borrow().get(value).cloned())
+    {
         if non_identity && point.is_zero() {
             return Err(CryptoError::IdentityPoint);
         }
@@ -304,7 +376,7 @@ pub(crate) fn decode_point(value: &str, non_identity: bool) -> Result<EdwardsAff
     if cursor.position() != bytes.len() as u64 {
         return Err(CryptoError::NonCanonicalEncoding);
     }
-    if !point.is_on_curve() || !is_in_prime_subgroup(&point) {
+    if !point.is_on_curve() || (subgroup_check && !is_in_prime_subgroup(&point)) {
         return Err(CryptoError::MalformedPoint);
     }
     let mut encoded = [0_u8; 32];
@@ -319,9 +391,19 @@ pub(crate) fn decode_point(value: &str, non_identity: bool) -> Result<EdwardsAff
     if non_identity && point.is_zero() {
         return Err(CryptoError::IdentityPoint);
     }
-    VALIDATED_POINT_CACHE.with(|cache| {
+    let cache = if subgroup_check {
+        &VALIDATED_POINT_CACHE
+    } else {
+        &STATEMENT_POINT_CACHE
+    };
+    let max_entries = if subgroup_check {
+        MAX_VALIDATED_POINT_CACHE_ENTRIES
+    } else {
+        MAX_STATEMENT_POINT_CACHE_ENTRIES
+    };
+    cache.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if cache.len() >= MAX_VALIDATED_POINT_CACHE_ENTRIES
+        if cache.len() >= max_entries
             && let Some(oldest) = cache.keys().next().cloned()
         {
             cache.remove(&oldest);
@@ -509,7 +591,25 @@ mod tests {
         let torsion = EdwardsAffine::new_unchecked(Fq::ZERO, -Fq::ONE);
         let encoded = encode_point(&torsion).expect("torsion point encodes");
         assert!(!is_in_prime_subgroup(&torsion));
-        assert!(matches!(decode_point(&encoded, false), Err(CryptoError::MalformedPoint)));
-    }
+        assert!(matches!(
+            decode_point(&encoded, false),
+            Err(CryptoError::MalformedPoint)
+        ));
 
+        with_statement_point_subgroup_check(|| {
+            assert!(decode_point(&encoded, false).is_ok());
+        });
+        assert!(matches!(
+            decode_point(&encoded, false),
+            Err(CryptoError::MalformedPoint)
+        ));
+
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_statement_point_subgroup_check(|| panic!("test panic"));
+        }));
+        assert!(matches!(
+            decode_point(&encoded, false),
+            Err(CryptoError::MalformedPoint)
+        ));
+    }
 }
