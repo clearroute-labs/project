@@ -168,6 +168,11 @@ pub fn verify_prepared(
             .chunks_exact(64)
             .zip(std::iter::once(Fr::from(1u64)).chain(inputs))
         {
+            // Zero terms do not contribute to the linear combination. The key
+            // was validated at installation and every scalar was decoded above.
+            if scalar == Fr::from(0u64) {
+                continue;
+            }
             msm.extend_from_slice(point);
             msm.extend_from_slice(&field_bytes(scalar));
         }

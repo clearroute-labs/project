@@ -1,17 +1,20 @@
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
 import { startSandbox } from '../sandbox.js';
 
 test('real NEAR host verification accepts the proof and rejects modified public inputs', { timeout: 120_000 }, async () => {
-  const fixture = JSON.parse(await readFile(resolve('.artifacts/verifier-fixture.json'), 'utf8')) as {
+  const generated = await promisify(execFile)(resolve('target/release/examples/verifier_fixture'), ['320'], { timeout: 60_000, maxBuffer: 1_048_576 });
+  const fixture = JSON.parse(generated.stdout) as {
     verifying_key_hex: string; proof_hex: string; public_inputs: string[]; wrong_inputs: string[];
   };
   const worker = await startSandbox();
   try {
     const probe = await worker.rootAccount.createSubAccount('verifier', { initialBalance: 100n * 10n ** 24n });
-    await probe.deploy(resolve('target/wasm32-unknown-unknown/release/verifier_probe.wasm'));
+    await probe.deploy(resolve('.artifacts/contracts/verifier_probe.wasm'));
     const initialize = await worker.rootAccount.callRaw(probe, 'new', { verifying_key_hex: fixture.verifying_key_hex }, { gas: 300_000_000_000_000n });
     assert.equal(initialize.succeeded, true);
     const valid = await worker.rootAccount.callRaw(probe, 'verify', {

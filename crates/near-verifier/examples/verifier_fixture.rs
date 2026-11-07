@@ -18,7 +18,7 @@ impl ConstraintSynthesizer<Fr> for Product {
         let b = cs.new_witness_variable(|| Ok(Fr::from(7u64)))?;
         let product = cs.new_input_variable(|| Ok(Fr::from(42u64)))?;
         cs.enforce_constraint(lc!() + a, lc!() + b, lc!() + product)?;
-        for value in 1u64..=self.context_inputs {
+        for value in 0u64..self.context_inputs {
             let context = cs.new_input_variable(|| Ok(Fr::from(value)))?;
             let square = cs.new_witness_variable(|| Ok(Fr::from(value * value)))?;
             cs.enforce_constraint(lc!() + context, lc!() + context, lc!() + square)?;
@@ -56,8 +56,8 @@ fn main() {
             "development_only": true,
             "verifying_key_hex": hex::encode(near_verifier::prepare_key(&hex::decode(encoded(&pk.vk)).unwrap()).unwrap()),
             "proof_hex": encoded(&proof),
-            "public_inputs": std::iter::once(42u64).chain(1u64..=context_inputs).map(|value| encoded(&Fr::from(value))).collect::<Vec<_>>(),
-            "wrong_inputs": std::iter::once(43u64).chain(1u64..=context_inputs).map(|value| encoded(&Fr::from(value))).collect::<Vec<_>>()
+            "public_inputs": std::iter::once(42u64).chain(0u64..context_inputs).map(|value| encoded(&Fr::from(value))).collect::<Vec<_>>(),
+            "wrong_inputs": std::iter::once(43u64).chain(0u64..context_inputs).map(|value| encoded(&Fr::from(value))).collect::<Vec<_>>()
         })
     );
 }
