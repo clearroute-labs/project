@@ -62,6 +62,8 @@ The following concrete gaps were found during the implementation review and are 
 - [ ] Review agreement plaintext against finalized proposal fields using bounded recovery data.
 - [ ] Merge inboxes before proof construction when required spending exceeds the available spending balance.
 - [ ] Exercise connected browser operations, backup restore and authorized audit against the deployed contract.
+- [ ] Keep every SDK and dashboard list page within Core's 50-record bound, including filtered lists and broker enumeration; test beyond the first page.
+- [ ] Expose real storage funding in the UI and charge the initial storage-budget record to its creator.
 
 The persisted-state decoder optimization is restricted to Core's authenticated fixed financial slots. The read-only provenance audit confirmed those slots originate in validated keys, successful proof statements or trusted group arithmetic. Proposal vectors currently permit unvalidated trailing entries; exact vector lengths and validation before persistence are required even though repayment only reads the fixed reader slots.
 
