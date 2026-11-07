@@ -6164,11 +6164,13 @@ impl Core {
             "register-holder" => {
                 let owner = args.account_id?;
                 let key_id = args.key_id.or(args.primary_id)?;
-                let authorization_epoch = self
+                let holder_epoch = self
                     .holders
                     .get(&owner)
-                    .map(|holder| holder.authorization_epoch.checked_add(1))
-                    .unwrap_or(Some(1))?;
+                    .map(|holder| holder.authorization_epoch)
+                    .unwrap_or(0);
+                let registry_epoch = self.authorization_epochs.get(&owner).unwrap_or(0);
+                let authorization_epoch = holder_epoch.max(registry_epoch).checked_add(1)?;
                 view = self.prepare_context_raw(
                     args.operation.clone(),
                     vec![key_id],
@@ -9459,7 +9461,25 @@ mod tests {
         assert_eq!(current.epoch, 4);
         assert_eq!(current.public_key, vec![9; 32]);
         assert!(!current.revoked);
-        assert!(core.get_freeze_status(Some(owner)).holder_frozen);
+        assert!(core.get_freeze_status(Some(owner.clone())).holder_frozen);
+
+        let context = core
+            .get_proof_context(ProofContextArgs {
+                operation: "register-holder".to_string(),
+                primary_id: Some(10),
+                account_id: Some(owner),
+                destination: None,
+                broker_id: None,
+                key_id: None,
+                checkpoint_id: None,
+                action: None,
+                amount: None,
+            })
+            .unwrap();
+        let operation_context: OperationContext =
+            serde_json::from_slice(&context.operation_context).unwrap();
+        assert_eq!(context.versions, vec![5]);
+        assert_eq!(operation_context.authorization_epochs, [5, 0, 0, 0]);
     }
 
     #[test]
