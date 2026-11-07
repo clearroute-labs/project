@@ -2460,30 +2460,14 @@ impl Core {
                 broker.spending_version,
                 &args.proof.statement,
             );
-            let authorization_message = registered_authorization_message(
-                self,
-                &broker.owner,
-                args.authorization_key_id.unwrap_or(0),
-                args.authorization_epoch,
-                args.authorization_nonce,
-                &authorization_payload,
-            );
             let broker_owner_valid = verify_authorization_signature(
                 self,
                 &broker.owner,
                 args.authorization_key_id,
                 args.authorization_epoch,
                 args.authorization_nonce,
-                &authorization_message,
-                &args.authorization_signature,
-            );
-            let borrower_message = registered_authorization_message(
-                self,
-                &proposal.borrower,
-                args.authorization_key_id.unwrap_or(0),
-                args.authorization_epoch,
-                args.authorization_nonce,
                 &authorization_payload,
+                &args.authorization_signature,
             );
             let borrower_valid = verify_authorization_signature(
                 self,
@@ -2491,7 +2475,7 @@ impl Core {
                 args.authorization_key_id,
                 args.authorization_epoch,
                 args.authorization_nonce,
-                &borrower_message,
+                &authorization_payload,
                 &args.authorization_signature,
             );
             require!(broker_owner_valid || borrower_valid, ERR_UNAUTHORIZED);
@@ -3189,14 +3173,6 @@ impl Core {
                 args.expected_borrower_spending_version,
                 args.proof.statement.clone(),
             ));
-            let authorization_message = registered_authorization_message(
-                self,
-                &loan.borrower,
-                args.authorization_key_id.unwrap_or(0),
-                args.authorization_epoch,
-                args.authorization_nonce,
-                &authorization_payload,
-            );
             require!(
                 verify_authorization_signature(
                     self,
@@ -3204,7 +3180,7 @@ impl Core {
                     args.authorization_key_id,
                     args.authorization_epoch,
                     args.authorization_nonce,
-                    &authorization_message,
+                    &authorization_payload,
                     &args.authorization_signature,
                 ),
                 ERR_UNAUTHORIZED
@@ -7818,7 +7794,7 @@ fn verify_authorization_signature(
     key_id: Option<u64>,
     epoch: u64,
     nonce: u64,
-    message: &[u8],
+    operation_message: &[u8],
     signature: &[u8],
 ) -> bool {
     let Some(key_id) = key_id else { return false };
@@ -7838,7 +7814,9 @@ fn verify_authorization_signature(
     public_key.copy_from_slice(&key.public_key);
     let mut signature_bytes = [0u8; 64];
     signature_bytes.copy_from_slice(signature);
-    env::ed25519_verify(&signature_bytes, message, &public_key)
+    let message =
+        registered_authorization_message(core, owner, key_id, epoch, nonce, operation_message);
+    env::ed25519_verify(&signature_bytes, &message, &public_key)
 }
 
 /// Canonical operation payload for origination.  The proof statement bytes are
@@ -9380,7 +9358,7 @@ mod tests {
             Some(7),
             3,
             2,
-            &message,
+            &payload,
             &signature,
         ));
         // A different broker state, proposal, or statement has a distinct
@@ -9402,14 +9380,7 @@ mod tests {
             Some(7),
             3,
             2,
-            &registered_authorization_message(
-                &core,
-                &owner,
-                7,
-                3,
-                2,
-                &originate_authorization_payload(17, b"agreement", 5, statement),
-            ),
+            &originate_authorization_payload(17, b"agreement", 5, statement),
             &signature,
         ));
         // A stale epoch and a consumed nonce are both rejected before the
@@ -9420,7 +9391,7 @@ mod tests {
             Some(7),
             2,
             2,
-            &message,
+            &payload,
             &signature,
         ));
         let mut consumed = core
@@ -9436,7 +9407,7 @@ mod tests {
             Some(7),
             3,
             2,
-            &message,
+            &payload,
             &signature,
         ));
     }
@@ -9486,12 +9457,17 @@ mod tests {
         let mut core = init();
         let owner = account("owner.testnet");
         let borrower = account("alice.testnet");
+        testing_env!(
+            VMContextBuilder::new()
+                .current_account_id(account("core.testnet"))
+                .predecessor_account_id(owner.clone())
+                .build()
+        );
         let public_key =
-            hex::decode("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
+            hex::decode("ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c")
                 .unwrap();
         let signature = hex::decode(
-            "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155".to_string()
-                + "5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b",
+            "9361fe5d4c7c25a6f5e5644037de0a7866edd044f08f1a880e861de589d6c1076c75e401e61357055db7eade735a5b00a8953f615117bbe1907e15ca69c01f09",
         )
         .unwrap();
         core.authorization_keys.insert(
@@ -9505,6 +9481,15 @@ mod tests {
                 revoked: false,
             },
         );
+        assert!(verify_authorization_signature(
+            &core,
+            &owner,
+            Some(7),
+            3,
+            2,
+            &[],
+            &signature,
+        ));
         core.brokers.insert(
             &7,
             &Broker {
@@ -9595,6 +9580,7 @@ mod tests {
         core.brokers.insert(&7, &proposal_broker);
         testing_env!(
             VMContextBuilder::new()
+                .current_account_id(account("core.testnet"))
                 .predecessor_account_id(owner.clone())
                 .build()
         );

@@ -288,9 +288,11 @@ the broker owner's registered application authorization key, when one is
 provided; they never refer to the broker encryption key epoch. A direct
 broker-owner proposal uses no application key and pins those fields to zero.
 The encryption key ID remains separately pinned in the proposal ciphertext
-terms. Signed broker and borrower agreements are verified over the exact
-stored agreement digest and current registered key epoch/nonce; a typed proof
-cannot substitute for either party authorization.
+terms. Signed broker and borrower agreements use the same registered
+authorization envelope described above: each signature wraps the exact stored
+agreement digest as `operation_message` and binds that party's account,
+authorization key ID, epoch, and nonce to the immutable network/Core/asset
+identity. A typed proof cannot substitute for either party authorization.
 
 For wallet registration flows, `get_proof_context` uses operation
 `register-holder` with `{ account_id, key_id }` and `create-broker` with
