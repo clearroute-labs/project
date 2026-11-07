@@ -83,9 +83,17 @@ export interface AssetProfile {
   tokenAuditorPublicKey: string
   cryptoProfileHash: string
   tokenTrustPolicy: string
+  authorizationPolicy?: string
+  freezePolicy?: string
+  custodyCap?: string
+  confidentialOutstanding?: string
 }
 
-export type VaultPhase = 'open' | 'draw_locked' | 'settlement_only' | 'closed'
+/**
+ * Closed-ended vaults expose their actual public lifecycle phase.  Investment
+ * is the draw-enabled phase; it must not be rendered as draw-locked.
+ */
+export type VaultPhase = 'open' | 'subscription' | 'investment' | 'redemption' | 'closed'
 
 export interface VaultSummary {
   vaultId: string
@@ -99,6 +107,8 @@ export interface VaultSummary {
   sharesSupply: string
   yourShares?: string
   shareScale?: number
+  checkpointEpochSeconds?: string
+  checkpointDisclosurePolicy?: string
   accountingVersion: string
   checkpointStatus: 'current' | 'pending' | 'stale' | 'unknown'
 }
@@ -470,6 +480,8 @@ export interface CryptoProvider {
 export interface ProtocolClient {
   readonly config: DeploymentConfig
   getAssetProfile(): Promise<AssetProfile>
+  storageBalanceOf(accountId: string): Promise<string>
+  storageDeposit(input: { accountId: string; deposit: string }): Promise<ActionReceipt>
   getDashboard(accountId: string): Promise<DashboardSnapshot>
   getPrivateAccount(accountId: string): Promise<PrivateAccountView>
   getHolderEncryptionKey(accountId: string): Promise<HolderKeyView>
@@ -494,6 +506,7 @@ export interface ProtocolClient {
   depositExternal(input: { amount: string; depositId: string }): Promise<ActionReceipt>
   depositToVault(input: { claimId: string; vaultId: string; amount: string; minShares: string; expiresAt: number }): Promise<ActionReceipt>
   redeemShares(input: { vaultId: string; shares: string; minAmount: string; expiresAt: number; soleShareholderWaiver?: boolean; burnWorthless?: boolean; brokerZeroProofs?: PreparedProof[] }): Promise<ActionReceipt>
+  redeemAmount(input: { vaultId: string; assetsOut: string; maxSharesIn: string; expiresAt: number; soleShareholderWaiver?: boolean; brokerZeroProofs?: PreparedProof[] }): Promise<ActionReceipt>
   transferShares(input: { vaultId: string; receiverId: string; shares: string }): Promise<ActionReceipt>
   requestPayout(input: { claimId: string; operationId: string; recipientId: string }): Promise<ActionReceipt>
   shield(input: { claimId: string; amount: string; proof: PreparedProof }): Promise<ActionReceipt>

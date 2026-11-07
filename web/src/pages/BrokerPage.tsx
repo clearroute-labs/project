@@ -7,7 +7,7 @@ import { parseAmount, parseNonNegativeAmount, unixSecondsNow } from '../lib/mone
 import { CORE_MAX_PAYMENT_COUNT, ProtocolError, type AgreementDraft, type BrokerKeyPreparation, type BrokerSummary, type KeeperGrant, type LoanSummary } from '../lib/types'
 import { downloadProposalPackage, makeProposalPackage } from '../lib/proposalPackage'
 import { clearEncryptedWalletBackup, useEncryptedWalletBackup, walletBackupScope } from '../lib/walletBackupGate'
-import { AmountCell, ConnectionGate, EmptyRow, IdLabel, PageHeader, PublicPrivateNotice, StateFreshness } from './shared'
+import { AmountCell, AssetBoundary, ConnectionGate, EmptyRow, IdLabel, PageHeader, PublicPrivateNotice, StateFreshness } from './shared'
 
 export function BrokerPage() {
   return <ConnectionGate role="broker"><BrokerWorkspace /></ConnectionGate>
@@ -31,6 +31,7 @@ function BrokerOverview({ onOpenLoans, onOpenOperations, onOpenVaults }: { onOpe
   return <>
     <PageHeader eyebrow="Broker desk" title="Underwrite with a clear boundary" description="Aggregate debt, loan status and schedule metadata are public. Terms, balances and repayment amounts stay encrypted behind their registered readers." action={<Button variant="secondary" onClick={() => void refresh()}>Refresh state</Button>} />
     <PublicPrivateNotice>Public records reveal account relationships, IDs, schedules, versions and aggregate accounting. They do not reveal private principal, amount owed, periodic payment or confidential balances.</PublicPrivateNotice>
+    <AssetBoundary asset={snapshot.asset} />
     <div className="metrics-grid"><Metric label="Aggregate debt" value={<Money units={debt} decimals={snapshot.asset.decimals} />} supporting="Public draw obligation" tone={debt !== '0' ? 'warning' : 'default'} /><Metric label="Debt ceiling" value={<Money units={ceiling} decimals={snapshot.asset.decimals} />} supporting={`${snapshot.brokers.length} broker record${snapshot.brokers.length === 1 ? '' : 's'}`} /><Metric label="Active loans" value={String(activeLoans)} supporting={`${snapshot.loans.filter((loan) => loan.status === 'defaulted').length} defaulted · ${snapshot.loans.filter((loan) => loan.status === 'paid').length} paid`} /><Metric label="Accounting" value={snapshot.brokers.some((broker) => broker.checkpointStatus !== 'current') ? 'Needs review' : 'Current'} supporting="Reconciliation requires a current checkpoint" tone={snapshot.brokers.some((broker) => broker.checkpointStatus !== 'current') ? 'warning' : 'positive'} /></div>
     <div className="dashboard-grid"><Card><SectionHeading eyebrow="Portfolio" title="Broker accounts" action={<Button variant="quiet" onClick={onOpenVaults}>Manage →</Button>} /><BrokerTable brokers={snapshot.brokers} decimals={snapshot.asset.decimals} /></Card><Card><SectionHeading eyebrow="Servicing" title="Loan book" action={<Button variant="quiet" onClick={onOpenLoans}>Open book →</Button>} /><LoanSummaryList loans={snapshot.loans} /></Card></div>
     <div className="dashboard-grid"><Card><SectionHeading eyebrow="Automation" title="Keeper posture" action={<Button variant="quiet" onClick={onOpenOperations}>Operations →</Button>} /><KeeperSummary grants={snapshot.keeperGrants} /></Card><Card><SectionHeading eyebrow="Liveness" title="What needs attention?" /><AttentionList brokers={snapshot.brokers} loans={snapshot.loans} /></Card></div>

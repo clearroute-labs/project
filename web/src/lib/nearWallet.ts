@@ -5,10 +5,17 @@ import { setupMyNearWallet } from '@near-wallet-selector/my-near-wallet'
 import { KeyPair, type KeyPairString } from '@near-js/crypto'
 import { actionCreators, createTransaction, encodeTransaction, Signature, SignedTransaction } from '@near-js/transactions'
 import { base58 } from '@scure/base'
+import { Buffer as BrowserBuffer } from 'buffer'
 import { NearRpc, assertAccountId, type Arguments } from '@confidential-lending/client'
 import type { DeploymentConfig, WalletAdapter } from './types'
 
 import '@near-wallet-selector/modal-ui/styles.css'
+
+// @near-js/transactions still references the Node Buffer global while
+// serializing a signed sandbox transaction. Keep that dependency browser-safe
+// without exposing credentials or changing the transaction payload.
+const browserGlobal = globalThis as typeof globalThis & { Buffer?: typeof BrowserBuffer }
+if (!browserGlobal.Buffer) browserGlobal.Buffer = BrowserBuffer
 
 /**
  * A real Wallet Selector session. No account ID is embedded in the app: the
@@ -188,7 +195,7 @@ export class SandboxCredentialWallet implements WalletAdapter {
   private readonly rpc: NearRpc
   private readonly config: DeploymentConfig
 
-  constructor(config: DeploymentConfig, rpc = new NearRpc(config.rpcUrl, { allowInsecureLocalhost: config.allowInsecureLocalhost })) {
+  constructor(config: DeploymentConfig, rpc = new NearRpc(config.rpcUrl, { allowInsecureLocalhost: config.allowInsecureLocalhost, fetch: globalThis.fetch.bind(globalThis) })) {
     if (!isSandboxCredentialDeployment(config)) throw new TypeError('Sandbox credentials are only available for a sandbox deployment on localhost.')
     this.config = config
     this.networkId = config.networkId

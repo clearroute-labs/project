@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { useAppContext } from '../App'
 import { Button, Card, EmptyState, Mono, Notice, SectionHeading, StatusBadge } from '../components/ui'
 import { formatAmount } from '../lib/money'
-import type { ProtocolError, Role } from '../lib/types'
+import type { AssetProfile, ProtocolError, Role, VaultSummary } from '../lib/types'
 
 export function PageHeader({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) {
   return <div className="page-header"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p className="page-description">{description}</p></div>{action ? <div className="page-header-action">{action}</div> : null}</div>
@@ -28,6 +28,15 @@ export function ErrorState({ error, onRetry }: { error: ProtocolError; onRetry: 
 
 export function PublicPrivateNotice({ children }: { children?: ReactNode }) {
   return <Notice tone="info" title="Public / private boundary">{children || 'IDs, status, versions, ciphertexts and public boundary amounts are visible on-chain. Loan terms, balances and repayment amounts remain encrypted until an authorized local key is used.'}</Notice>
+}
+
+export function AssetBoundary({ asset }: { asset: AssetProfile }) {
+  return <Card className="asset-boundary"><SectionHeading eyebrow="Asset boundary" title="Configured public rail" /><div className="config-grid"><div><span>Token account</span><Mono>{asset.tokenAccount || 'Not configured'}</Mono></div><div><span>Controller</span><Mono>{asset.controllerAccount || 'Not reported'}</Mono></div><div><span>Trust policy</span><strong>{asset.tokenTrustPolicy || 'Not reported'}</strong></div><div><span>Authorization</span><strong>{asset.authorizationPolicy || 'Not reported'}</strong></div>{asset.freezePolicy ? <div><span>Freeze policy</span><strong>{asset.freezePolicy}</strong></div> : null}{asset.confidentialOutstanding !== undefined ? <div><span>Confidential outstanding</span><AmountCell units={asset.confidentialOutstanding} decimals={asset.decimals} /></div> : null}</div><p className="field-hint">Controller, token policy and boundary totals are public protocol declarations. A controller is not assumed to be the underlying issuer, and public timing or small cohorts can still reveal financial information by correlation.</p></Card>
+}
+
+export function VaultPolicyNotice({ vault }: { vault?: VaultSummary }) {
+  if (!vault) return null
+  return <Notice tone="info" title="Vault disclosure policy">Checkpoint cadence: {vault.checkpointEpochSeconds ? `${vault.checkpointEpochSeconds} seconds` : 'not reported'} · disclosure: {vault.checkpointDisclosurePolicy || 'not reported'}. Individual loan terms remain encrypted, but public timing and small cohorts can reveal amounts by correlation. No collateral or first-loss guarantee is implied by this view.</Notice>
 }
 
 export function StateFreshness({ status }: { status: 'current' | 'pending' | 'stale' | 'unknown' }) {

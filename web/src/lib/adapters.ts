@@ -62,6 +62,8 @@ class UnavailableProtocolClient implements ProtocolClient {
   }
 
   getAssetProfile(): Promise<never> { return Promise.reject(this.fail()) }
+  storageBalanceOf(_accountId: string): Promise<string> { return Promise.reject(this.fail()) }
+  storageDeposit(_input: { accountId: string; deposit: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   getDashboard(_accountId: string): Promise<DashboardSnapshot> { return Promise.reject(this.fail()) }
   getPrivateAccount(_accountId: string): Promise<PrivateAccountView> { return Promise.reject(this.fail()) }
   getHolderEncryptionKey(_accountId: string): Promise<HolderKeyView> { return Promise.reject(this.fail()) }
@@ -78,6 +80,7 @@ class UnavailableProtocolClient implements ProtocolClient {
   depositExternal(_input: { amount: string; depositId: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   depositToVault(_input: { claimId: string; vaultId: string; amount: string; minShares: string; expiresAt: number }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   redeemShares(_input: { vaultId: string; shares: string; minAmount: string; expiresAt: number; soleShareholderWaiver?: boolean; burnWorthless?: boolean; brokerZeroProofs?: PreparedProof[] }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  redeemAmount(_input: { vaultId: string; assetsOut: string; maxSharesIn: string; expiresAt: number; soleShareholderWaiver?: boolean; brokerZeroProofs?: PreparedProof[] }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   transferShares(_input: { vaultId: string; receiverId: string; shares: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   requestPayout(_input: { claimId: string; operationId: string; recipientId: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   shield(_input: { claimId: string; amount: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }

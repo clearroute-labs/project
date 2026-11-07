@@ -5,7 +5,7 @@ import { useAction } from '../lib/actionState'
 import { readBrokerZeroProof, type BrokerZeroProofPackage } from '../lib/brokerZeroProof'
 import { parseAmount, parseNonNegativeAmount, randomUint64Decimal, unixSecondsNow } from '../lib/money'
 import type { PublicClaim, VaultSummary } from '../lib/types'
-import { AmountCell, ConnectionGate, EmptyRow, IdLabel, PageHeader, PublicPrivateNotice, StateFreshness } from './shared'
+import { AmountCell, AssetBoundary, ConnectionGate, EmptyRow, IdLabel, PageHeader, PublicPrivateNotice, StateFreshness, VaultPolicyNotice } from './shared'
 
 export function LenderPage() {
   const context = useAppContext()
@@ -30,6 +30,7 @@ function LenderOverview({ onOpenVaults, onOpenClaims, onRefresh }: { onOpenVault
   return <>
     <PageHeader eyebrow="Lender workspace" title="A measured view of your capital" description="Vault liquidity and shares are public protocol state. Loan-level cash flows stay encrypted and are never inferred from the dashboard." action={<Button variant="secondary" onClick={() => void onRefresh()}>Refresh state</Button>} />
     <PublicPrivateNotice>Vault assets, available liquidity, share supply and your share balance are public. Individual loan principal, owed amounts and repayment amounts are encrypted; a share is a claim under current accounting, not a guaranteed original price.</PublicPrivateNotice>
+    <AssetBoundary asset={snapshot.asset} />
     <div className="metrics-grid">
       <Metric label="Vault assets" value={<Money units={assets} decimals={snapshot.asset.decimals} />} supporting={snapshot.asset.tokenAccount || 'Configured asset'} />
       <Metric label="Available liquidity" value={<Money units={available} decimals={snapshot.asset.decimals} />} supporting="Public and withdrawable at the vault" tone="positive" />
@@ -60,6 +61,7 @@ function DepositCard({ claims, vaults, decimals, selectedVaultId }: { claims: Pu
   const [minShares, setMinShares] = useState('')
   const [error, setError] = useState('')
   const action = useAction()
+  const selectedVault = vaults.find((item) => item.vaultId === vaultId)
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
     setError('')
@@ -79,7 +81,7 @@ function DepositCard({ claims, vaults, decimals, selectedVaultId }: { claims: Pu
       setError(caught instanceof Error ? caught.message : 'Enter a valid amount.')
     }
   }
-  return <Card className="form-card"><SectionHeading eyebrow="Claim → shares" title="Deposit claim into a vault" description="A claim must already exist in Core. The token transfer and vault credit are separate asynchronous steps." /><form onSubmit={submit} className="form-stack"><Field label="Public claim" htmlFor="deposit-claim"><SelectInput id="deposit-claim" value={claimId} onChange={(event) => setClaimId(event.target.value)}><option value="">Select available claim</option>{claims.filter((claim) => ['available', 'restored'].includes(claim.status)).map((claim) => <option key={claim.claimId} value={claim.claimId}>{claim.claimId} · {claim.status}</option>)}</SelectInput></Field><Field label="Vault" htmlFor="deposit-vault"><SelectInput id="deposit-vault" value={vaultId} onChange={(event) => setVaultId(event.target.value)}><option value="">Select a vault</option>{vaults.map((vault) => <option key={vault.vaultId} value={vault.vaultId}>{vault.vaultId} · {vault.phase}</option>)}</SelectInput></Field><Field label={`Claim amount (${decimals} decimals)`} htmlFor="deposit-amount" hint="Must match the claim's authoritative amount; base-unit conversion is exact."><TextInput id="deposit-amount" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" /></Field><Field label="Minimum shares" htmlFor="deposit-min-shares" hint="Slippage guard, in share base units."><TextInput id="deposit-min-shares" inputMode="decimal" value={minShares} onChange={(event) => setMinShares(event.target.value)} placeholder="0" /></Field>{error ? <p className="field-error" role="alert">{error}</p> : null}<Button type="submit" disabled={!vaults.length || !claims.some((claim) => ['available', 'restored'].includes(claim.status))} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Deposit claim</Button><ActionFeedback state={action.state} /></form></Card>
+  return <Card className="form-card"><SectionHeading eyebrow="Claim → shares" title="Deposit claim into a vault" description="A claim must already exist in Core. The token transfer and vault credit are separate asynchronous steps." /><VaultPolicyNotice vault={selectedVault} /><form onSubmit={submit} className="form-stack"><Field label="Public claim" htmlFor="deposit-claim"><SelectInput id="deposit-claim" value={claimId} onChange={(event) => setClaimId(event.target.value)}><option value="">Select available claim</option>{claims.filter((claim) => ['available', 'restored'].includes(claim.status)).map((claim) => <option key={claim.claimId} value={claim.claimId}>{claim.claimId} · {claim.status}</option>)}</SelectInput></Field><Field label="Vault" htmlFor="deposit-vault"><SelectInput id="deposit-vault" value={vaultId} onChange={(event) => setVaultId(event.target.value)}><option value="">Select a vault</option>{vaults.map((vault) => <option key={vault.vaultId} value={vault.vaultId}>{vault.vaultId} · {vault.phase}</option>)}</SelectInput></Field><Field label={`Claim amount (${decimals} decimals)`} htmlFor="deposit-amount" hint="Must match the claim's authoritative amount; base-unit conversion is exact."><TextInput id="deposit-amount" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" /></Field><Field label="Minimum shares" htmlFor="deposit-min-shares" hint="Slippage guard, in share base units."><TextInput id="deposit-min-shares" inputMode="decimal" value={minShares} onChange={(event) => setMinShares(event.target.value)} placeholder="0" /></Field>{error ? <p className="field-error" role="alert">{error}</p> : null}<Button type="submit" disabled={!vaults.length || !claims.some((claim) => ['available', 'restored'].includes(claim.status))} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Deposit claim</Button><ActionFeedback state={action.state} /></form></Card>
 }
 
 function ShareTransferCard({ vaults, decimals, selectedVaultId }: { vaults: VaultSummary[]; decimals: number; selectedVaultId: string }) {
@@ -125,7 +127,10 @@ function TokenDepositCard({ decimals }: { decimals: number }) {
 function RedeemCard({ vaults, decimals, selectedVaultId }: { vaults: VaultSummary[]; decimals: number; selectedVaultId: string }) {
   const { adapters, refresh } = useAppContext()
   const [vaultId, setVaultId] = useState(selectedVaultId)
+  const [mode, setMode] = useState<'shares' | 'assets'>('shares')
   const [shares, setShares] = useState('')
+  const [assetsOut, setAssetsOut] = useState('')
+  const [maxShares, setMaxShares] = useState('')
   const [minAmount, setMinAmount] = useState('')
   const [soleShareholderWaiver, setSoleShareholderWaiver] = useState(false)
   const [burnWorthless, setBurnWorthless] = useState(false)
@@ -150,9 +155,12 @@ function RedeemCard({ vaults, decimals, selectedVaultId }: { vaults: VaultSummar
     if (!vaults.some((vault) => vault.vaultId === vaultId)) return setError('Choose a vault.')
     try {
       const vault = vaults.find((item) => item.vaultId === vaultId)
-      const shareUnits = parseAmount(shares, vault?.shareScale ?? decimals)
-      const minAmountUnits = parseNonNegativeAmount(minAmount || '0', decimals)
-      const finalRedemption = shareUnits === vault?.sharesSupply
+      if (!vault) throw new Error('Choose a vault.')
+      const shareUnits = mode === 'shares' ? parseAmount(shares, vault.shareScale ?? decimals) : ''
+      const minAmountUnits = mode === 'shares' ? parseNonNegativeAmount(minAmount || '0', decimals) : ''
+      const assetUnits = mode === 'assets' ? parseAmount(assetsOut, decimals) : ''
+      const maxShareUnits = mode === 'assets' ? parseAmount(maxShares, vault.shareScale ?? decimals) : ''
+      const finalRedemption = mode === 'shares' && shareUnits === vault.sharesSupply
       let finalProofs: import('../lib/types').PreparedProof[] | undefined
       if (finalRedemption) {
         const brokerIds = await adapters.protocol.getVaultBrokerIds(vaultId)
@@ -169,9 +177,13 @@ function RedeemCard({ vaults, decimals, selectedVaultId }: { vaults: VaultSummar
         }
         finalProofs = brokerIds.map((brokerId) => byBroker.get(brokerId)!.proof)
       }
-      const receipt = await action.run('Redeem shares', () => adapters.protocol.redeemShares({ vaultId, shares: shareUnits, minAmount: minAmountUnits, expiresAt: unixSecondsNow() + 900, soleShareholderWaiver, burnWorthless, brokerZeroProofs: finalProofs }))
+      const receipt = await action.run(mode === 'shares' ? 'Redeem shares' : 'Redeem asset amount', () => mode === 'shares'
+        ? adapters.protocol.redeemShares({ vaultId, shares: shareUnits, minAmount: minAmountUnits, expiresAt: unixSecondsNow() + 900, soleShareholderWaiver, burnWorthless, brokerZeroProofs: finalProofs })
+        : adapters.protocol.redeemAmount({ vaultId, assetsOut: assetUnits, maxSharesIn: maxShareUnits, expiresAt: unixSecondsNow() + 900, soleShareholderWaiver }))
       if (receipt) {
         setShares('')
+        setAssetsOut('')
+        setMaxShares('')
         setMinAmount('')
         setBrokerProofs([])
         void refresh()
@@ -180,7 +192,7 @@ function RedeemCard({ vaults, decimals, selectedVaultId }: { vaults: VaultSummar
       setError(caught instanceof Error ? caught.message : 'Enter a valid share amount.')
     }
   }
-  return <Card className="form-card"><SectionHeading eyebrow="Share exit" title="Redeem shares" description="A successful redemption burns shares and creates a public claim. External payout is intentionally separate." /><form onSubmit={submit} className="form-stack"><Field label="Vault" htmlFor="redeem-vault"><SelectInput id="redeem-vault" value={vaultId} onChange={(event) => { setVaultId(event.target.value); setBrokerProofs([]) }}><option value="">Select a vault</option>{vaults.map((vault) => <option key={vault.vaultId} value={vault.vaultId}>{vault.vaultId} · {vault.phase}</option>)}</SelectInput></Field><Field label="Shares" htmlFor="redeem-shares"><TextInput id="redeem-shares" inputMode="decimal" value={shares} onChange={(event) => setShares(event.target.value)} placeholder="0" /></Field><Field label="Minimum claim" htmlFor="redeem-min-amount" hint="Slippage guard, in asset units."><TextInput id="redeem-min-amount" inputMode="decimal" value={minAmount} onChange={(event) => setMinAmount(event.target.value)} placeholder="0" /></Field><label className="checkbox-field"><input type="checkbox" checked={soleShareholderWaiver} onChange={(event) => setSoleShareholderWaiver(event.target.checked)} /> <span>Last-shareholder waiver (only if Core allows)</span></label><label className="checkbox-field"><input type="checkbox" checked={burnWorthless} onChange={(event) => setBurnWorthless(event.target.checked)} /> <span>Burn worthless zero-NAV shares (explicit)</span></label><Field label="Broker closure packages" hint="Final redemption requires one current zero-balance package from every associated live broker. Broker owners can export these from their maintenance workspace; packages contain no private keys or plaintext amounts."><input className="file-input" type="file" accept="application/json,.json" multiple onChange={(event) => void importBrokerProofs(event)} />{brokerProofs.length ? <div className="readonly-field"><span>Imported closure packages</span>{brokerProofs.map((item) => <Mono key={item.brokerId}>broker {item.brokerId} · vault {item.vaultId}</Mono>)}</div> : <span className="field-hint">No closure packages imported. Partial redemptions do not require them.</span>}</Field>{error ? <p className="field-error" role="alert">{error}</p> : null}<Button type="submit" variant="secondary" disabled={!vaults.length} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Redeem shares</Button><ActionFeedback state={action.state} /></form></Card>
+  return <Card className="form-card"><SectionHeading eyebrow="Share exit" title="Redeem from a vault" description="Choose an exact share quantity or request an asset amount with a checked maximum share spend. A successful redemption creates a public claim; external payout is separate." /><form onSubmit={submit} className="form-stack"><Field label="Vault" htmlFor="redeem-vault"><SelectInput id="redeem-vault" value={vaultId} onChange={(event) => { setVaultId(event.target.value); setBrokerProofs([]) }}><option value="">Select a vault</option>{vaults.map((vault) => <option key={vault.vaultId} value={vault.vaultId}>{vault.vaultId} · {vault.phase}</option>)}</SelectInput></Field><Field label="Redemption mode" htmlFor="redeem-mode"><SelectInput id="redeem-mode" value={mode} onChange={(event) => { setMode(event.target.value as typeof mode); setBrokerProofs([]) }}><option value="shares">Exact shares</option><option value="assets">Exact asset amount</option></SelectInput></Field>{mode === 'shares' ? <><Field label="Shares" htmlFor="redeem-shares"><TextInput id="redeem-shares" inputMode="decimal" value={shares} onChange={(event) => setShares(event.target.value)} placeholder="0" /></Field><Field label="Minimum claim" htmlFor="redeem-min-amount" hint="Slippage guard, in asset units."><TextInput id="redeem-min-amount" inputMode="decimal" value={minAmount} onChange={(event) => setMinAmount(event.target.value)} placeholder="0" /></Field></> : <><Field label={`Asset amount (${decimals} decimals)`} htmlFor="redeem-assets-out"><TextInput id="redeem-assets-out" inputMode="decimal" value={assetsOut} onChange={(event) => setAssetsOut(event.target.value)} placeholder="0.00" /></Field><Field label="Maximum shares in" htmlFor="redeem-max-shares" hint="Core computes the checked ceil share quantity and rejects requests above this bound."><TextInput id="redeem-max-shares" inputMode="decimal" value={maxShares} onChange={(event) => setMaxShares(event.target.value)} placeholder="0" /></Field></>}<label className="checkbox-field"><input type="checkbox" checked={soleShareholderWaiver} onChange={(event) => setSoleShareholderWaiver(event.target.checked)} /> <span>Last-shareholder waiver (only if Core allows)</span></label>{mode === 'shares' ? <><label className="checkbox-field"><input type="checkbox" checked={burnWorthless} onChange={(event) => setBurnWorthless(event.target.checked)} /> <span>Burn worthless zero-NAV shares (exact-share mode only)</span></label><Field label="Broker closure packages" hint="Final redemption requires one current zero-balance package from every associated live broker. Broker owners can export these from their maintenance workspace; packages contain no private keys or plaintext amounts."><input className="file-input" type="file" accept="application/json,.json" multiple onChange={(event) => void importBrokerProofs(event)} />{brokerProofs.length ? <div className="readonly-field"><span>Imported closure packages</span>{brokerProofs.map((item) => <Mono key={item.brokerId}>broker {item.brokerId} · vault {item.vaultId}</Mono>)}</div> : <span className="field-hint">No closure packages imported. Partial redemptions do not require them.</span>}</Field></> : <p className="field-hint">Asset-amount redemption is not a final-share closure path; use exact-share mode with current broker closure packages for the last position.</p>}{error ? <p className="field-error" role="alert">{error}</p> : null}<Button type="submit" variant="secondary" disabled={!vaults.length} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>{mode === 'shares' ? 'Redeem shares' : 'Redeem asset amount'}</Button><ActionFeedback state={action.state} /></form></Card>
 }
 
 function ClaimsPage() {
