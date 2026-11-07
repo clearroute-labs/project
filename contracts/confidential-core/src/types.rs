@@ -359,8 +359,17 @@ pub struct Broker {
     pub loan_sequence: u64,
     #[serde(with = "u64_string")]
     pub active_loan_count: u64,
+    /// Number of non-tombstoned loans still stored in the broker book.  This
+    /// includes terminal Paid/Defaulted loans until `delete_loan` archives
+    /// them, so broker closure never strands an archival transition.
+    #[serde(with = "u64_string")]
+    pub live_loan_count: u64,
     #[serde(with = "u64_string")]
     pub impaired_loan_count: u64,
+    /// Number of proposals that have not yet been consumed or revoked.  It is
+    /// bounded state used by broker closure; Core never scans proposals.
+    #[serde(with = "u64_string")]
+    pub pending_proposal_count: u64,
     pub spending_ciphertext: Vec<u8>,
     pub inbox_ciphertext: Vec<u8>,
     pub issuer_balance_ciphertext: Vec<u8>,
@@ -655,6 +664,14 @@ pub struct LoanTombstoneView {
     pub leaf: Vec<u8>,
     /// The active leaf supplied as removal evidence at deletion.
     pub removal_evidence: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(crate = "serde")]
+pub struct BrokerTombstoneView {
+    #[serde(with = "u64_string")]
+    pub broker_id: u64,
+    pub tombstoned: bool,
 }
 
 /// Metadata for an immutable recovery entry.  Private balance mutations carry
@@ -1078,6 +1095,16 @@ pub struct OriginateArgs {
     pub broker_active_principal_commitment: Vec<u8>,
     #[serde(default)]
     pub broker_impaired_principal_commitment: Vec<u8>,
+    /// Optional operation authorization for a non-party submitter.  Direct
+    /// broker-owner/borrower calls leave these fields at their defaults.
+    #[serde(default, with = "option_u64_string")]
+    pub authorization_key_id: Option<u64>,
+    #[serde(default, with = "u64_string")]
+    pub authorization_epoch: u64,
+    #[serde(default, with = "u64_string")]
+    pub authorization_nonce: u64,
+    #[serde(default)]
+    pub authorization_signature: Vec<u8>,
     pub proof: ProofArgs,
 }
 
@@ -1333,7 +1360,11 @@ pub struct BrokerView {
     #[serde(with = "u64_string")]
     pub active_loan_count: u64,
     #[serde(with = "u64_string")]
+    pub live_loan_count: u64,
+    #[serde(with = "u64_string")]
     pub impaired_loan_count: u64,
+    #[serde(with = "u64_string")]
+    pub pending_proposal_count: u64,
     #[serde(with = "u64_string")]
     pub spending_version: u64,
     #[serde(with = "u64_string")]
@@ -1395,6 +1426,7 @@ pub struct HolderView {
     pub open_loan_count: u64,
     #[serde(with = "u64_string")]
     pub recovery_start_sequence: u64,
+    pub frozen: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]

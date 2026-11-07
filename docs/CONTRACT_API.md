@@ -33,6 +33,18 @@ pinned kinds must be present before any financial method is enabled. The
 legacy single-key initializer is rejected. There is no unrestricted upgrade,
 verifier replacement, debt reset, or payout redirection method.
 
+`authorization_policy` is fixed to `permissionless-v1` and `freeze_policy` is
+fixed to `controller-freeze-v1`; these are enforced capability identifiers,
+not descriptive metadata. The controller's `set_holder_frozen` method also
+records freezes for accounts that do not yet have a holder record, and charges
+the controller's storage budget for each new map entry. Registered holders
+mirror that state in `HolderView.frozen`. Asset/account freezes reject new
+deposits, share/debt/private-balance movement, and payout dispatch. Callback
+result recording, payout finalization, loan management, and reconciliation
+remain available so a freeze cannot strand claims or accounting progress.
+`get_freeze_status(account_id?)` is the authoritative view for the global
+asset freeze and the selected account freeze.
+
 All public amounts are JSON decimal strings ('U128'). IDs, timestamps, and
 versions are serialized as canonical decimal strings (no JSON numbers, leading
 zeroes, or '+' prefix). Scalar ID/cursor arguments use near-sdk 'U64' and have
@@ -73,11 +85,43 @@ view with `authorization_policy`, `confidential_outstanding: U128`, and
 | 'delete_loan' | closed loan ID and evidence | borrower or broker owner | Removes active entry; retains full terminal loan archive and leaf tombstone |
 | 'delete_broker' | broker ID | broker owner | Removes only an entirely closed broker |
 
+`originate` keeps the existing direct-party ABI: a broker owner or borrower
+may omit the optional `authorization_key_id`, `authorization_epoch`,
+`authorization_nonce`, and `authorization_signature` fields. A non-party
+relayer must provide all four fields. The signature is Ed25519 over the
+SHA-256 of the canonical Borsh envelope
+`("registered-authorization-v1", network_id, core_account_id, asset_account,
+signer_account_id, key_id, epoch, nonce, operation_message)`. Here
+`operation_message` is a `Vec<u8>` containing the SHA-256/Borsh hash of
+`("originate-authorization-v1", proposal_id, agreement_digest,
+broker_spending_version, proof.statement)`. The envelope is checked against
+either party's currently registered authorization key, exact epoch, and exact
+nonce, so changing any lookup argument invalidates the signature.
+The accepted nonce is incremented atomically after the proof and all ledger
+bindings succeed; wrong epoch, revoked key, stale nonce, or replay is rejected.
+The broker's encryption-key epoch is not an application authorization epoch.
+Relayed `repay` uses the same outer envelope with its operation-specific
+payload hash; direct borrower repayment keeps the zero/default authorization
+fields.
+
+`BrokerView.live_loan_count` counts every active-book loan, including loans
+whose public status is terminal but which have not yet been deleted. Its
+`pending_proposal_count` counts every unconsumed, unrevoked proposal, including
+expired proposals until a party revokes them. `delete_broker` requires both
+counters (and all public/private obligations) to be zero, so terminal records
+cannot orphan a broker. `vault_brokers` is append-only and preserves closed
+broker IDs as tombstones. A vault lifetime is capped at
+`MAX_BROKERS_PER_VAULT = 64`, including deleted entries; page the list with
+`get_vault_broker_ids` and resolve a closed ID with `get_broker_tombstone`.
+
 `storage_deposit` charges the measured first `StorageDeposits` map entry from
 the attached NEAR before returning the remaining budget; a top-up of an
 existing entry is credited in full. Every mutating method charges any further
 persistent bytes to the caller's recorded budget and rolls back atomically when
-that budget is insufficient.
+that budget is insufficient. `stage_verifier_key` is payable but its attached
+NEAR is not silently treated as a key budget: the owner must pre-fund the
+owner's Core storage balance, and the measured prepared-key bytes are charged
+to that balance before the call commits.
 
 `register_holder` is a key rotation when the account already has a holder
 record.  The rotation request must use a fresh `key_id` and public key and
@@ -174,7 +218,8 @@ amount and changes no state. Direct 'ft_transfer' donations never create
 claims.
 
 'request_payout' fixes the owner, recipient, amount, operation ID, token method,
-and one dispatch attempt, moves the claim to a reservation, and dispatches
+and one dispatch attempt, rejects a frozen owner or recipient, moves the claim
+to a reservation, and dispatches
 'ft_transfer' with exactly one yoctoNEAR. The private callback
 'on_payout_result' accepts only the Core predecessor and one runtime
 'PromiseResult'; it records success/failure and makes no external call.
@@ -188,6 +233,7 @@ is no timeout refund or resend.
 ## Read APIs
 
 'get_asset_profile', 'get_verifier_config', 'get_verifier_key', 'get_vault', 'get_broker',
+'get_broker_tombstone',
 'get_holder', 'get_holder_key', 'get_broker_key', 'get_loan', 'get_archived_loan',
 'get_loan_tombstone', 'get_proposal', 'get_claim', 'get_payout',
 'get_checkpoint', 'get_deposit_receipt', 'get_vault_broker_ids(vault_id, cursor, limit)',
@@ -361,4 +407,9 @@ asset metadata. Implemented lifecycle events include 'VaultCreated',
 'LoanOriginated', 'ConfidentialTransfer', 'LoanRepaid', 'LoanManagement',
 'CreditReconciled', 'BrokerSettled', 'DepositReceived', 'PayoutRequested',
 'PayoutResultRecorded', 'PayoutFinalized', keeper grant/revoke, and deletion
-tombstones.
+tombstones. Financial events include every affected borrower/broker spending
+version, broker book/accounting/risk version, vault accounting/risk version,
+and recovery-event reference as applicable; all IDs and versions are decimal
+strings. Transfer events expose the authoritative proof-bound reader views and
+commitment rather than empty legacy caller fields. They never contain
+plaintext witnesses.
