@@ -69,6 +69,7 @@ class UnavailableProtocolClient implements ProtocolClient {
   getHolderEncryptionKey(_accountId: string): Promise<HolderKeyView> { return Promise.reject(this.fail()) }
   getBrokerEncryptionKey(_brokerId: string): Promise<BrokerKeyView> { return Promise.reject(this.fail()) }
   getVaultBrokerIds(_vaultId: string): Promise<string[]> { return Promise.reject(this.fail()) }
+  getVaultClosureBrokerIds(_vaultId: string): Promise<string[]> { return Promise.reject(this.fail()) }
   getBrokerPrivateAccount(_brokerId: string): Promise<PrivateAccountView> { return Promise.reject(this.fail()) }
   getProposal(_proposalId: string): Promise<ProposalSummary> { return Promise.reject(this.fail()) }
   getAuditBundle(_input: { scope: 'loan' | 'token'; subjectId: string; readerRole?: 'issuer' | 'token_auditor' }): Promise<AuditCiphertextBundle> { return Promise.reject(this.fail()) }

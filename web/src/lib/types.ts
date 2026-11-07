@@ -487,6 +487,12 @@ export interface ProtocolClient {
   getHolderEncryptionKey(accountId: string): Promise<HolderKeyView>
   getBrokerEncryptionKey(brokerId: string): Promise<BrokerKeyView>
   getVaultBrokerIds(vaultId: string): Promise<string[]>
+  /**
+   * Return only currently live brokers in the vault membership vector. Closed
+   * broker IDs remain in Core's append-only membership history, but must not
+   * be presented to redemption proof preparation.
+   */
+  getVaultClosureBrokerIds(vaultId: string): Promise<string[]>
   getBrokerPrivateAccount(brokerId: string): Promise<PrivateAccountView>
   getProposal(proposalId: string): Promise<ProposalSummary>
   getAuditBundle(input: { scope: 'loan' | 'token'; subjectId: string; readerRole?: 'issuer' | 'token_auditor' }): Promise<AuditCiphertextBundle>

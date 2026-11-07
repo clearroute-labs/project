@@ -263,6 +263,78 @@ describe('real Core client mapping', () => {
     ])
   })
 
+  it('excludes closed brokers when preparing vault-closure membership', async () => {
+    const requests: Array<{ method: string; args: Record<string, unknown> }> = []
+    const transport: NearContractTransport = {
+      view: async <T>(method: string, args?: Record<string, unknown>) => {
+        const nextArgs = args || {}
+        requests.push({ method, args: nextArgs })
+        if (method === 'get_vault_broker_ids') return ['9', '10'] as T
+        if (method === 'get_broker') return null as T
+        if (method === 'get_broker_tombstone') return { broker_id: nextArgs.broker_id, tombstoned: true } as T
+        throw new Error(`unexpected view ${method}`)
+      },
+      call: async () => { throw new Error('not used') },
+    }
+    const client = new NearProtocolClient(transport, config)
+
+    await expect(client.getVaultClosureBrokerIds('7')).resolves.toEqual([])
+    expect(requests).toEqual([
+      { method: 'get_vault_broker_ids', args: { vault_id: '7', cursor: '0', limit: 50 } },
+      { method: 'get_broker', args: { broker_id: '9' } },
+      { method: 'get_broker_tombstone', args: { broker_id: '9' } },
+      { method: 'get_broker', args: { broker_id: '10' } },
+      { method: 'get_broker_tombstone', args: { broker_id: '10' } },
+    ])
+  })
+
+  it('keeps live brokers across append-only membership pagination', async () => {
+    const firstPage = Array.from({ length: 50 }, (_, index) => String(index + 1))
+    const secondPage = ['51', '52']
+    const liveBrokerIds = new Set(['1', '49', '51'])
+    const requests: Array<{ method: string; args: Record<string, unknown> }> = []
+    const transport: NearContractTransport = {
+      view: async <T>(method: string, args?: Record<string, unknown>) => {
+        const nextArgs = args || {}
+        requests.push({ method, args: nextArgs })
+        if (method === 'get_vault_broker_ids') {
+          if (nextArgs.cursor === '0') return firstPage as T
+          if (nextArgs.cursor === '50') return secondPage as T
+        }
+        if (method === 'get_broker') {
+          const brokerId = String(nextArgs.broker_id)
+          return liveBrokerIds.has(brokerId) ? { broker_id: brokerId, vault_id: '7' } as T : null as T
+        }
+        if (method === 'get_broker_tombstone') return { broker_id: nextArgs.broker_id, tombstoned: true } as T
+        throw new Error(`unexpected view ${method}`)
+      },
+      call: async () => { throw new Error('not used') },
+    }
+    const client = new NearProtocolClient(transport, config)
+
+    await expect(client.getVaultClosureBrokerIds('7')).resolves.toEqual(['1', '49', '51'])
+    expect(requests.filter(({ method }) => method === 'get_vault_broker_ids')).toEqual([
+      { method: 'get_vault_broker_ids', args: { vault_id: '7', cursor: '0', limit: 50 } },
+      { method: 'get_vault_broker_ids', args: { vault_id: '7', cursor: '50', limit: 50 } },
+    ])
+    expect(requests.filter(({ method }) => method === 'get_broker_tombstone')).toHaveLength(49)
+    expect(requests.filter(({ method, args }) => method === 'get_broker' && liveBrokerIds.has(String(args.broker_id)))).toHaveLength(3)
+  })
+
+  it('fails closed when a membership entry has neither an active broker nor a tombstone', async () => {
+    const transport: NearContractTransport = {
+      view: async <T>(method: string) => {
+        if (method === 'get_vault_broker_ids') return ['12'] as T
+        if (method === 'get_broker') return null as T
+        if (method === 'get_broker_tombstone') return null as T
+        throw new Error(`unexpected view ${method}`)
+      },
+      call: async () => { throw new Error('not used') },
+    }
+
+    await expect(new NearProtocolClient(transport, config).getVaultClosureBrokerIds('7')).rejects.toThrow('no tombstone')
+  })
+
   it('paginates every bounded public list through its high-water mark', async () => {
     const requests: Array<{ method: string; args: Record<string, unknown> }> = []
     const transport: NearContractTransport = {

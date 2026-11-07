@@ -316,6 +316,7 @@ function decodeMethodReturn(encoded: string | undefined): string | undefined {
 type RawAssetProfile = { token_account: string; decimals: number; controller_account: string; issuer_key: { key_id: string | number; public_key: unknown }; token_auditor_key: { key_id: string | number; public_key: unknown }; crypto_profile_hash: unknown; token_trust_policy: string; authorization_policy?: string; freeze_policy?: string; custody_cap?: string | number; confidential_outstanding?: string | number }
 type RawHolder = { owner: string; asset_id: string; key_id: string | number; authorization_epoch?: string | number; public_key?: unknown; encryption_public_key?: unknown; encryption_key?: { public_key?: unknown }; spending_ciphertext: unknown; inbox_ciphertext: unknown; issuer_balance_ciphertext?: unknown; auditor_balance_ciphertext?: unknown; spending_commitment?: unknown; inbox_commitment?: unknown; spending_version: string | number }
 type RawBroker = { broker_id: string | number; owner: string; vault_id: string | number; debt_total: unknown; debt_maximum: unknown; spending_version: string | number; book_version: string | number; loan_book_root?: unknown; encryption_key_id: string | number; authorization_epoch?: string | number; encryption_public_key?: unknown; spending_ciphertext: unknown; inbox_ciphertext: unknown; issuer_balance_ciphertext?: unknown; auditor_balance_ciphertext?: unknown; spending_commitment?: unknown; inbox_commitment?: unknown; active_principal_ciphertext?: unknown; impaired_principal_ciphertext?: unknown; active_principal_commitment?: unknown; impaired_principal_commitment?: unknown; impairment_provision?: unknown; accounting_pending: boolean; accounting_version: string | number; risk_version?: string | number; delegates?: RawKeeper[] }
+type RawBrokerTombstone = { broker_id: string | number; tombstoned: boolean }
 type RawVault = { vault_id: string | number; owner: string; asset_id: string; assets_total: unknown; assets_available: unknown; shares_total: unknown; share_scale?: number; checkpoint_policy?: { epoch_seconds?: string | number; disclosure_policy?: string }; accounting_pending: boolean; accounting_version: string | number; phase?: string | null; kind?: string }
 type RawLoan = { loan_id: string | number; broker_id: string | number; borrower: string; proposal_id: string | number; payment_interval: string | number; grace_period: string | number; next_due?: string | number | null; payment_total: number; payment_remaining: number; status: string; impaired?: boolean; loan_version: string | number; borrower_key_id?: string | number; broker_key_id?: string | number; loan_auditor_key_id?: string | number; loan_auditor_public_key?: unknown; principal_ciphertexts?: unknown[]; initial_owed_ciphertexts?: unknown[]; amount_owed_ciphertexts?: unknown[]; periodic_payment_ciphertexts?: unknown[]; principal_remaining_ciphertexts?: unknown[]; cumulative_repaid_ciphertexts?: unknown[]; accounting_leaf?: unknown }
 type RawProposal = { proposal_id: string | number; borrower: string; broker_id: string | number; vault_id: string | number; borrower_key_id?: string | number; broker_key_id?: string | number; expiry: string | number; agreement_digest: unknown; principal_ciphertexts?: unknown[]; initial_owed_ciphertexts?: unknown[]; periodic_payment_ciphertexts?: unknown[]; principal_commitment?: unknown; owed_commitment?: unknown; payment_commitment?: unknown; loan_auditor_public_key?: unknown; consumed: boolean; revoked: boolean; broker_signature?: unknown; borrower_signature?: unknown; broker_authorization_epoch?: string | number; borrower_authorization_epoch?: string | number; broker_authorization_key_id?: string | number | null; borrower_authorization_key_id?: string | number | null; broker_direct_authorized?: boolean; borrower_direct_authorized?: boolean; loan_auditor_key_id: string | number }
@@ -573,6 +574,50 @@ export class NearProtocolClient implements ProtocolClient {
       if (page.length < CORE_VIEW_PAGE_LIMIT) break
     }
     return values.map((value) => decimal(value))
+  }
+
+  async getVaultClosureBrokerIds(vaultId: string): Promise<string[]> {
+    const canonicalVaultId = wireId(vaultId)
+    const membership = await this.getVaultBrokerIds(canonicalVaultId)
+    const liveBrokerIds: string[] = []
+
+    for (const brokerId of membership) {
+      const broker = await this.transport.view<RawBroker | null>('get_broker', { broker_id: wireId(brokerId) })
+      if (broker !== null) {
+        if (!broker || typeof broker !== 'object' || Array.isArray(broker)) {
+          throw new ProtocolError({ category: 'INVALID_ENCODING', message: `Core returned an invalid active broker record for vault ${canonicalVaultId}.` })
+        }
+        let returnedBrokerId: string
+        let returnedVaultId: string
+        try {
+          returnedBrokerId = decimal(broker.broker_id)
+          returnedVaultId = decimal(broker.vault_id)
+        } catch {
+          throw new ProtocolError({ category: 'INVALID_ENCODING', message: `Core returned an invalid active broker record for broker ${brokerId}.` })
+        }
+        if (returnedBrokerId !== brokerId || returnedVaultId !== canonicalVaultId) {
+          throw new ProtocolError({ category: 'INVALID_ENCODING', message: `Core returned a broker record that does not match vault membership ${brokerId}.` })
+        }
+        liveBrokerIds.push(brokerId)
+        continue
+      }
+
+      const tombstone = await this.transport.view<RawBrokerTombstone | null>('get_broker_tombstone', { broker_id: wireId(brokerId) })
+      if (!tombstone || typeof tombstone !== 'object' || Array.isArray(tombstone)) {
+        throw new ProtocolError({ category: 'INVALID_ENCODING', message: `Core returned no tombstone for closed vault broker ${brokerId}.` })
+      }
+      let tombstoneBrokerId: string
+      try {
+        tombstoneBrokerId = decimal(tombstone.broker_id)
+      } catch {
+        throw new ProtocolError({ category: 'INVALID_ENCODING', message: `Core returned an invalid tombstone for vault broker ${brokerId}.` })
+      }
+      if (tombstoneBrokerId !== brokerId || tombstone.tombstoned !== true) {
+        throw new ProtocolError({ category: 'INVALID_ENCODING', message: `Core returned a tombstone that does not close vault broker ${brokerId}.` })
+      }
+    }
+
+    return liveBrokerIds
   }
 
   async getBrokerPrivateAccount(brokerId: string): Promise<PrivateAccountView> {
