@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useAppContext } from '../App'
 import { ActionFeedback, Button, Card, EmptyState, Field, Metric, Mono, Money, Notice, SectionHeading, SelectInput, StatusBadge, Table, TextInput } from '../components/ui'
-import { requireFinalized, useAction } from '../lib/actionState'
+import { isInboxMergeRequired, requireFinalized, useAction } from '../lib/actionState'
 import { downloadBrokerZeroProof, makeBrokerZeroProofPackage } from '../lib/brokerZeroProof'
 import { parseAmount, parseNonNegativeAmount, unixSecondsNow } from '../lib/money'
 import { CORE_MAX_PAYMENT_COUNT, ProtocolError, type AgreementDraft, type BrokerKeyPreparation, type BrokerSummary, type KeeperGrant, type LoanSummary } from '../lib/types'
@@ -139,8 +139,36 @@ function BrokerOriginationCard({ proposals, brokers }: { proposals: import('../l
       if (!backupSaved) throw new Error('Export and confirm an encrypted wallet backup before preparing a broker funding proof.')
       if (!proposal || !broker) throw new Error('Choose an authorized proposal with a visible broker record.')
       if (!['borrower_authorized', 'broker_authorized'].includes(proposal.status)) throw new Error('Both party authorizations must be present before funding.')
-      const proof = await crypto.prepareBrokerOrigination({ proposal, broker })
-      const receipt = await action.run('Originate loan from proposal', () => adapters.protocol.originate({ proposalId, proof }))
+      const receipt = await action.run('Originate loan from proposal', async () => {
+        let currentProposal = proposal
+        let currentBroker = broker
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            const proof = await crypto.prepareBrokerOrigination({ proposal: currentProposal, broker: currentBroker })
+            return requireFinalized(await adapters.protocol.originate({ proposalId, proof }), 'Origination')
+          } catch (caught) {
+            if (isInboxMergeRequired(caught)) {
+              const brokerAccount = await adapters.protocol.getBrokerPrivateAccount(currentBroker.brokerId)
+              const mergeProof = await crypto.prepareMerge({ account: brokerAccount, scope: 'broker', brokerId: currentBroker.brokerId })
+              requireFinalized(await adapters.protocol.mergeBrokerInbox({ brokerId: currentBroker.brokerId, expectedSpendingVersion: brokerAccount.spendingVersion, proof: mergeProof }), 'Broker inbox merge')
+              if (!accountId) throw new Error('Reconnect the broker account before retrying origination.')
+              const refreshed = await adapters.protocol.getDashboard(accountId)
+              currentProposal = refreshed.proposals.find((item) => item.proposalId === proposalId) || await adapters.protocol.getProposal(proposalId)
+              currentBroker = refreshed.brokers.find((item) => item.brokerId === currentProposal.brokerId) || (() => { throw new Error('The broker is no longer visible in finalized state.') })()
+              continue
+            }
+            if (caught instanceof ProtocolError && caught.details.category === 'STALE_STATE' && attempt < 2) {
+              if (!accountId) throw new Error('Reconnect the broker account before retrying origination.')
+              const refreshed = await adapters.protocol.getDashboard(accountId)
+              currentProposal = refreshed.proposals.find((item) => item.proposalId === proposalId) || await adapters.protocol.getProposal(proposalId)
+              currentBroker = refreshed.brokers.find((item) => item.brokerId === currentProposal.brokerId) || (() => { throw new Error('The broker is no longer visible in finalized state.') })()
+              continue
+            }
+            throw caught
+          }
+        }
+        throw new Error('Origination state changed repeatedly; refresh and try again.')
+      })
       if (receipt) void refresh()
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Origination could not be prepared.') }
   }
@@ -235,7 +263,7 @@ function CreateProposalCard({ brokers }: { brokers: BrokerSummary[] }) {
       if (!draft) throw new Error('Prepare the encrypted agreement first.')
       if (!createdProposalId || !termsDigest.trim()) throw new Error('Publish the proposal and read its canonical Core digest before downloading the exchange package.')
       const canonical = await adapters.protocol.getProposal(createdProposalId)
-      downloadProposalPackage(makeProposalPackage({ proposalId: createdProposalId, borrowerId: borrowerId.trim(), brokerId, vaultId, termsDigest: parseHexValue(termsDigest, 'Core agreement digest', 32), encryptedAgreement: draft.encryptedAgreement, encryptedPrincipal: draft.principalCiphertexts.map((value) => parseHexValue(value, 'Principal ciphertext')), encryptedOwed: draft.initialOwedCiphertexts.map((value) => parseHexValue(value, 'Initial owed ciphertext')), encryptedPayment: draft.periodicPaymentCiphertexts.map((value) => parseHexValue(value, 'Periodic payment ciphertext')), principalCommitment: parseHexValue(draft.principalCommitment, 'Principal commitment'), owedCommitment: parseHexValue(draft.owedCommitment, 'Initial owed commitment'), paymentCommitment: parseHexValue(draft.paymentCommitment, 'Periodic payment commitment'), auditorPublicKey: parseHexValue(auditorPublicKey, 'Loan auditor public key', 32), brokerSignature: canonical.brokerSignature || '', borrowerSignature: canonical.borrowerSignature || '', borrowerKeyId: borrowerKeyId.trim(), brokerKeyId: brokerKeyId.trim(), auditorKeyId: auditorKeyId.trim(), brokerAuthorizationEpoch: canonical.brokerAuthorizationEpoch || '0', borrowerAuthorizationEpoch: canonical.borrowerAuthorizationEpoch || '0', expiresAt: canonical.expiresAt }))
+      downloadProposalPackage(makeProposalPackage({ proposalId: createdProposalId, borrowerId: borrowerId.trim(), brokerId, vaultId, termsDigest: parseHexValue(termsDigest, 'Core agreement digest', 32), encryptedAgreement: draft.encryptedAgreement, encryptedPrincipal: draft.principalCiphertexts.map((value) => parseHexValue(value, 'Principal ciphertext')), encryptedOwed: draft.initialOwedCiphertexts.map((value) => parseHexValue(value, 'Initial owed ciphertext')), encryptedPayment: draft.periodicPaymentCiphertexts.map((value) => parseHexValue(value, 'Periodic payment ciphertext')), principalCommitment: parseHexValue(draft.principalCommitment, 'Principal commitment'), owedCommitment: parseHexValue(draft.owedCommitment, 'Initial owed commitment'), paymentCommitment: parseHexValue(draft.paymentCommitment, 'Periodic payment commitment'), auditorPublicKey: parseHexValue(auditorPublicKey, 'Loan auditor public key', 32), brokerSignature: canonical.brokerSignature || '', borrowerSignature: canonical.borrowerSignature || '', borrowerKeyId: borrowerKeyId.trim(), brokerKeyId: brokerKeyId.trim(), auditorKeyId: auditorKeyId.trim(), brokerAuthorizationEpoch: canonical.brokerAuthorizationEpoch || '0', borrowerAuthorizationEpoch: canonical.borrowerAuthorizationEpoch || '0', expiresAt: canonical.expiresAt, transferRecovery: draft.transferRecovery, owedRecovery: draft.owedRecovery, paymentRecovery: draft.paymentRecovery }))
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Proposal package could not be downloaded.') }
   }
   return <Card className="form-card"><SectionHeading eyebrow="Joint authorization" title="Build a private agreement" description="Enter the loan terms in your browser. Core receives encrypted reader views, commitments and the agreement envelope." /><Notice tone="warning" title="Protect the agreement draft">Keep this draft backed up before leaving the session. If it is lost, prepare a new agreement rather than reusing old encrypted terms.</Notice><form onSubmit={submit} className="form-stack"><Field label="Broker" htmlFor="proposal-broker"><SelectInput id="proposal-broker" value={brokerId} onChange={(event) => { setBrokerId(event.target.value); setVaultId(brokers.find((item) => item.brokerId === event.target.value)?.vaultId || ''); setBorrowerKeyId(''); setBorrowerPublicKey(''); setBrokerKeyId(''); setBrokerPublicKey(''); setDraft(null) }}><option value="">Select broker</option>{brokers.map((item) => <option key={item.brokerId} value={item.brokerId}>{item.brokerId}</option>)}</SelectInput></Field><Field label="Borrower account" htmlFor="proposal-borrower"><TextInput id="proposal-borrower" value={borrowerId} onChange={(event) => { setBorrowerId(event.target.value); setBorrowerKeyId(''); setBorrowerPublicKey(''); setDraft(null) }} placeholder="borrower.testnet" /></Field><div className="two-column-inner"><Field label="Borrower encryption key" hint="Resolved from the registered Core holder state."><div className="readonly-field"><span>Key ID</span><Mono>{borrowerKeyId || 'Resolve during local preparation'}</Mono><span>Public key</span><Mono>{borrowerPublicKey ? `${borrowerPublicKey.slice(0, 18)}…` : 'Not resolved'}</Mono></div></Field><Field label="Broker encryption key" hint="Resolved from the selected broker's registered Core key."><div className="readonly-field"><span>Key ID</span><Mono>{brokerKeyId || 'Resolve during local preparation'}</Mono><span>Public key</span><Mono>{brokerPublicKey ? `${brokerPublicKey.slice(0, 18)}…` : 'Not resolved'}</Mono></div></Field></div><Field label="Vault" hint="Bound to the selected broker's registered vault."><div className="readonly-field"><Mono>{vaultId || 'Select a broker first'}</Mono></div></Field><div className="two-column-inner"><Field label="Loan auditor key ID" htmlFor="proposal-auditor"><TextInput id="proposal-auditor" value={auditorKeyId} onChange={(event) => setAuditorKeyId(event.target.value)} placeholder="auditor key ID" /></Field><Field label="Loan auditor public key" htmlFor="proposal-auditor-public"><TextInput id="proposal-auditor-public" value={auditorPublicKey} onChange={(event) => setAuditorPublicKey(event.target.value)} placeholder="32-byte canonical hex public key" /></Field></div><div className="two-column-inner"><Field label={`Principal (${snapshot.asset.decimals} decimals)`} htmlFor="proposal-principal"><TextInput id="proposal-principal" inputMode="decimal" value={principal} onChange={(event) => { setPrincipal(event.target.value); setDraft(null) }} placeholder="0.00" /></Field><Field label={`Initial amount owed (${snapshot.asset.decimals} decimals)`} htmlFor="proposal-owed"><TextInput id="proposal-owed" inputMode="decimal" value={initialOwed} onChange={(event) => { setInitialOwed(event.target.value); setDraft(null) }} placeholder="0.00" /></Field><Field label={`Periodic payment (${snapshot.asset.decimals} decimals)`} htmlFor="proposal-payment"><TextInput id="proposal-payment" inputMode="decimal" value={periodicPayment} onChange={(event) => { setPeriodicPayment(event.target.value); setDraft(null) }} placeholder="0.00" /></Field><Field label="Payment count" htmlFor="proposal-count"><TextInput id="proposal-count" inputMode="numeric" value={paymentCount} onChange={(event) => { setPaymentCount(event.target.value); setDraft(null) }} placeholder="12" /></Field></div><div className="two-column-inner"><Field label="Payment interval (seconds)" htmlFor="proposal-interval"><TextInput id="proposal-interval" inputMode="numeric" value={paymentInterval} onChange={(event) => setPaymentInterval(event.target.value)} /></Field><Field label="Grace period (seconds)" htmlFor="proposal-grace"><TextInput id="proposal-grace" inputMode="numeric" value={gracePeriod} onChange={(event) => setGracePeriod(event.target.value)} /></Field></div><Button type="button" variant="secondary" onClick={() => void buildAgreement()} busy={building}>Encrypt agreement locally</Button>{draft ? <div className="readonly-field"><span>Agreement draft ready</span><Mono>{draft.draftId}</Mono><span>Reader views and recovery data are ready</span></div> : null}<div className="two-column-inner"><Field label="Core agreement digest" hint="Read from finalized Core after publishing."><div className="readonly-field"><Mono>{termsDigest || 'Set after proposal publication'}</Mono></div></Field><Field label="Expires in (minutes)" htmlFor="proposal-expiry"><TextInput id="proposal-expiry" inputMode="numeric" value={expiryMinutes} onChange={(event) => setExpiryMinutes(event.target.value)} /></Field></div>{error ? <p className="field-error" role="alert">{error}</p> : null}<div className="review-actions"><Button type="submit" disabled={!draft || !brokers.length} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Publish broker-authorized proposal</Button><Button type="button" variant="quiet" onClick={() => void downloadPackage()} disabled={!draft}>Download encrypted package</Button></div><ActionFeedback state={action.state} /></form></Card>
@@ -301,7 +329,7 @@ function DrawCard({ brokers }: { brokers: BrokerSummary[] }) {
       if (!broker) throw new Error('Choose a broker.')
       const units = parseAmount(amount, snapshot.asset.decimals)
       const proof = await crypto.prepareDraw({ broker, amount: units, expectedSpendingVersion: broker.spendingVersion })
-      await action.run('Draw vault liquidity', () => adapters.protocol.draw({ brokerId, amount: units, expectedSpendingVersion: broker.spendingVersion, proof }))
+      await action.run('Draw vault liquidity', () => adapters.protocol.draw({ brokerId, amount: units, expectedSpendingVersion: broker.spendingVersion, proof }).then((receipt) => requireFinalized(receipt, 'Draw')))
       void refresh()
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Draw preparation failed.') }
   }
@@ -321,7 +349,7 @@ function MergeCard({ brokers }: { brokers: BrokerSummary[] }) {
     try {
       const account = await adapters.protocol.getBrokerPrivateAccount(brokerId)
       const proof = await crypto.prepareMerge({ account, scope: 'broker', brokerId })
-      const receipt = await action.run('Merge broker inbox', () => adapters.protocol.mergeBrokerInbox({ brokerId, expectedSpendingVersion: account.spendingVersion, proof }))
+      const receipt = await action.run('Merge broker inbox', () => adapters.protocol.mergeBrokerInbox({ brokerId, expectedSpendingVersion: account.spendingVersion, proof }).then((result) => requireFinalized(result, 'Inbox merge')))
       if (receipt) void refresh()
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Broker inbox merge preparation failed.') }
   }
@@ -344,28 +372,27 @@ function SettlementCard({ brokers }: { brokers: BrokerSummary[] }) {
       const units = parseAmount(amount, snapshot.asset.decimals)
       const receipt = await action.run('Settle broker funds', async () => {
         let current = broker
-        try {
-          if (!current.accountingVersion) throw new Error('The finalized broker view has no accounting version.')
-          const proof = await crypto.prepareSettlement({ broker: current, amount: units, expectedSpendingVersion: current.spendingVersion })
-          return requireFinalized(await adapters.protocol.settle({ brokerId, amount: units, expectedSpendingVersion: current.spendingVersion, expectedAccountingVersion: current.accountingVersion, proof }), 'Settlement')
-        } catch (caught) {
-          if (!(caught instanceof ProtocolError) || caught.details.category !== 'STALE_STATE' || !accountId) throw caught
-          // A stale version is not evidence that an inbox needs merging. Read
-          // finalized state first, compare the authenticated inbox commitment,
-          // and merge only when a new incoming state actually exists.
-          let refreshed = await adapters.protocol.getDashboard(accountId)
-          current = refreshed.brokers.find((item) => item.brokerId === brokerId) || current
-          if (current.inboxCommitment !== broker.inboxCommitment) {
-            const brokerAccount = await adapters.protocol.getBrokerPrivateAccount(brokerId)
-            const mergeProof = await crypto.prepareMerge({ account: brokerAccount, scope: 'broker', brokerId })
-            requireFinalized(await adapters.protocol.mergeBrokerInbox({ brokerId, expectedSpendingVersion: brokerAccount.spendingVersion, proof: mergeProof }), 'Broker inbox merge')
-            refreshed = await adapters.protocol.getDashboard(accountId)
-            current = refreshed.brokers.find((item) => item.brokerId === brokerId) || current
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            if (!current.accountingVersion) throw new Error('The finalized broker view has no accounting version.')
+            const proof = await crypto.prepareSettlement({ broker: current, amount: units, expectedSpendingVersion: current.spendingVersion })
+            return requireFinalized(await adapters.protocol.settle({ brokerId, amount: units, expectedSpendingVersion: current.spendingVersion, expectedAccountingVersion: current.accountingVersion, proof }), 'Settlement')
+          } catch (caught) {
+            if (isInboxMergeRequired(caught)) {
+              if (!accountId) throw new Error('Reconnect the broker account before merging its inbox.')
+              const brokerAccount = await adapters.protocol.getBrokerPrivateAccount(brokerId)
+              const mergeProof = await crypto.prepareMerge({ account: brokerAccount, scope: 'broker', brokerId })
+              requireFinalized(await adapters.protocol.mergeBrokerInbox({ brokerId, expectedSpendingVersion: brokerAccount.spendingVersion, proof: mergeProof }), 'Broker inbox merge')
+              const refreshed = await adapters.protocol.getDashboard(accountId)
+              current = refreshed.brokers.find((item) => item.brokerId === brokerId) || (() => { throw new Error('The broker is no longer visible in finalized state.') })()
+              continue
+            }
+            if (!(caught instanceof ProtocolError) || caught.details.category !== 'STALE_STATE' || attempt >= 2 || !accountId) throw caught
+            const refreshed = await adapters.protocol.getDashboard(accountId)
+            current = refreshed.brokers.find((item) => item.brokerId === brokerId) || (() => { throw new Error('The broker is no longer visible in finalized state.') })()
           }
-          if (!current.accountingVersion) throw new Error('The refreshed broker view has no accounting version.')
-          const proof = await crypto.prepareSettlement({ broker: current, amount: units, expectedSpendingVersion: current.spendingVersion })
-          return requireFinalized(await adapters.protocol.settle({ brokerId, amount: units, expectedSpendingVersion: current.spendingVersion, expectedAccountingVersion: current.accountingVersion, proof }), 'Settlement')
         }
+        throw new Error('Settlement state changed repeatedly; refresh and try again.')
       })
       if (receipt) void refresh()
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Settlement preparation failed.') }

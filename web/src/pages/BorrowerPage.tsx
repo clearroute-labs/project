@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useAppContext } from '../App'
 import { ActionFeedback, Button, Card, EmptyState, Field, Metric, Mono, Notice, SectionHeading, SelectInput, StatusBadge, Table, TextInput } from '../components/ui'
-import { requireFinalized, useAction } from '../lib/actionState'
+import { isInboxMergeRequired, requireFinalized, useAction } from '../lib/actionState'
 import { parseAmount, unixSecondsNow } from '../lib/money'
 import { ProtocolError, type LoanSummary, type PrivateAccountView, type ProposalSummary } from '../lib/types'
 import { readProposalPackage, type EncryptedProposalPackage } from '../lib/proposalPackage'
@@ -50,6 +50,31 @@ function AgreementsPage() {
   return <><PageHeader eyebrow="Borrower workspace / agreements" title="Agreements & authorization" description="Decrypt and inspect the signed agreement before authorizing. Terms are tied to the proposal digest and expiry." action={<Button variant="quiet" onClick={() => navigate('/')}>← Home</Button>} /><Notice tone="warning" title="Review before authorizing">Authorization can be revoked before the proposal is consumed. After consumption, the proposal ID is permanently spent and cannot be reused.</Notice><Card><SectionHeading eyebrow="Proposal inbox" title="Broker proposals" /><ProposalTable proposals={snapshot.proposals} onSelect={(proposal) => { setSelectedId(proposal.proposalId); setProposalPackage(null); setPackageError('') }} selectedId={selectedId} /></Card><Card className="form-card"><SectionHeading eyebrow="Signed exchange" title="Import the broker package" description="Import the encrypted, signed package received out-of-band. Its digest and parties are checked against the selected on-chain proposal before decryption." /><Field label="Encrypted proposal package" htmlFor="proposal-package"><input id="proposal-package" className="file-input" type="file" accept="application/json,.json" onChange={(event) => void importPackage(event)} /></Field>{proposalPackage ? <p className="field-hint" role="status">Imported package {proposalPackage.proposalId ? `for proposal ${proposalPackage.proposalId}` : 'without an on-chain ID'} · digest {proposalPackage.termsDigest.slice(0, 18)}…</p> : null}{packageError ? <p className="field-error" role="alert">{packageError}</p> : null}</Card><AgreementReviewCard proposal={snapshot.proposals.find((proposal) => proposal.proposalId === selectedId)} proposalPackage={proposalPackage} /></>
 }
 
+function authoritativeProposal(proposal: ProposalSummary, packageValue: EncryptedProposalPackage): ProposalSummary {
+  const equal = (left: string | undefined, right: string, label: string) => {
+    if (!left || left.toLowerCase() !== right.toLowerCase()) throw new Error(`The package ${label} does not match finalized Core state.`)
+  }
+  const equalList = (left: string[] | undefined, right: string[], label: string) => {
+    if (!left || left.length !== right.length || left.some((value, index) => value.toLowerCase() !== right[index]!.toLowerCase())) throw new Error(`The package ${label} does not match finalized Core state.`)
+  }
+  if (packageValue.proposalId && packageValue.proposalId !== proposal.proposalId) throw new Error('The imported package belongs to a different proposal.')
+  if (packageValue.termsDigest.toLowerCase() !== proposal.termsDigest.toLowerCase() || packageValue.borrowerId !== proposal.borrowerId || packageValue.brokerId !== proposal.brokerId || packageValue.vaultId !== proposal.vaultId || packageValue.expiresAt !== proposal.expiresAt) throw new Error('The imported package parties, digest or expiry do not match finalized Core state.')
+  equalList(proposal.encryptedPrincipal, packageValue.encryptedPrincipal, 'principal ciphertexts')
+  equalList(proposal.encryptedOwed, packageValue.encryptedOwed, 'owed ciphertexts')
+  equalList(proposal.encryptedPayment, packageValue.encryptedPayment, 'payment ciphertexts')
+  equal(proposal.principalCommitment, packageValue.principalCommitment, 'principal commitment')
+  equal(proposal.owedCommitment, packageValue.owedCommitment, 'owed commitment')
+  equal(proposal.paymentCommitment, packageValue.paymentCommitment, 'payment commitment')
+  equal(proposal.loanAuditorPublicKey, packageValue.auditorPublicKey, 'loan auditor key')
+  equal(proposal.encryptionKeyId, packageValue.auditorKeyId, 'loan auditor key ID')
+  equal(proposal.borrowerKeyId, packageValue.borrowerKeyId, 'borrower key ID')
+  equal(proposal.brokerKeyId, packageValue.brokerKeyId, 'broker key ID')
+  if ((proposal.brokerSignature || '').toLowerCase() !== packageValue.brokerSignature.toLowerCase() || (proposal.borrowerSignature || '').toLowerCase() !== packageValue.borrowerSignature.toLowerCase()) throw new Error('The package signatures do not match finalized Core state.')
+  if (proposal.brokerAuthorizationEpoch !== undefined && proposal.brokerAuthorizationEpoch !== packageValue.brokerAuthorizationEpoch) throw new Error('The package broker authorization epoch is stale.')
+  if (proposal.borrowerAuthorizationEpoch !== undefined && proposal.borrowerAuthorizationEpoch !== packageValue.borrowerAuthorizationEpoch) throw new Error('The package borrower authorization epoch is stale.')
+  return { ...proposal, encryptedAgreement: packageValue.encryptedAgreement, transferRecovery: packageValue.transferRecovery, owedRecovery: packageValue.owedRecovery, paymentRecovery: packageValue.paymentRecovery }
+}
+
 function AgreementReviewCard({ proposal, proposalPackage }: { proposal?: ProposalSummary; proposalPackage: EncryptedProposalPackage | null }) {
   const { adapters, snapshot, refresh, accountId } = useAppContext()
   const backupSaved = useEncryptedWalletBackup(walletBackupScope(adapters.protocol.config, accountId))
@@ -63,11 +88,10 @@ function AgreementReviewCard({ proposal, proposalPackage }: { proposal?: Proposa
     try {
       if (!backupSaved) throw new Error('Export and confirm an encrypted wallet backup in Security before decrypting or receiving a loan.')
       if (!proposalPackage) throw new Error('Import the matching encrypted proposal package before decrypting.')
-      if (proposalPackage.proposalId && proposalPackage.proposalId !== proposal.proposalId) throw new Error('The imported package belongs to a different proposal.')
-      if (proposalPackage.termsDigest !== proposal.termsDigest || proposalPackage.borrowerId !== proposal.borrowerId || proposalPackage.brokerId !== proposal.brokerId || proposalPackage.vaultId !== proposal.vaultId) throw new Error('The imported package does not match the selected on-chain proposal.')
-      const reviewedProposal = { ...proposal, encryptedAgreement: proposalPackage.encryptedAgreement, encryptedPrincipal: proposalPackage.encryptedPrincipal, encryptedOwed: proposalPackage.encryptedOwed, encryptedPayment: proposalPackage.encryptedPayment, principalCommitment: proposalPackage.principalCommitment, owedCommitment: proposalPackage.owedCommitment, paymentCommitment: proposalPackage.paymentCommitment, loanAuditorPublicKey: proposalPackage.auditorPublicKey, brokerSignature: proposalPackage.brokerSignature, borrowerSignature: proposalPackage.borrowerSignature }
+      const finalizedProposal = await adapters.protocol.getProposal(proposal.proposalId)
+      const reviewedProposal = authoritativeProposal(finalizedProposal, proposalPackage)
       const result = await adapters.crypto.decryptAgreement(reviewedProposal)
-      if (result.digest !== proposal.termsDigest) throw new Error('The decrypted agreement digest does not match the proposal.')
+      if (result.digest !== finalizedProposal.termsDigest) throw new Error('The decrypted agreement digest does not match the proposal.')
       setDecrypted(result)
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Agreement could not be decrypted locally.') }
   }
@@ -77,8 +101,9 @@ function AgreementReviewCard({ proposal, proposalPackage }: { proposal?: Proposa
     if (!backupSaved) return setError('Export and confirm an encrypted wallet backup in Security before authorizing a loan.')
     if (expired) return setError('This proposal has expired. Ask the broker to issue a new one.')
     try {
-      if (!proposalPackage || proposalPackage.termsDigest !== proposal.termsDigest) return setError('Import and decrypt the matching signed proposal package first.')
-      const reviewedProposal = { ...proposal, encryptedAgreement: proposalPackage.encryptedAgreement, encryptedPrincipal: proposalPackage.encryptedPrincipal, encryptedOwed: proposalPackage.encryptedOwed, encryptedPayment: proposalPackage.encryptedPayment, principalCommitment: proposalPackage.principalCommitment, owedCommitment: proposalPackage.owedCommitment, paymentCommitment: proposalPackage.paymentCommitment, loanAuditorPublicKey: proposalPackage.auditorPublicKey, brokerSignature: proposalPackage.brokerSignature, borrowerSignature: proposalPackage.borrowerSignature }
+      if (!proposalPackage) return setError('Import and decrypt the matching signed proposal package first.')
+      const finalizedProposal = await adapters.protocol.getProposal(proposal.proposalId)
+      const reviewedProposal = authoritativeProposal(finalizedProposal, proposalPackage)
       const signature = await adapters.crypto.authorizeAgreement(reviewedProposal)
       await action.run('Authorize loan proposal', () => adapters.protocol.authorizeProposal({ proposalId: proposal.proposalId, authorizationSignature: signature.authorizationSignature }))
       void refresh()
@@ -134,9 +159,30 @@ function UnshieldCard({ view }: { view: PrivateAccountView | null }) {
     try {
       if (!view) throw new Error('Load your encrypted account first.')
       const amountUnits = parseAmount(amount, snapshot.asset.decimals)
-      const proof = await adapters.crypto.prepareUnshield({ account: view, amount: amountUnits })
-      const expected = typeof proof.operationArgs?.expected_spending_version === 'string' ? proof.operationArgs.expected_spending_version : view.spendingVersion
-      const receipt = await action.run('Unshield private balance', async () => requireFinalized(await adapters.protocol.unshield({ amount: amountUnits, expectedSpendingVersion: expected, proof }), 'Unshield'))
+      const receipt = await action.run('Unshield private balance', async () => {
+        let account = await adapters.protocol.getPrivateAccount(view.accountId)
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            const proof = await adapters.crypto.prepareUnshield({ account, amount: amountUnits })
+            const expected = typeof proof.operationArgs?.expected_spending_version === 'string' ? proof.operationArgs.expected_spending_version : account.spendingVersion
+            return requireFinalized(await adapters.protocol.unshield({ amount: amountUnits, expectedSpendingVersion: expected, proof }), 'Unshield')
+          } catch (caught) {
+            if (isInboxMergeRequired(caught)) {
+              const refreshed = await adapters.protocol.getPrivateAccount(view.accountId)
+              const mergeProof = await adapters.crypto.prepareMerge({ account: refreshed, scope: 'holder' })
+              requireFinalized(await adapters.protocol.mergeInbox({ accountId: view.accountId, expectedSpendingVersion: refreshed.spendingVersion, proof: mergeProof }), 'Inbox merge')
+              account = await adapters.protocol.getPrivateAccount(view.accountId)
+              continue
+            }
+            if (caught instanceof ProtocolError && caught.details.category === 'STALE_STATE' && attempt < 2) {
+              account = await adapters.protocol.getPrivateAccount(view.accountId)
+              continue
+            }
+            throw caught
+          }
+        }
+        throw new Error('Unshield state changed repeatedly; refresh and try again.')
+      })
       if (receipt) { setAmount(''); await refresh() }
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unshield preparation failed.') }
   }
@@ -174,22 +220,26 @@ function TransferCard({ view }: { view: PrivateAccountView | null }) {
       const amountUnits = parseAmount(amount, snapshot.asset.decimals)
       const receipt = await action.run('Send private transfer', async () => {
         let sender = await adapters.protocol.getPrivateAccount(accountId)
-        try {
-          const proof = await crypto.prepareConfidentialTransfer({ sender, destinationAccountId: destination.trim(), destinationEncryptionKeyId: destinationKey.encryptionKeyId, destinationEncryptionPublicKey: destinationKey.publicKey, amount: amountUnits })
-          return requireFinalized(await adapters.protocol.confidentialSend({ senderAccountId: accountId, destinationAccountId: destination.trim(), expectedSpendingVersion: sender.spendingVersion, proof }), 'Private transfer')
-        } catch (caught) {
-          if (!(caught instanceof ProtocolError) || caught.details.category !== 'STALE_STATE') throw caught
-          const refreshed = await adapters.protocol.getPrivateAccount(accountId)
-          if (refreshed.inboxCommitment === sender.inboxCommitment) {
-            sender = refreshed
-          } else {
-            const mergeProof = await crypto.prepareMerge({ account: refreshed, scope: 'holder' })
-            requireFinalized(await adapters.protocol.mergeInbox({ accountId, expectedSpendingVersion: refreshed.spendingVersion, proof: mergeProof }), 'Inbox merge')
-            sender = await adapters.protocol.getPrivateAccount(accountId)
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            const proof = await crypto.prepareConfidentialTransfer({ sender, destinationAccountId: destination.trim(), destinationEncryptionKeyId: destinationKey.encryptionKeyId, destinationEncryptionPublicKey: destinationKey.publicKey, amount: amountUnits })
+            return requireFinalized(await adapters.protocol.confidentialSend({ senderAccountId: accountId, destinationAccountId: destination.trim(), expectedSpendingVersion: sender.spendingVersion, proof }), 'Private transfer')
+          } catch (caught) {
+            if (isInboxMergeRequired(caught)) {
+              const refreshed = await adapters.protocol.getPrivateAccount(accountId)
+              const mergeProof = await crypto.prepareMerge({ account: refreshed, scope: 'holder' })
+              requireFinalized(await adapters.protocol.mergeInbox({ accountId, expectedSpendingVersion: refreshed.spendingVersion, proof: mergeProof }), 'Inbox merge')
+              sender = await adapters.protocol.getPrivateAccount(accountId)
+              continue
+            }
+            if (caught instanceof ProtocolError && caught.details.category === 'STALE_STATE' && attempt < 2) {
+              sender = await adapters.protocol.getPrivateAccount(accountId)
+              continue
+            }
+            throw caught
           }
-          const proof = await crypto.prepareConfidentialTransfer({ sender, destinationAccountId: destination.trim(), destinationEncryptionKeyId: destinationKey.encryptionKeyId, destinationEncryptionPublicKey: destinationKey.publicKey, amount: amountUnits })
-          return requireFinalized(await adapters.protocol.confidentialSend({ senderAccountId: accountId, destinationAccountId: destination.trim(), expectedSpendingVersion: sender.spendingVersion, proof }), 'Private transfer')
         }
+        throw new Error('Private transfer state changed repeatedly; refresh and try again.')
       })
       if (receipt) void refresh()
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Transfer preparation failed.') }
@@ -218,27 +268,27 @@ function RepaymentCard({ loans, view }: { loans: LoanSummary[]; view: PrivateAcc
       const receipt = await action.run(mode === 'full' ? 'Prepare full repayment' : 'Prepare regular repayment', async () => {
         let borrower = await adapters.protocol.getPrivateAccount(view.accountId)
         let currentLoan = loan
-        try {
-          const proof = await crypto.prepareRepayment({ loan: currentLoan, borrower, mode })
-          return requireFinalized(await adapters.protocol.repay({ loanId, mode, expectedLoanVersion: currentLoan.stateVersion, expectedBorrowerSpendingVersion: borrower.spendingVersion, proof }), 'Repayment')
-        } catch (caught) {
-          if (!(caught instanceof ProtocolError) || caught.details.category !== 'STALE_STATE') throw caught
-          // Refresh the authoritative loan and holder views before deciding
-          // whether the incoming inbox actually requires a merge.
-          if (!accountId) throw caught
-          const refreshedDashboard = await adapters.protocol.getDashboard(accountId)
-          currentLoan = refreshedDashboard.loans.find((item) => item.loanId === loanId) || (() => { throw new Error('The loan is no longer present in the finalized dashboard.') })()
-          const refreshed = await adapters.protocol.getPrivateAccount(borrower.accountId)
-          if (refreshed.inboxCommitment === borrower.inboxCommitment) {
-            borrower = refreshed
-          } else {
-            const mergeProof = await crypto.prepareMerge({ account: refreshed, scope: 'holder' })
-            requireFinalized(await adapters.protocol.mergeInbox({ accountId: borrower.accountId, expectedSpendingVersion: refreshed.spendingVersion, proof: mergeProof }), 'Inbox merge')
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          try {
+            const proof = await crypto.prepareRepayment({ loan: currentLoan, borrower, mode })
+            return requireFinalized(await adapters.protocol.repay({ loanId, mode, expectedLoanVersion: currentLoan.stateVersion, expectedBorrowerSpendingVersion: borrower.spendingVersion, proof }), 'Repayment')
+          } catch (caught) {
+            if (isInboxMergeRequired(caught)) {
+              const refreshed = await adapters.protocol.getPrivateAccount(borrower.accountId)
+              const mergeProof = await crypto.prepareMerge({ account: refreshed, scope: 'holder' })
+              requireFinalized(await adapters.protocol.mergeInbox({ accountId: borrower.accountId, expectedSpendingVersion: refreshed.spendingVersion, proof: mergeProof }), 'Inbox merge')
+              borrower = await adapters.protocol.getPrivateAccount(borrower.accountId)
+              const refreshedDashboard = await adapters.protocol.getDashboard(borrower.accountId)
+              currentLoan = refreshedDashboard.loans.find((item) => item.loanId === loanId) || (() => { throw new Error('The loan is no longer present in the finalized dashboard.') })()
+              continue
+            }
+            if (!(caught instanceof ProtocolError) || caught.details.category !== 'STALE_STATE' || attempt >= 2) throw caught
+            const refreshedDashboard = await adapters.protocol.getDashboard(borrower.accountId)
+            currentLoan = refreshedDashboard.loans.find((item) => item.loanId === loanId) || (() => { throw new Error('The loan is no longer present in the finalized dashboard.') })()
             borrower = await adapters.protocol.getPrivateAccount(borrower.accountId)
           }
-          const proof = await crypto.prepareRepayment({ loan: currentLoan, borrower, mode })
-          return requireFinalized(await adapters.protocol.repay({ loanId, mode, expectedLoanVersion: currentLoan.stateVersion, expectedBorrowerSpendingVersion: borrower.spendingVersion, proof }), 'Repayment')
         }
+        throw new Error('Repayment state changed repeatedly; refresh and try again.')
       })
       if (receipt) void refresh()
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Repayment preparation failed.') }

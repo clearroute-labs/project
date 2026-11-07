@@ -1,4 +1,4 @@
-import type { ProposalSummary } from './types'
+import type { ProposalSummary, RecoveryPair } from './types'
 
 export const PROPOSAL_PACKAGE_SCHEMA = 'confidential-lending/proposal/v1' as const
 
@@ -25,6 +25,9 @@ export interface EncryptedProposalPackage {
   brokerAuthorizationEpoch: string
   borrowerAuthorizationEpoch: string
   expiresAt: number
+  transferRecovery: RecoveryPair[]
+  owedRecovery: RecoveryPair[]
+  paymentRecovery: RecoveryPair[]
 }
 
 export interface ProposalPackageInput extends Omit<EncryptedProposalPackage, 'schema'> {}
@@ -52,12 +55,18 @@ export function validateProposalPackage(value: unknown): asserts value is Encryp
   for (const field of ['principalCommitment', 'owedCommitment', 'paymentCommitment', 'auditorPublicKey'] as const) {
     if (typeof candidate[field] !== 'string' || !/^(?:[a-f\d]{2})+$/i.test(candidate[field])) throw new Error(`Proposal package field ${field} must be canonical hex bytes.`)
   }
+  for (const field of ['transferRecovery', 'owedRecovery', 'paymentRecovery'] as const) {
+    const pairs = candidate[field]
+    const expected = field === 'transferRecovery' ? 5 : 3
+    if (!Array.isArray(pairs) || pairs.length !== expected || pairs.some((pair) => !Array.isArray(pair) || pair.length !== 2 || pair.some((ciphertext) => typeof ciphertext !== 'string' || !/^(?:[a-f\d]{2})+$/i.test(ciphertext)))) throw new Error(`Proposal package field ${field} must contain ${expected} recovery pairs.`)
+  }
   if (candidate.proposalId !== undefined && (typeof candidate.proposalId !== 'string' || !/^\d+$/.test(candidate.proposalId))) throw new Error('Proposal package proposalId must be a decimal ID.')
   const expiresAt = candidate.expiresAt
   if (!Number.isSafeInteger(expiresAt) || (expiresAt as number) <= 0) throw new Error('Proposal package expiry is invalid.')
 }
 
 export function proposalPackageFromProposal(proposal: ProposalSummary): EncryptedProposalPackage {
+  if (!proposal.transferRecovery || !proposal.owedRecovery || !proposal.paymentRecovery) throw new Error('The proposal does not include the encrypted recovery package.')
   return makeProposalPackage({
     proposalId: proposal.proposalId,
     borrowerId: proposal.borrowerId,
@@ -80,6 +89,9 @@ export function proposalPackageFromProposal(proposal: ProposalSummary): Encrypte
     brokerAuthorizationEpoch: proposal.brokerAuthorizationEpoch || '0',
     borrowerAuthorizationEpoch: proposal.borrowerAuthorizationEpoch || '0',
     expiresAt: proposal.expiresAt,
+    transferRecovery: proposal.transferRecovery,
+    owedRecovery: proposal.owedRecovery,
+    paymentRecovery: proposal.paymentRecovery,
   })
 }
 

@@ -91,6 +91,7 @@ declare const self: { postMessage(message: unknown): void; onmessage: ((event: M
 function reply(message: WorkerReply): void { self.postMessage(message) }
 
 function failureMessage(error: unknown): string {
+  if (error instanceof Error && /^INBOX_MERGE_REQUIRED:(?:[a-z-]+)$/.test(error.message)) return error.message
   if (error instanceof Error && /manifest|profile|artifact|configuration|deployment|RPC|Core|context/i.test(error.message)) return error.message.slice(0, 240)
   return 'Confidential crypto operation failed.'
 }
@@ -133,13 +134,22 @@ function requireState(): WorkerState { if (!state?.ready) throw new Error('The p
 function requireSubject(current = requireState()): string { if (!current.subjectId) throw new Error('Connect a NEAR account before using private operations'); return current.subjectId }
 function keyCandidates(current: WorkerState, role: KeyReference['role'], subjectId: string, keyId: string): KeyReference[] { const candidates: KeyReference[] = [{ role, subjectId, keyId }]; if (role !== 'holder') candidates.push({ role: 'holder', subjectId: current.subjectId || subjectId, keyId }); return candidates }
 function resolveKey(current: WorkerState, role: KeyReference['role'], subjectId: string, keyId: string): KeyReference { const fixed = decimal(keyId, 'key ID'); for (const candidate of keyCandidates(current, role, subjectId, fixed)) { try { current.keyring.publicKey(candidate); return candidate } catch { /* try the next role */ } } throw new Error(`Private key ${fixed} is not available in this browser wallet`) }
+function resolveLoanAuditorKey(current: WorkerState, loanId: string, keyId: string, publicKey: string | undefined): KeyReference {
+  const expected = publicKeyFromHex(text(publicKey, 'loan auditor public key'), 'loan auditor public key').point
+  const fixed = decimal(keyId, 'loan auditor key ID')
+  const matches = current.keyring.exportMaterial().keys.filter((candidate) => candidate.role === 'loan_auditor' && candidate.keyId === fixed && candidate.publicKey.point === expected)
+  if (matches.length !== 1) throw new Error(`The registered loan-auditor key for loan ${loanId} is not available in this browser wallet`)
+  return { role: 'loan_auditor', subjectId: matches[0]!.subjectId, keyId: matches[0]!.keyId }
+}
 async function readAsset(current: WorkerState): Promise<RawAssetProfile> { if (!current.core) throw new Error('Core RPC is not configured for this deployment'); return (await current.core.read<RawAssetProfile>('get_asset_profile')).value }
 async function readHolder(current: WorkerState, accountId: string): Promise<RawHolder> { if (!current.core) throw new Error('Core RPC is not configured for this deployment'); const holder = (await current.core.read<RawHolder | null>('get_holder', { owner: accountId })).value; if (!holder) throw new Error('The requested account has no registered confidential holder key'); return holder }
 async function readBroker(current: WorkerState, brokerId: string): Promise<RawBroker> { if (!current.core) throw new Error('Core RPC is not configured for this deployment'); const broker = (await current.core.read<RawBroker | null>('get_broker', { broker_id: brokerId })).value; if (!broker) throw new Error('The requested broker is not available'); return broker }
 function rawCiphertext(value: unknown, name: string): string { return typeof value === 'string' ? value : toHex(bytes(value, name)) }
 function rawKey(value: RawHolder | RawBroker): EncryptionPublicKey { const candidate = 'encryption_key' in value ? value.encryption_key?.public_key : undefined; const raw = (value as RawHolder).public_key ?? (value as RawHolder).encryption_public_key ?? (value as RawBroker).encryption_public_key ?? candidate; if (raw === undefined) throw new Error('Core did not return a registered encryption public key'); return publicKeyFromRaw(raw) }
 function viewCiphertext(value: unknown, name: string): Ciphertext { return ciphertextFromHex(rawCiphertext(value, name), name) }
-async function decryptCiphertext(current: WorkerState, reference: KeyReference, ciphertext: Ciphertext): Promise<string> { return current.keyring.crypto.execute<string>('decrypt_bounded', { secret_key: current.keyring.secret(reference), ciphertext: JSON.stringify(ciphertext), max_amount: '9223372036854775807' }) }
+async function decryptCiphertext(_current: WorkerState, _reference: KeyReference, _ciphertext: Ciphertext): Promise<string> {
+  throw new Error('Ciphertext decryption requires a finalized, operation-specific recovery path')
+}
 function spendingState(reference: KeyReference, ciphertext: Ciphertext, version: string, amount: string): SpendingState { return { key: reference, ciphertext, version, amount } }
 const statementKinds: Record<string, number> = { KeyPossession: 1, PublicConversion: 2, ConfidentialTransfer: 3, Origination: 4, Repayment: 5, Reconciliation: 6, ZeroBalance: 7, Ownership: 8 }
 async function digestHex(value: string): Promise<string> { return toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))) }
@@ -260,12 +270,26 @@ async function agreement(current: WorkerState, input: { brokerId?: string; borro
     ? await current.ledger.agreement(input.brokerId, input.borrowerId, keys.loanAuditor, { principal: decimal(input.principal, 'principal'), initialOwed: decimal(input.initialOwed, 'initial owed'), periodicPayment: decimal(input.periodicPayment, 'periodic payment'), paymentCount: input.paymentCount })
     : await current.proofs.agreement({ principal: decimal(input.principal, 'principal'), initialOwed: decimal(input.initialOwed, 'initial owed'), periodicPayment: decimal(input.periodicPayment, 'periodic payment'), paymentCount: input.paymentCount, maxPaymentCount: input.maxPaymentCount, transferKeys: [keys.broker, keys.borrower, keys.issuer, keys.tokenAuditor, keys.loanAuditor], loanKeys: [keys.borrower, keys.broker, keys.loanAuditor] })
   const draftId = crypto.randomUUID(); current.drafts.set(draftId, draft)
-  const publicEnvelope = { principal: draft.principal.views, owed: draft.owed.views, payment: draft.payment.views, principalCommitment: draft.principalCommitment.commitment, owedCommitment: draft.owedCommitment.commitment, paymentCommitment: draft.paymentCommitment.commitment }
+  const publicEnvelope = {
+    version: 1,
+    principal: draft.principal.views,
+    owed: draft.owed.views,
+    payment: draft.payment.views,
+    principalCommitment: draft.principalCommitment.commitment,
+    owedCommitment: draft.owedCommitment.commitment,
+    paymentCommitment: draft.paymentCommitment.commitment,
+    recovery: {
+      principal: draft.principal.recovery.map(pair => [ciphertextHex(pair.low_limb), ciphertextHex(pair.high_limb)]),
+      owed: draft.owed.recovery.map(pair => [ciphertextHex(pair.low_limb), ciphertextHex(pair.high_limb)]),
+      payment: draft.payment.recovery.map(pair => [ciphertextHex(pair.low_limb), ciphertextHex(pair.high_limb)]),
+    },
+  }
   return { draftId, principalCiphertexts: draft.principal.views.map(view => ciphertextHex(view.ciphertext)), initialOwedCiphertexts: draft.owed.views.map(view => ciphertextHex(view.ciphertext)), periodicPaymentCiphertexts: draft.payment.views.map(view => ciphertextHex(view.ciphertext)), principalCommitment: commitmentHex(draft.principalCommitment.commitment), owedCommitment: commitmentHex(draft.owedCommitment.commitment), paymentCommitment: commitmentHex(draft.paymentCommitment.commitment), encryptedAgreement: jsonHex(publicEnvelope), transferRecovery: draft.principal.recovery.map(pair => [ciphertextHex(pair.low_limb), ciphertextHex(pair.high_limb)]), owedRecovery: draft.owed.recovery.map(pair => [ciphertextHex(pair.low_limb), ciphertextHex(pair.high_limb)]), paymentRecovery: draft.payment.recovery.map(pair => [ciphertextHex(pair.low_limb), ciphertextHex(pair.high_limb)]) }
 }
 
 async function confidentialTransfer(current: WorkerState, input: { sender: PrivateAccountView; destinationAccountId: string; amount: string; destinationEncryptionKeyId: string; destinationEncryptionPublicKey?: string }): Promise<PreparedProof> {
   if (current.ledger) return preparedLedger(current, await current.ledger.prepareTransfer(requireSubject(current), input.destinationAccountId, input.amount))
+  if (current.core) throw new Error('Confidential transfers require the configured finalized Core wallet')
   const subject = requireSubject(current); if (!input.destinationEncryptionPublicKey) throw new Error('The destination registered encryption key must be resolved before proving a transfer'); const asset = await readAsset(current); const senderReference = resolveKey(current, 'holder', subject, input.sender.encryptionKeyId); const senderCiphertext = ciphertextFromHex(input.sender.balanceCiphertext, 'sender balance'); const sender = spendingState(senderReference, senderCiphertext, input.sender.spendingVersion, await decryptCiphertext(current, senderReference, senderCiphertext)); const destination = publicKeyFromHex(input.destinationEncryptionPublicKey, 'destination public key'); const senderKey = current.keyring.publicKey(senderReference); const keys = encryptionKeys(asset, senderKey, destination, destination); const proofContext = await context(current, { operation: 'confidential-send', accountId: subject, destination: input.destinationAccountId }); const operation = await current.proofs.transfer(proofContext.operationContext, sender, input.amount, [keys.borrower, keys.broker, keys.issuer, keys.tokenAuditor, keys.broker]); const proof = await prepared(current, operation); const fields = statementFields(proof, 'ConfidentialTransfer'); return { ...proof, operationArgs: { sender_spending_ciphertext: ciphertextHex(asCiphertext(fields.sender_spending_after)), transfer_views: viewsHex(fields.transfer_views), commitment: commitmentHex(asCommitment(fields.amount_commitment)) } }
 }
 async function merge(current: WorkerState, input: { account: PrivateAccountView; scope: 'holder' | 'broker'; brokerId?: string }): Promise<PreparedProof> {
@@ -274,77 +298,158 @@ async function merge(current: WorkerState, input: { account: PrivateAccountView;
     const raw = preparedCallArgs(call, 'inbox merge')
     return { context: '', proof: '', statement: 'merge-inbox', publicInputs: [], profileHash: current.configuration.expectedProfileHash, artifactHash: current.configuration.expectedManifestHash || '', statementDigest: '', operationArgs: { new_spending_ciphertext: toHex(bytes(raw.new_spending_ciphertext, 'new spending ciphertext')) } }
   }
+  if (current.core) throw new Error('Inbox merges require the configured finalized Core wallet')
   return preparedMerge(current, await current.proofs.combine('add', ciphertextFromHex(input.account.balanceCiphertext, 'spending ciphertext'), ciphertextFromHex(input.account.inboxCiphertext, 'inbox ciphertext')))
 }
 async function draw(current: WorkerState, input: { broker: BrokerSummary; amount: string; expectedSpendingVersion: string }): Promise<PreparedProof> {
   if (current.ledger) return preparedLedger(current, await current.ledger.prepareDraw(input.broker.brokerId, input.amount))
+  if (current.core) throw new Error('Broker draws require the configured finalized Core wallet')
   const asset = await readAsset(current); const brokerRaw = await readBroker(current, input.broker.brokerId); const brokerReference = resolveKey(current, 'broker', input.broker.brokerId, input.broker.privateBalanceKeyId); const brokerPublicKey = rawKey(brokerRaw); const inbox = viewCiphertext(brokerRaw.inbox_ciphertext, 'broker inbox'); const balance = spendingState(brokerReference, inbox, input.expectedSpendingVersion, await decryptCiphertext(current, brokerReference, inbox)); const proofContext = await context(current, { operation: 'draw', brokerId: input.broker.brokerId, amount: input.amount }); const keys = encryptionKeys(asset, brokerPublicKey, brokerPublicKey, brokerPublicKey); const operation = await current.proofs.conversion(proofContext.operationContext, balance, input.amount, [keys.broker, keys.issuer, keys.tokenAuditor], 'Credit'); const proof = await prepared(current, operation); const fields = statementFields(proof, 'PublicConversion'); const views = viewsHex(fields.views); return { ...proof, operationArgs: { broker_ciphertext: views[0], issuer_ciphertext: views[1], auditor_ciphertext: views[2], broker_spending_commitment: input.broker.spendingCommitment, broker_inbox_commitment: input.broker.inboxCommitment } }
 }
 function draftForProposal(current: WorkerState, proposal: ProposalSummary): PrivateAgreementDraft { const target = (proposal.encryptedPrincipal || []).join('|'); for (const draft of current.drafts.values()) if (draft.principal.views.map(view => ciphertextHex(view.ciphertext)).join('|') === target) return draft; throw new Error('The private agreement draft is no longer in this browser worker; prepare a new proposal') }
 async function brokerOrigination(current: WorkerState, input: { proposal: ProposalSummary; broker: BrokerSummary }): Promise<PreparedProof> {
   const draft = draftForProposal(current, input.proposal); if (current.ledger) return preparedLedger(current, await current.ledger.prepareOrigination(input.proposal.proposalId, draft))
+  if (current.core) throw new Error('Loan origination requires the configured finalized Core wallet')
   const brokerRaw = await readBroker(current, input.proposal.brokerId); const borrowerRaw = await readHolder(current, input.proposal.borrowerId); const brokerReference = resolveKey(current, 'broker', input.proposal.brokerId, input.broker.privateBalanceKeyId); const spending = viewCiphertext(brokerRaw.spending_ciphertext, 'broker spending'); const balance = spendingState(brokerReference, spending, input.broker.spendingVersion, await decryptCiphertext(current, brokerReference, spending)); const proofContext = await context(current, { operation: 'originate', primaryId: input.proposal.proposalId }); const operation = await current.proofs.originate(proofContext.operationContext, balance, draft); const proof = await prepared(current, operation); const fields = statementFields(proof, 'Origination'); const principalViews = viewsHex(fields.transfer_views); const issuerDelta = ciphertextFromHex(principalViews[2]!, 'issuer delta'); const auditorDelta = ciphertextFromHex(principalViews[3]!, 'auditor delta'); const borrowerIssuer = await current.proofs.combine('add', viewCiphertext(borrowerRaw.issuer_balance_ciphertext, 'borrower issuer balance'), issuerDelta); const borrowerAuditor = await current.proofs.combine('add', viewCiphertext(borrowerRaw.auditor_balance_ciphertext, 'borrower auditor balance'), auditorDelta); const brokerIssuer = await current.proofs.combine('sub', viewCiphertext(brokerRaw.issuer_balance_ciphertext, 'broker issuer balance'), issuerDelta); const brokerAuditor = await current.proofs.combine('sub', viewCiphertext(brokerRaw.auditor_balance_ciphertext, 'broker auditor balance'), auditorDelta); const active = await current.proofs.combine('add', viewCiphertext(brokerRaw.active_principal_ciphertext, 'active principal'), ciphertextFromHex(principalViews[0]!, 'principal delta')); return { ...proof, operationArgs: { borrower_spending_ciphertext: principalViews[1], borrower_issuer_ciphertext: ciphertextHex(borrowerIssuer), borrower_auditor_ciphertext: ciphertextHex(borrowerAuditor), broker_spending_ciphertext: ciphertextHex(asCiphertext(fields.broker_spending_after)), broker_issuer_ciphertext: ciphertextHex(brokerIssuer), broker_auditor_ciphertext: ciphertextHex(brokerAuditor), loan_principal_ciphertexts: principalViews, loan_initial_owed_ciphertexts: viewsHex(fields.owed_views), loan_periodic_payment_ciphertexts: viewsHex(fields.payment_views), principal_commitment: commitmentHex(asCommitment(fields.principal_commitment)), owed_commitment: commitmentHex(asCommitment(fields.owed_commitment)), payment_commitment: commitmentHex(asCommitment(fields.payment_commitment)), broker_active_principal_ciphertext: ciphertextHex(active), broker_impaired_principal_ciphertext: rawCiphertext(brokerRaw.impaired_principal_ciphertext, 'impaired principal'), broker_spending_commitment: input.broker.spendingCommitment, broker_active_principal_commitment: input.broker.activePrincipalCommitment, broker_impaired_principal_commitment: input.broker.impairedPrincipalCommitment } }
 }
 
 async function repayment(current: WorkerState, input: { loan: LoanSummary; borrower: PrivateAccountView; mode: 'regular' | 'full' }): Promise<PreparedProof> {
   if (current.ledger) return preparedLedger(current, await current.ledger.prepareRepayment(requireSubject(current), input.loan.loanId, input.mode === 'full' ? 'Full' : 'Regular'))
+  if (current.core) throw new Error('Loan repayment requires the configured finalized Core wallet')
   const subject = requireSubject(current); const asset = await readAsset(current); const brokerRaw = await readBroker(current, input.loan.brokerId); const brokerKey = rawKey(brokerRaw); const borrowerReference = resolveKey(current, 'holder', subject, input.borrower.encryptionKeyId); const borrowerKey = current.keyring.publicKey(borrowerReference); const auditor = publicKeyFromHex(text(input.loan.auditorPublicKey, 'loan auditor public key'), 'loan auditor public key'); const keys = encryptionKeys(asset, borrowerKey, brokerKey, auditor); const readerKeys = [keys.borrower, keys.broker, keys.auditor]; const readerViews = (values: string[] | undefined, name: string): ReaderView[] => { if (!values || values.length !== 3) throw new Error(`Core did not return three ${name} ciphertext views`); return values.map((value, index) => ({ reader_key: readerKeys[index]!, ciphertext: ciphertextFromHex(value, `${name}[${index}]`) })) }; const owedViews = readerViews(input.loan.amountOwedCiphertexts, 'owed'); const periodicViews = readerViews(input.loan.periodicPaymentCiphertexts, 'periodic payment'); const principalViews = readerViews(input.loan.principalRemainingCiphertexts, 'principal remaining'); const terms: RepaymentTerms = { owed: await decryptCiphertext(current, borrowerReference, owedViews[0]!.ciphertext), periodicPayment: await decryptCiphertext(current, borrowerReference, periodicViews[0]!.ciphertext), principalRemaining: await decryptCiphertext(current, borrowerReference, principalViews[0]!.ciphertext), owedViews, paymentViews: periodicViews, principalViews, transferKeys: [keys.borrower, keys.broker, keys.issuer, keys.tokenAuditor, keys.auditor], paymentRemaining: input.loan.paymentRemaining, loanVersion: input.loan.stateVersion }; const balanceCiphertext = ciphertextFromHex(input.borrower.balanceCiphertext, 'borrower spending'); const balance = spendingState(borrowerReference, balanceCiphertext, input.borrower.spendingVersion, await decryptCiphertext(current, borrowerReference, balanceCiphertext)); const proofContext = await context(current, { operation: 'repay', primaryId: input.loan.loanId }); const operation = await current.proofs.repay(proofContext.operationContext, balance, terms, input.mode === 'full' ? 'Full' : 'Regular'); const proof = await prepared(current, operation); const fields = statementFields(proof, 'Repayment'); const transfer = viewsHex(fields.transfer_views); const owedAfter = viewsHex(fields.owed_after); const principalAfter = viewsHex(fields.principal_after); const owedDelta = viewsHex(fields.owed_delta); const borrowerIssuer = await current.proofs.combine('sub', viewCiphertext(input.borrower.issuerBalanceCiphertext, 'borrower issuer balance'), ciphertextFromHex(transfer[2]!, 'issuer delta')); const borrowerAuditor = await current.proofs.combine('sub', viewCiphertext(input.borrower.auditorBalanceCiphertext, 'borrower auditor balance'), ciphertextFromHex(transfer[3]!, 'auditor delta')); const brokerIssuer = await current.proofs.combine('add', viewCiphertext(brokerRaw.issuer_balance_ciphertext, 'broker issuer balance'), ciphertextFromHex(transfer[2]!, 'issuer delta')); const brokerAuditor = await current.proofs.combine('add', viewCiphertext(brokerRaw.auditor_balance_ciphertext, 'broker auditor balance'), ciphertextFromHex(transfer[3]!, 'auditor delta')); const cumulativeValues = await Promise.all((input.loan.cumulativeRepaidCiphertexts || []).map((value, index) => current.proofs.combine('add', ciphertextFromHex(value, `cumulative repaid ${index}`), ciphertextFromHex(owedDelta[index]!, `owed delta ${index}`)))); return { ...proof, operationArgs: { borrower_spending_ciphertext: ciphertextHex(asCiphertext(fields.borrower_spending_after)), borrower_issuer_ciphertext: ciphertextHex(borrowerIssuer), borrower_auditor_ciphertext: ciphertextHex(borrowerAuditor), broker_inbox_ciphertext: transfer[1], broker_issuer_ciphertext: ciphertextHex(brokerIssuer), broker_auditor_ciphertext: ciphertextHex(brokerAuditor), amount_owed_ciphertexts: owedAfter, principal_remaining_ciphertexts: principalAfter, cumulative_repaid_ciphertexts: cumulativeValues.map(ciphertextHex), broker_active_principal_ciphertext: rawCiphertext(brokerRaw.active_principal_ciphertext, 'active principal'), broker_impaired_principal_ciphertext: rawCiphertext(brokerRaw.impaired_principal_ciphertext, 'impaired principal'), transfer_views: transfer, commitment: commitmentHex(asCommitment(fields.principal_delta_commitment)) } }
 }
 async function settlement(current: WorkerState, input: { broker: BrokerSummary; amount: string; expectedSpendingVersion: string }): Promise<PreparedProof> {
   if (current.ledger) return preparedLedger(current, await current.ledger.prepareSettlement(input.broker.brokerId, input.amount))
+  if (current.core) throw new Error('Broker settlement requires the configured finalized Core wallet')
   const asset = await readAsset(current); const brokerRaw = await readBroker(current, input.broker.brokerId); const brokerReference = resolveKey(current, 'broker', input.broker.brokerId, input.broker.privateBalanceKeyId); const brokerKey = rawKey(brokerRaw); const spending = viewCiphertext(brokerRaw.spending_ciphertext, 'broker spending'); const balance = spendingState(brokerReference, spending, input.expectedSpendingVersion, await decryptCiphertext(current, brokerReference, spending)); if (await decryptCiphertext(current, brokerReference, viewCiphertext(brokerRaw.inbox_ciphertext, 'broker inbox')) !== '0') throw new Error('Merge the broker inbox before settling private funds'); const proofContext = await context(current, { operation: 'settle', brokerId: input.broker.brokerId, amount: input.amount }); const operation = await current.proofs.conversion(proofContext.operationContext, balance, input.amount, [brokerKey, publicKeyFromRaw(asset.issuer_key.public_key), publicKeyFromRaw(asset.token_auditor_key.public_key)], 'Debit'); const proof = await prepared(current, operation); const fields = statementFields(proof, 'PublicConversion'); const views = viewsHex(fields.views); const issuer = await current.proofs.combine('sub', viewCiphertext(brokerRaw.issuer_balance_ciphertext, 'broker issuer balance'), ciphertextFromHex(views[1]!, 'issuer delta')); const auditor = await current.proofs.combine('sub', viewCiphertext(brokerRaw.auditor_balance_ciphertext, 'auditor delta'), ciphertextFromHex(views[2]!, 'auditor delta')); return { ...proof, operationArgs: { broker_spending_ciphertext: ciphertextHex(asCiphertext(fields.spending_after)), broker_issuer_ciphertext: ciphertextHex(issuer), broker_auditor_ciphertext: ciphertextHex(auditor), settlement_views: views, broker_spending_commitment: input.broker.spendingCommitment, broker_inbox_commitment: input.broker.inboxCommitment } }
 }
 async function reconciliation(current: WorkerState, input: { broker: BrokerSummary; expectedBookVersion: string; checkpointId?: string }): Promise<PreparedProof> {
   if (!current.ledger || !input.checkpointId) throw new Error('A finalized checkpoint is required before preparing reconciliation')
   return preparedLedger(current, await current.ledger.prepareReconciliation(input.broker.brokerId, input.checkpointId))
 }
-async function decryptAgreement(current: WorkerState, proposal: ProposalSummary): Promise<{ fields: Array<{ label: string; value: string; unit: string }>; digest: string }> { const subject = requireSubject(current); if (proposal.borrowerId !== subject) throw new Error('Only the registered borrower key can decrypt this agreement'); const reference = resolveKey(current, 'holder', subject, proposal.borrowerKeyId || proposal.encryptionKeyId); const principal = proposal.encryptedPrincipal || []; const owed = proposal.encryptedOwed || []; const payment = proposal.encryptedPayment || []; if (principal.length !== 5 || owed.length !== 3 || payment.length !== 3) throw new Error('Proposal does not contain the complete encrypted agreement'); const value = (hex: string) => decryptCiphertext(current, reference, ciphertextFromHex(hex)); return { fields: [{ label: 'Principal', value: await value(principal[1]!), unit: 'base units' }, { label: 'Initial amount owed', value: await value(owed[0]!), unit: 'base units' }, { label: 'Periodic payment', value: await value(payment[0]!), unit: 'base units' }], digest: proposal.termsDigest } }
-async function decryptBalance(current: WorkerState, view: PrivateAccountView): Promise<string> { const subject = requireSubject(current); if (subject !== view.accountId) throw new Error('The connected account does not own this encrypted balance'); const reference = resolveKey(current, 'holder', subject, view.encryptionKeyId); return decryptCiphertext(current, reference, ciphertextFromHex(view.balanceCiphertext, 'private balance')) }
+type RecoveryPairHex = readonly [string, string]
+
+function recoveryPairFromHex(value: unknown, name: string): RecoveryPairHex {
+  if (!Array.isArray(value) || value.length !== 2 || value.some((item) => typeof item !== 'string' || !/^(?:[a-f\d]{2})+$/i.test(item))) throw new Error(`${name} is not a canonical recovery pair`)
+  return [value[0]!.toLowerCase(), value[1]!.toLowerCase()]
+}
+
+function recoveryPairsFromHex(value: unknown, name: string, expected: number): RecoveryPairHex[] {
+  if (!Array.isArray(value) || value.length !== expected) throw new Error(`${name} must contain ${expected} recovery pairs`)
+  return value.map((pair, index) => recoveryPairFromHex(pair, `${name}[${index}]`))
+}
+
+function equalRecoveryPairs(left: RecoveryPairHex[], right: RecoveryPairHex[], name: string): void {
+  if (left.length !== right.length || left.some((pair, index) => pair[0] !== right[index]![0] || pair[1] !== right[index]![1])) throw new Error(`${name} does not match the encrypted proposal envelope`)
+}
+
+function envelopeCiphertexts(value: unknown, name: string, expected: string[]): void {
+  if (!Array.isArray(value) || value.length !== expected.length) throw new Error(`${name} ciphertext views do not match the finalized proposal`)
+  value.forEach((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error(`${name}[${index}] is not an encrypted reader view`)
+    const ciphertext = (item as Record<string, unknown>).ciphertext
+    if (ciphertextHex(asCiphertext(ciphertext, `${name}[${index}]`)).toLowerCase() !== expected[index]!.toLowerCase()) throw new Error(`${name} ciphertexts do not match the finalized proposal`)
+  })
+}
+
+function envelopeCommitment(value: unknown, expected: string, name: string): void {
+  const actual = asCommitment(value)
+  const authoritative = asCommitment(fromJsonHex(expected, name))
+  if (actual.point.toLowerCase() !== authoritative.point.toLowerCase()) throw new Error(`${name} does not match the finalized proposal`)
+}
+
+async function decryptAgreement(current: WorkerState, proposal: ProposalSummary): Promise<{ fields: Array<{ label: string; value: string; unit: string }>; digest: string }> {
+  if (!current.ledger) throw new Error('Agreement review requires the configured finalized Core wallet')
+  const subject = requireSubject(current)
+  if (proposal.borrowerId !== subject) throw new Error('Only the registered borrower key can decrypt this agreement')
+  const reference = resolveKey(current, 'holder', subject, proposal.borrowerKeyId || proposal.encryptionKeyId)
+  const principal = proposal.encryptedPrincipal || []
+  const owed = proposal.encryptedOwed || []
+  const payment = proposal.encryptedPayment || []
+  if (principal.length !== 5 || owed.length !== 3 || payment.length !== 3 || !proposal.principalCommitment || !proposal.owedCommitment || !proposal.paymentCommitment) throw new Error('Finalized proposal does not contain the complete encrypted agreement')
+  if (!proposal.transferRecovery || !proposal.owedRecovery || !proposal.paymentRecovery) throw new Error('The encrypted proposal package does not contain recovery ciphertexts')
+  const envelope = fromJsonHex(proposal.encryptedAgreement, 'encrypted agreement')
+  if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) throw new Error('The encrypted agreement envelope is invalid')
+  const root = envelope as Record<string, unknown>
+  if (root.version !== 1 || !root.recovery || typeof root.recovery !== 'object' || Array.isArray(root.recovery)) throw new Error('The encrypted agreement envelope version is unsupported')
+  envelopeCiphertexts(root.principal, 'Principal', principal)
+  envelopeCiphertexts(root.owed, 'Initial owed', owed)
+  envelopeCiphertexts(root.payment, 'Periodic payment', payment)
+  envelopeCommitment(root.principalCommitment, proposal.principalCommitment, 'Principal commitment')
+  envelopeCommitment(root.owedCommitment, proposal.owedCommitment, 'Initial owed commitment')
+  envelopeCommitment(root.paymentCommitment, proposal.paymentCommitment, 'Periodic payment commitment')
+  const recovery = root.recovery as Record<string, unknown>
+  const transferRecovery = recoveryPairsFromHex(recovery.principal, 'Principal recovery', 5)
+  const owedRecovery = recoveryPairsFromHex(recovery.owed, 'Initial owed recovery', 3)
+  const paymentRecovery = recoveryPairsFromHex(recovery.payment, 'Periodic payment recovery', 3)
+  equalRecoveryPairs(transferRecovery, proposal.transferRecovery, 'Principal recovery')
+  equalRecoveryPairs(owedRecovery, proposal.owedRecovery, 'Initial owed recovery')
+  equalRecoveryPairs(paymentRecovery, proposal.paymentRecovery, 'Periodic payment recovery')
+  const amount = async (ciphertext: string, pair: RecoveryPairHex, name: string): Promise<string> => {
+    const recovered = await current.recovery.amount({ recovery: { low_limb: ciphertextFromHex(pair[0], `${name} low limb`), high_limb: ciphertextFromHex(pair[1], `${name} high limb`) } }, reference)
+    await current.recovery.verify(reference, ciphertextFromHex(ciphertext, name), recovered)
+    return recovered.toString()
+  }
+  return {
+    fields: [
+      { label: 'Principal', value: await amount(principal[1]!, transferRecovery[1]!, 'Principal'), unit: 'base units' },
+      { label: 'Initial amount owed', value: await amount(owed[0]!, owedRecovery[0]!, 'Initial amount owed'), unit: 'base units' },
+      { label: 'Periodic payment', value: await amount(payment[0]!, paymentRecovery[0]!, 'Periodic payment'), unit: 'base units' },
+    ],
+    digest: proposal.termsDigest,
+  }
+}
+async function decryptBalance(current: WorkerState, view: PrivateAccountView): Promise<string> {
+  if (!current.ledger) throw new Error('Private balance review requires the configured finalized Core wallet')
+  const subject = requireSubject(current)
+  if (subject !== view.accountId) throw new Error('The connected account does not own this encrypted balance')
+  const recovered = await current.ledger.holder(subject)
+  if (recovered.record.key_id !== view.encryptionKeyId || recovered.record.spending_version !== view.spendingVersion) throw new Error('The private balance view is stale; refresh finalized Core state and try again')
+  return recovered.spending
+}
+async function inspectBalance(current: WorkerState, view: PrivateAccountView): Promise<{ spending: string; inbox: string; spendingVersion: string }> {
+  if (!current.ledger) throw new Error('Private balance inspection requires the configured finalized Core wallet')
+  const subject = requireSubject(current)
+  if (subject !== view.accountId) throw new Error('The connected account does not own this encrypted balance')
+  const recovered = await current.ledger.holder(subject)
+  if (recovered.record.key_id !== view.encryptionKeyId || recovered.record.spending_version !== view.spendingVersion) throw new Error('The private balance view is stale; refresh finalized Core state and try again')
+  return { spending: recovered.spending, inbox: recovered.inbox, spendingVersion: recovered.record.spending_version }
+}
 type TokenAuditReaderRole = 'issuer' | 'token_auditor'
-type TokenRecoveryLedger = {
-  recoverHolder?: (subjectId: string, readerRole: TokenAuditReaderRole) => Promise<unknown>
-  recoverBroker?: (subjectId: string, readerRole: TokenAuditReaderRole) => Promise<unknown>
-}
-
-function recoveredAmount(value: unknown, name: string): string | undefined {
-  if (typeof value === 'string' && /^(0|[1-9]\d*)$/.test(value)) return value
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    const nested = value as Record<string, unknown>
-    for (const key of ['amount', 'value', 'balance', 'plaintext', 'mirror']) {
-      const result = recoveredAmount(nested[key], name)
-      if (result !== undefined) return result
-    }
-  }
-  return undefined
-}
-
-function tokenMirrorAmount(recovered: unknown, readerRole: TokenAuditReaderRole): string {
-  const names = readerRole === 'issuer'
-    ? ['issuer_balance', 'issuerBalance', 'issuer_mirror', 'issuerMirror', 'mirror', 'balance']
-    : ['auditor_balance', 'auditorBalance', 'token_auditor_balance', 'tokenAuditorBalance', 'auditor_mirror', 'auditorMirror', 'mirror', 'balance']
-  for (const name of names) {
-    const amount = recoveredAmount(recovered && typeof recovered === 'object' && !Array.isArray(recovered) ? (recovered as Record<string, unknown>)[name] : undefined, name)
-    if (amount !== undefined) return amount
-  }
-  const direct = recoveredAmount(recovered, 'token mirror')
-  if (direct !== undefined) return direct
-  throw new Error('The finalized token-audit recovery did not return an authorized mirror balance')
+type TokenAuditLedger = {
+  auditBalance: (kind: 'holder' | 'broker', subjectId: string, readerRole: TokenAuditReaderRole) => Promise<{ mirror: string }>
 }
 
 async function decryptTokenAudit(current: WorkerState, bundle: AuditCiphertextBundle): Promise<DecryptedAuditView> {
   if (!current.ledger) throw new Error('Token audit recovery requires the configured finalized Core wallet')
   if (bundle.subjectKind !== 'holder' && bundle.subjectKind !== 'broker') throw new Error('Token audit subject scope is incomplete')
   if (bundle.readerRole !== 'issuer' && bundle.readerRole !== 'token_auditor') throw new Error('Token audit reader scope is incomplete')
-  const ledger = current.ledger as unknown as TokenRecoveryLedger
-  const recover = bundle.subjectKind === 'holder' ? ledger.recoverHolder : ledger.recoverBroker
-  if (typeof recover !== 'function') throw new Error('This wallet runtime does not support finalized token-audit recovery')
-  const recovered = await recover.call(current.ledger, bundle.subjectId, bundle.readerRole)
+  const ledger = current.ledger as unknown as TokenAuditLedger
+  if (typeof ledger.auditBalance !== 'function') throw new Error('This wallet runtime does not support finalized token-audit recovery')
+  const recovered = await ledger.auditBalance(bundle.subjectKind, bundle.subjectId, bundle.readerRole)
+  if (!/^(0|[1-9]\d*)$/.test(recovered.mirror)) throw new Error('Finalized token-audit recovery returned an invalid mirror amount')
   const label = bundle.readerRole === 'issuer' ? 'Issuer balance mirror' : 'Token-auditor balance mirror'
-  const fields = [{ label, value: tokenMirrorAmount(recovered, bundle.readerRole), unit: 'base units' }]
+  const fields = [{ label, value: recovered.mirror, unit: 'base units' }]
   return { scope: bundle.scope, subjectId: bundle.subjectId, fields, sourceDigest: await digestHex(JSON.stringify(bundle)), decryptedAt: Date.now() }
 }
 
-async function decryptAudit(current: WorkerState, bundle: AuditCiphertextBundle): Promise<DecryptedAuditView> { if (bundle.scope === 'loan' && current.ledger) { const reference = resolveKey(current, 'loan_auditor', bundle.subjectId, bundle.auditorKeyId); const recovered = await current.ledger.loan(bundle.subjectId, reference); const fields = [{ label: 'Principal', value: recovered.amounts.principal, unit: 'base units' }, { label: 'Initial amount owed', value: recovered.amounts.initialOwed, unit: 'base units' }, { label: 'Amount owed', value: recovered.amounts.owed, unit: 'base units' }, { label: 'Periodic payment', value: recovered.amounts.periodic, unit: 'base units' }, { label: 'Principal remaining', value: recovered.amounts.principalRemaining, unit: 'base units' }, { label: 'Cumulative repaid', value: recovered.amounts.cumulativePaid, unit: 'base units' }]; return { scope: bundle.scope, subjectId: bundle.subjectId, fields, sourceDigest: await digestHex(JSON.stringify(bundle)), decryptedAt: Date.now() } } if (bundle.scope === 'token') return decryptTokenAudit(current, bundle); const reference = resolveKey(current, 'loan_auditor', bundle.subjectId, bundle.auditorKeyId); const fields: Array<{ label: string; value: string; unit: string }> = []; for (const [label, value] of Object.entries(bundle.ciphertexts)) fields.push({ label, value: await decryptCiphertext(current, reference, ciphertextFromHex(value, label)), unit: 'base units' }); return { scope: bundle.scope, subjectId: bundle.subjectId, fields, sourceDigest: await digestHex(JSON.stringify(bundle)), decryptedAt: Date.now() } }
+async function decryptAudit(current: WorkerState, bundle: AuditCiphertextBundle): Promise<DecryptedAuditView> {
+  if (bundle.scope === 'loan' && current.ledger) {
+    const reference = resolveLoanAuditorKey(current, bundle.subjectId, bundle.auditorKeyId, bundle.auditorPublicKey)
+    const recovered = await current.ledger.loan(bundle.subjectId, reference)
+    const fields = [
+      { label: 'Principal', value: recovered.amounts.principal, unit: 'base units' },
+      { label: 'Initial amount owed', value: recovered.amounts.initialOwed, unit: 'base units' },
+      { label: 'Amount owed', value: recovered.amounts.owed, unit: 'base units' },
+      { label: 'Periodic payment', value: recovered.amounts.periodic, unit: 'base units' },
+      { label: 'Principal remaining', value: recovered.amounts.principalRemaining, unit: 'base units' },
+      { label: 'Cumulative repaid', value: recovered.amounts.cumulativePaid, unit: 'base units' },
+    ]
+    return { scope: bundle.scope, subjectId: bundle.subjectId, fields, sourceDigest: await digestHex(JSON.stringify(bundle)), decryptedAt: Date.now() }
+  }
+  if (bundle.scope === 'token') return decryptTokenAudit(current, bundle)
+  throw new Error('This audit scope requires a finalized, typed recovery path')
+}
 
 function backupDraft(value: unknown): value is PrivateAgreementDraft {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
@@ -425,6 +530,7 @@ async function handle(request: WorkerRequest): Promise<unknown> {
     case 'authorize_agreement': return { authorizationSignature: '' }
     case 'decrypt_agreement': return decryptAgreement(current, request.payload as ProposalSummary)
     case 'decrypt_private_balance': return decryptBalance(current, request.payload as PrivateAccountView)
+    case 'inspect_private_balance': return inspectBalance(current, request.payload as PrivateAccountView)
     case 'decrypt_audit': return decryptAudit(current, request.payload as AuditCiphertextBundle)
     case 'prepare_broker_key_registration': return brokerKeyRegistration(current, request.payload as Parameters<typeof brokerKeyRegistration>[1])
     case 'prepare_loan_management': return loanManagement(current, request.payload as Parameters<typeof loanManagement>[1])

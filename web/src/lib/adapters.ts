@@ -18,6 +18,7 @@ import {
   type LoanSummary,
   type LoanManagementPreparation,
   type PrivateAccountView,
+  type PrivateBalanceState,
   type PreparedProof,
   type ProposalSummary,
   type ProtocolClient,
@@ -161,6 +162,7 @@ class UnavailableCryptoProvider implements CryptoProvider {
   authorizeAgreement(_proposal: ProposalSummary): Promise<never> { return Promise.reject(this.fail()) }
   decryptAgreement(_proposal: ProposalSummary): Promise<never> { return Promise.reject(this.fail()) }
   decryptPrivateBalance(_view: PrivateAccountView): Promise<never> { return Promise.reject(this.fail()) }
+  inspectPrivateBalance(_view: PrivateAccountView): Promise<PrivateBalanceState> { return Promise.reject(this.fail()) }
   decryptAudit(_bundle: AuditCiphertextBundle): Promise<never> { return Promise.reject(this.fail()) }
 }
 

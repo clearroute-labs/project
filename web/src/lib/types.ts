@@ -192,6 +192,10 @@ export interface ProposalSummary {
   borrowerAuthorizationKeyId?: string
   brokerDirectAuthorized?: boolean
   borrowerDirectAuthorized?: boolean
+  /** Public recovery ciphertexts from the broker's encrypted exchange package. */
+  transferRecovery?: RecoveryPair[]
+  owedRecovery?: RecoveryPair[]
+  paymentRecovery?: RecoveryPair[]
 }
 
 export interface PublicClaim {
@@ -251,6 +255,13 @@ export interface PrivateAccountView {
   registered: boolean
 }
 
+/** Finalized local recovery state used to decide whether an inbox merge is needed. */
+export interface PrivateBalanceState {
+  spending: string
+  inbox: string
+  spendingVersion: string
+}
+
 export interface HolderKeyView {
   accountId: string
   encryptionKeyId: string
@@ -261,6 +272,8 @@ export interface AuditCiphertextBundle {
   scope: 'loan' | 'token'
   subjectId: string
   auditorKeyId: string
+  /** Loan-auditor public key used to bind a local key reference to the chain. */
+  auditorPublicKey?: string
   /** Token audits recover one registered account/broker through a declared mirror reader. */
   subjectKind?: 'holder' | 'broker'
   readerRole?: 'issuer' | 'token_auditor'
@@ -450,6 +463,7 @@ export interface CryptoProvider {
   authorizeAgreement(proposal: ProposalSummary): Promise<{ authorizationSignature: string }>
   decryptAgreement(proposal: ProposalSummary): Promise<{ fields: Array<{ label: string; value: string; unit: string }>; digest: string }>
   decryptPrivateBalance(view: PrivateAccountView): Promise<string>
+  inspectPrivateBalance(view: PrivateAccountView): Promise<PrivateBalanceState>
   decryptAudit(bundle: AuditCiphertextBundle): Promise<DecryptedAuditView>
 }
 

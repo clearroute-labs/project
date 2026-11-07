@@ -24,6 +24,12 @@ export function requireFinalized(receipt: ActionReceipt, label: string): ActionR
   throw new ProtocolError({ category: 'OPERATION_PENDING', message: `${label} remains unresolved. Wait for finality before retrying.`, retryable: false })
 }
 
+/** Marker emitted by the finalized LedgerWallet when spending is short but
+ * spending plus the recovered inbox can satisfy the requested debit. */
+export function isInboxMergeRequired(error: unknown): boolean {
+  return error instanceof Error && /^INBOX_MERGE_REQUIRED:(?:[a-z-]+)$/.test(error.message)
+}
+
 export function useAction() {
   const [state, setState] = useState<ActionState>({ phase: 'idle' })
 

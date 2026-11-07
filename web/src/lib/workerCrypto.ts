@@ -12,6 +12,7 @@ import type {
   LoanManagementPreparation,
   PreparedProof,
   PrivateAccountView,
+  PrivateBalanceState,
   ProposalSummary,
 } from './types'
 
@@ -130,6 +131,7 @@ export class WorkerCryptoProvider implements CryptoProvider {
   authorizeAgreement(_proposal: ProposalSummary): Promise<{ authorizationSignature: string }> { return this.ensureInitialized().then(() => this.call('authorize_agreement')) }
   decryptAgreement(proposal: ProposalSummary): Promise<{ fields: Array<{ label: string; value: string; unit: string }>; digest: string }> { return this.ensureInitialized().then(() => this.call('decrypt_agreement', proposal)) }
   decryptPrivateBalance(view: PrivateAccountView): Promise<string> { return this.ensureInitialized().then(() => this.call('decrypt_private_balance', view)) }
+  inspectPrivateBalance(view: PrivateAccountView): Promise<PrivateBalanceState> { return this.ensureInitialized().then(() => this.call('inspect_private_balance', view)) }
   decryptAudit(bundle: AuditCiphertextBundle): Promise<DecryptedAuditView> { return this.ensureInitialized().then(() => this.call('decrypt_audit', bundle)) }
 }
 

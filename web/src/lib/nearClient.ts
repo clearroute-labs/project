@@ -515,7 +515,7 @@ export class NearProtocolClient implements ProtocolClient {
     for (const [name, values] of [['principal', loan.principal_ciphertexts], ['initialOwed', loan.initial_owed_ciphertexts], ['amountOwed', loan.amount_owed_ciphertexts], ['periodicPayment', loan.periodic_payment_ciphertexts], ['principalRemaining', loan.principal_remaining_ciphertexts], ['cumulativeRepaid', loan.cumulative_repaid_ciphertexts]] as const) (values || []).forEach((value, index) => { ciphertexts[`${name}_${index}`] = bytesToHex(value) })
     if (ciphertexts.principal_0) ciphertexts.principal = ciphertexts.principal_0
     if (ciphertexts.amountOwed_0) ciphertexts.amountOwed = ciphertexts.amountOwed_0
-    return { scope: 'loan', subjectId: input.subjectId, auditorKeyId: loan.loan_auditor_key_id === undefined ? '' : decimal(loan.loan_auditor_key_id), cryptoProfileHash: this.config.cryptoProfileHash, ciphertexts, commitments: {}, versions: { loan: decimal(loan.loan_version) }, fetchedAt: Date.now() }
+    return { scope: 'loan', subjectId: input.subjectId, auditorKeyId: loan.loan_auditor_key_id === undefined ? '' : decimal(loan.loan_auditor_key_id), auditorPublicKey: loan.loan_auditor_public_key === undefined ? undefined : bytesToHex(loan.loan_auditor_public_key), cryptoProfileHash: this.config.cryptoProfileHash, ciphertexts, commitments: {}, versions: { loan: decimal(loan.loan_version) }, fetchedAt: Date.now() }
   }
 
   private async callWithOptions(method: string, args: Record<string, unknown>, options?: { deposit?: string; gas?: string; receiverId?: string }): Promise<ActionReceipt> {
