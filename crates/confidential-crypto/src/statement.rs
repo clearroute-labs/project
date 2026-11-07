@@ -5,9 +5,7 @@ use crate::CryptoError;
 use crate::commitment::Commitment;
 use crate::context::{OperationContext, PublicSlots, SlotBuilder, transcript_hash};
 use crate::elgamal::{Ciphertext, PublicKey};
-use crate::encoding::{
-    FieldHex, PointHex, ScalarHex, with_statement_point_subgroup_check,
-};
+use crate::encoding::{FieldHex, PointHex, ScalarHex, with_statement_point_subgroup_check};
 
 pub const TRANSFER_VIEW_COUNT: usize = 5;
 pub const LOAN_READER_COUNT: usize = 3;
@@ -366,7 +364,8 @@ enum StatementWire {
 
 impl<'de> Deserialize<'de> for Statement {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let wire = with_statement_point_subgroup_check(|| StatementWire::deserialize(deserializer))?;
+        let wire =
+            with_statement_point_subgroup_check(|| StatementWire::deserialize(deserializer))?;
         Ok(match wire {
             StatementWire::KeyPossession(value) => Self::KeyPossession(value),
             StatementWire::PublicConversion(value) => Self::PublicConversion(value),

@@ -175,7 +175,8 @@ impl Ciphertext {
     /// homomorphic cancellation. Persistent account state should prefer
     /// `canonical_zero` so its ciphertext remains non-degenerate.
     pub fn zero() -> Self {
-        let identity = PointHex::from_prime_subgroup_affine(EdwardsProjective::zero().into_affine());
+        let identity =
+            PointHex::from_prime_subgroup_affine(EdwardsProjective::zero().into_affine());
         Self {
             ephemeral: identity.clone(),
             message: identity,

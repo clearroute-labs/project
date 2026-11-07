@@ -54,6 +54,8 @@ CRYPTO_ARTIFACT_DIR=.artifacts/development pnpm test:e2e
 
 `validate:crypto` generates and verifies real native proofs for every family, checks changed-context rejection and writes public vectors and timing evidence. Sandbox tests use the pinned official NEAR runtime and real token receipts. The test token's failure modes are confined to `contracts/test-token`; it is not a production asset implementation.
 
+For actual browser/WASM proof validation, install Chromium with `pnpm exec playwright install chromium`, keep `pnpm --dir web dev --host 127.0.0.1 --port 5174 --strictPort` running in another terminal, then run `CRYPTO_ARTIFACT_DIR=.artifacts/development pnpm validate:browser`. The harness verifies the original pinned artifact bytes and writes timings and allocated WASM memory to `.artifacts/browser-validation.json`. `VALIDATION_ORIGIN` selects another local Vite origin. The full suite generates large proofs and requires a desktop browser with sufficient memory.
+
 Integration is still in progress. Native proof validation and the TypeScript suites pass. The target-runtime benchmark exposed excessive repeated point-validation cost in large statements; gas optimization and complete lending/custody/browser acceptance are tracked in [the implementation review](tasks/implementation-review.md). A passing unit suite alone is not a release assertion.
 
 ## Keeper operation

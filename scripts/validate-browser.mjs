@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 
 const origin = process.env.VALIDATION_ORIGIN ?? 'http://127.0.0.1:5174';
 if (new URL(origin).hostname !== '127.0.0.1') throw new Error('Browser validation is local only');
-const directory = await realpath(resolve(process.env.CRYPTO_ARTIFACT_DIR ?? '.artifacts/integration-v2'));
+const directory = await realpath(resolve(process.env.CRYPTO_ARTIFACT_DIR ?? '.artifacts/development'));
 const manifest = JSON.parse(await readFile(resolve(directory, 'manifest.json'), 'utf8'));
 const allowed = new Set(['manifest.json', 'deployment-pin.json', ...Object.values(manifest.artifacts).map(entry => entry.path)]);
 // Vite rewrites JavaScript modules. Artifact pins must be checked against the original bytes.

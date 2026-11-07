@@ -30,7 +30,7 @@ type GasMeasurement = {
   error?: string;
 };
 
-const fixtureDirectory = resolve(process.env.CRYPTO_ARTIFACT_DIR ?? '.artifacts/integration-v2');
+const fixtureDirectory = resolve(process.env.CRYPTO_ARTIFACT_DIR ?? '.artifacts/development');
 const benchmarkGas = 300_000_000_000_000n;
 
 async function available(path: string): Promise<boolean> {
@@ -118,14 +118,12 @@ async function preparedKeyHex(manifest: Manifest, kind: Kind): Promise<string> {
   return bytes.toString('hex');
 }
 
-test('typed NEAR host verification accepts all real proof families and rejects changed statements', { timeout: 600_000 }, async (t) => {
+test('typed NEAR host verification accepts all real proof families and rejects changed statements', { timeout: 600_000 }, async () => {
   const operationsPath = resolve(fixtureDirectory, 'client-operations.json');
   const manifestPath = resolve(fixtureDirectory, 'manifest.json');
-  if (!(await available(operationsPath)) || !(await available(manifestPath))) {
-    t.skip(`real crypto fixtures are not installed at ${fixtureDirectory}`);
-    return;
-  }
-  const wasmPath = resolve(process.env.CRYPTO_PROBE_WASM ?? 'target/wasm32-unknown-unknown/release/verifier_probe.wasm');
+  assert.ok(await available(manifestPath), `Generate development artifacts at ${fixtureDirectory} before running this test`);
+  assert.ok(await available(operationsPath), `Run pnpm validate:crypto ${fixtureDirectory} before running this test`);
+  const wasmPath = resolve(process.env.CRYPTO_PROBE_WASM ?? '.artifacts/contracts/verifier_probe.wasm');
   assert.ok(await available(wasmPath), 'build verifier-probe.wasm before running this test');
 
   const operations = JSON.parse(await readFile(operationsPath, 'utf8')) as OperationFixture[];

@@ -5,15 +5,14 @@ use ark_bn254::{Bn254, Fr};
 use ark_crypto_primitives::sponge::{
     constraints::CryptographicSpongeVar, poseidon::constraints::PoseidonSpongeVar,
 };
-use ark_ec::{AffineRepr, CurveGroup};
 use ark_ec::twisted_edwards::TECurveConfig;
+use ark_ec::{AffineRepr, CurveGroup};
 use ark_ed_on_bn254::{EdwardsConfig, constraints::FqVar};
 use ark_ff::{BigInteger, Field, PrimeField, Zero};
 use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey, prepare_verifying_key};
 use ark_r1cs_std::{
     alloc::AllocationMode, boolean::Boolean, convert::ToBitsGadget, eq::EqGadget,
-    fields::fp::FpVar, groups::CurveVar, groups::curves::twisted_edwards::AffineVar,
-    prelude::*,
+    fields::fp::FpVar, groups::CurveVar, groups::curves::twisted_edwards::AffineVar, prelude::*,
 };
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress, Validate};
@@ -2338,17 +2337,23 @@ mod smoke_tests {
 
     fn assert_direct_satisfied(statement: &Statement, witness: &Witness) {
         let slots = statement.public_slots().unwrap();
-        let circuit = LendingCircuit::from_statement(statement.kind(), slots.values, witness.clone())
-            .unwrap();
+        let circuit =
+            LendingCircuit::from_statement(statement.kind(), slots.values, witness.clone())
+                .unwrap();
         let cs = ConstraintSystem::new_ref();
         circuit.generate_constraints(cs.clone()).unwrap();
-        assert!(cs.is_satisfied().unwrap(), "{:?}", cs.which_is_unsatisfied());
+        assert!(
+            cs.is_satisfied().unwrap(),
+            "{:?}",
+            cs.which_is_unsatisfied()
+        );
     }
 
     fn assert_direct_unsatisfied(statement: &Statement, witness: &Witness) {
         let slots = statement.public_slots().unwrap();
-        let circuit = LendingCircuit::from_statement(statement.kind(), slots.values, witness.clone())
-            .unwrap();
+        let circuit =
+            LendingCircuit::from_statement(statement.kind(), slots.values, witness.clone())
+                .unwrap();
         let cs = ConstraintSystem::new_ref();
         circuit.generate_constraints(cs.clone()).unwrap();
         assert!(!cs.is_satisfied().unwrap());
@@ -2571,8 +2576,10 @@ mod smoke_tests {
         let principal_blinding = EdFr::from(113u64);
         let owed_blinding = EdFr::from(127u64);
         let payment_blinding = EdFr::from(131u64);
-        let mut context = crate::OperationContext::default();
-        context.operation_id = [77u8; 32];
+        let context = crate::OperationContext {
+            operation_id: [77u8; 32],
+            ..Default::default()
+        };
         let statement = Statement::Origination(OriginationStatement {
             context,
             broker_key: broker.public_key(),
@@ -2581,17 +2588,13 @@ mod smoke_tests {
             broker_spending_after: broker_after,
             transfer_views,
             transfer_recovery,
-            principal_commitment: Commitment::commit_with_blinding(
-                principal,
-                principal_blinding,
-            )
-            .unwrap(),
+            principal_commitment: Commitment::commit_with_blinding(principal, principal_blinding)
+                .unwrap(),
             owed_views,
             owed_recovery,
             payment_views,
             payment_recovery,
-            owed_commitment: Commitment::commit_with_blinding(initial_owed, owed_blinding)
-                .unwrap(),
+            owed_commitment: Commitment::commit_with_blinding(initial_owed, owed_blinding).unwrap(),
             payment_commitment: Commitment::commit_with_blinding(
                 periodic_payment,
                 payment_blinding,
@@ -2673,7 +2676,8 @@ mod smoke_tests {
 
     #[test]
     fn conversion_amount_boundaries_and_solvency_fail_direct_r1cs() {
-        let (credit_max, credit_max_witness) = conversion_fixture(ConversionMode::Credit, 0, MAX_AMOUNT);
+        let (credit_max, credit_max_witness) =
+            conversion_fixture(ConversionMode::Credit, 0, MAX_AMOUNT);
         assert_direct_satisfied(&credit_max, &credit_max_witness);
 
         let (mut too_large, too_large_witness) =
@@ -2686,8 +2690,7 @@ mod smoke_tests {
         let (zero, zero_witness) = conversion_fixture(ConversionMode::Credit, 0, 0);
         assert_direct_unsatisfied(&zero, &zero_witness);
 
-        let (debit_exact, debit_exact_witness) =
-            conversion_fixture(ConversionMode::Debit, 25, 25);
+        let (debit_exact, debit_exact_witness) = conversion_fixture(ConversionMode::Debit, 25, 25);
         assert_direct_satisfied(&debit_exact, &debit_exact_witness);
 
         let (debit_insolvent, debit_insolvent_witness) =
@@ -2955,6 +2958,7 @@ mod smoke_tests {
         (pairs, randomness)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn repayment_fixture(
         mode: PaymentMode,
         payment: u64,

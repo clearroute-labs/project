@@ -251,14 +251,13 @@ pub fn transcript_hash(values: &[Fr]) -> Fr {
 pub(crate) fn poseidon_config() -> &'static PoseidonConfig<Fr> {
     static CONFIG: OnceLock<PoseidonConfig<Fr>> = OnceLock::new();
     CONFIG.get_or_init(|| {
-        let (ark, mds) =
-            ark_crypto_primitives::sponge::poseidon::find_poseidon_ark_and_mds::<Fr>(
-                Fr::MODULUS_BIT_SIZE as u64,
-                2,
-                8,
-                57,
-                0,
-            );
+        let (ark, mds) = ark_crypto_primitives::sponge::poseidon::find_poseidon_ark_and_mds::<Fr>(
+            Fr::MODULUS_BIT_SIZE as u64,
+            2,
+            8,
+            57,
+            0,
+        );
         PoseidonConfig::new(8, 57, 5, mds, ark, 2, 1)
     })
 }

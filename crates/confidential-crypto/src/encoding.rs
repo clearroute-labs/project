@@ -3,7 +3,7 @@ use ark_ec::CurveGroup;
 use ark_ed_on_bn254::{EdwardsAffine, EdwardsProjective, Fr};
 use ark_ff::AdditiveGroup;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress, Validate};
-use ark_std::{io::Cursor, Zero};
+use ark_std::{Zero, io::Cursor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -225,9 +225,7 @@ impl PointHex {
     pub fn promote_after_verified_statement(&self) -> Result<(), CryptoError> {
         let cached = VALIDATED_POINT_CACHE
             .with(|cache| cache.borrow().get(&self.0).cloned())
-            .or_else(|| {
-                STATEMENT_POINT_CACHE.with(|cache| cache.borrow().get(&self.0).cloned())
-            });
+            .or_else(|| STATEMENT_POINT_CACHE.with(|cache| cache.borrow().get(&self.0).cloned()));
         let point = match cached {
             Some(point) => point,
             None => self.to_affine()?,
