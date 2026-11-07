@@ -6,7 +6,7 @@
 - [x] Update launch instructions and browser tests, then run the testnet app at the existing local URL.
 - [x] Deploy testnet Core/token contracts and serve the corresponding pinned public cryptographic artifacts; wire the product to the real deployment.
 - [x] Add passkey-backed same-browser unlock for confidential keys, retaining the encrypted recovery-file requirement and a fallback for unsupported authenticators.
-- [ ] Finish the verified change by updating the feature PR.
+- [x] Finish the verified change by updating [PR #1](https://github.com/clearroute-labs/project/pull/1).
 
 ### Review
 
