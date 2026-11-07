@@ -35,6 +35,9 @@ interface HistoryPage { records: HistoryRecord[]; next_cursor: string | null; en
 export interface LedgerSnapshot { block: FinalizedBlock; asset: LedgerAsset }
 export interface PreparedCall { method: string; args: Arguments; block: FinalizedBlock; proof?: ProvenOperation }
 export interface RecoveredBalance<T> { record: T; key: KeyReference; spending: string; inbox: string; snapshot: LedgerSnapshot }
+export type AuditSubjectKind = 'holder' | 'broker'
+export type AuditReaderRole = 'issuer' | 'token_auditor'
+export interface RecoveredAuditBalance<T> { record: T; key: KeyReference; mirror: string; snapshot: LedgerSnapshot }
 
 export function decodeWire<T>(bytes: number[]): T {
   if (!Array.isArray(bytes) || bytes.length > 1_000_000 || bytes.some(value => !Number.isInteger(value) || value < 0 || value > 255)) throw new Error('Invalid ledger byte encoding');
@@ -49,6 +52,30 @@ function fields(statement: Statement): Record<string, unknown> {
 }
 function keyMatches(reference: KeyReference, keys: Keyring, views: ReaderView[], index: number): void {
   if (!views[index] || views[index]!.reader_key.point !== keys.publicKey(reference).point) throw new Error('Recovery reader does not match the registered key');
+}
+
+/**
+ * A private debit may only be prepared from spending.  Incoming credits are
+ * intentionally kept in the inbox until the user (or an explicitly scoped
+ * keeper) submits a merge.  Returning a stable marker lets the UI refresh,
+ * merge at a finalized state, and then rebuild the proof instead of proving
+ * against a stale ciphertext or guessing from public commitments.
+ */
+function requireSpendable(spending: string, inbox: string, amount: string, operation: string): void {
+  const available = BigInt(spending);
+  const pending = BigInt(inbox);
+  const requested = BigInt(amount);
+  if (requested <= 0n) throw new Error('Invalid private debit amount');
+  if (requested <= available) return;
+  if (requested <= available + pending && pending > 0n) throw new Error(`INBOX_MERGE_REQUIRED:${operation}`);
+  throw new Error('Insufficient private spending balance');
+}
+
+function canonicalAmount(value: unknown, name: string): string {
+  if (typeof value !== 'string' || !/^(0|[1-9]\d*)$/.test(value)) throw new Error(`Invalid ${name}`);
+  const amount = BigInt(value);
+  if (amount > (1n << 63n) - 1n) throw new Error(`${name} exceeds recovery bound`);
+  return value;
 }
 
 /** Concrete wallet operations. One finalized block supplies every pre-state and recovery page for a proof. */
@@ -93,6 +120,76 @@ export class LedgerWallet {
     if (!record) throw new Error('Broker does not exist');
     const key: KeyReference = { role: 'broker', subjectId: brokerId, keyId: record.encryption_key_id };
     return { record, key, snapshot: state, ...await this.recoverBalance(state, `broker:${brokerId}`, key, record, signal) };
+  }
+
+  /**
+   * Recover the asset-level issuer or token-auditor mirror for one registered
+   * holder/broker. The reader key is the immutable key in AssetProfile; no
+   * holder or broker encryption secret is needed. Every finalized history
+   * event is replayed from sequence zero, including events before a holder or
+   * broker encryption-key rotation, because the asset mirror spans the full
+   * account lifetime. The final reconstruction is checked against the
+   * finalized mirror ciphertext before it is returned.
+   */
+  async auditBalance(kind: 'holder', subjectId: string, readerRole: AuditReaderRole, snapshot?: LedgerSnapshot, signal?: AbortSignal): Promise<RecoveredAuditBalance<LedgerHolder>>;
+  async auditBalance(kind: 'broker', subjectId: string, readerRole: AuditReaderRole, snapshot?: LedgerSnapshot, signal?: AbortSignal): Promise<RecoveredAuditBalance<LedgerBroker>>;
+  async auditBalance(kind: AuditSubjectKind, subjectId: string, readerRole: AuditReaderRole, snapshot?: LedgerSnapshot, signal?: AbortSignal): Promise<RecoveredAuditBalance<LedgerHolder | LedgerBroker>> {
+    if (!subjectId || (kind === 'broker' && !/^(0|[1-9]\d*)$/.test(subjectId))) throw new Error('Audit subject identifier is invalid');
+    const state = snapshot ?? await this.snapshot(signal);
+    const assetKey = readerRole === 'issuer' ? state.asset.issuer_key : state.asset.token_auditor_key;
+    if (!/^(0|[1-9]\d*)$/.test(assetKey.key_id)) throw new Error('Audit reader key ID is invalid');
+    const reader: KeyReference = { role: readerRole, subjectId: state.asset.token_account, keyId: assetKey.key_id };
+    // publicKey() intentionally fails when the imported wallet does not own
+    // the selected audit key. Do not fall back to a holder/broker key.
+    this.keys.publicKey(reader);
+    const subject = `${kind}:${subjectId}`;
+    const record = kind === 'holder'
+      ? await this.view<LedgerHolder | null>(state.block, 'get_holder', { owner: subjectId }, signal)
+      : await this.view<LedgerBroker | null>(state.block, 'get_broker', { broker_id: subjectId }, signal);
+    if (!record) throw new Error(`The requested ${kind} is not registered`);
+    const mirrorCiphertext = kind === 'holder'
+      ? (readerRole === 'issuer' ? record.issuer_balance_ciphertext : record.auditor_balance_ciphertext)
+      : (readerRole === 'issuer' ? record.issuer_balance_ciphertext : record.auditor_balance_ciphertext);
+    const mirror = await this.recoverAuditMirror(state, subject, reader, mirrorCiphertext, signal);
+    return { record, key: reader, mirror, snapshot: state } as RecoveredAuditBalance<LedgerHolder | LedgerBroker>;
+  }
+
+  private async recoverAuditMirror(snapshot: LedgerSnapshot, subject: string, reader: KeyReference, ciphertext: number[], signal?: AbortSignal): Promise<string> {
+    const last = await this.historyEnd(snapshot, subject, signal);
+    let sequence = 0n;
+    let mirror = 0n;
+    const max = (1n << 63n) - 1n;
+    for await (const record of this.history(snapshot, subject, signal, '0')) {
+      const expected = sequence + 1n;
+      if (record.subject_sequence !== expected.toString()) throw new Error('Audit history has a gap, duplicate, or mismatched sequence');
+      sequence = expected;
+      const operation = record.operation;
+      if (operation === 'merge-holder' || operation === 'merge-broker' || operation === 'manage-loan' || operation === 'reconcile-credit') continue;
+      if (!record.statement) throw new Error('Audit history is missing its statement');
+      const statement = fields(decodeWire<Statement>(record.statement));
+      let delta: bigint;
+      if (operation === 'draw' || operation === 'shield' || operation === 'unshield' || operation === 'settle') {
+        const views = statement.views as ReaderView[];
+        const readerIndex = reader.role === 'issuer' ? 1 : 2;
+        keyMatches(reader, this.keys, views, readerIndex);
+        const amount = canonicalAmount(statement.public_amount, 'public audit amount');
+        delta = BigInt(amount) * BigInt(operation === 'draw' || operation === 'shield' ? 1 : -1);
+      } else if (operation === 'originate' || operation === 'repay' || operation === 'confidential-send') {
+        const views = statement.transfer_views as ReaderView[];
+        const recoveries = statement.transfer_recovery as RecoveryPair[];
+        const readerIndex = reader.role === 'issuer' ? 2 : 3;
+        keyMatches(reader, this.keys, views, readerIndex);
+        if (!Array.isArray(recoveries) || !recoveries[readerIndex]) throw new Error('Audit history is missing the authorized transfer recovery pair');
+        if (record.origin_subject_key !== subject && record.subject_key !== subject) throw new Error('Audit history subject is not a transfer participant');
+        const amount = await this.recovery.amount({ recovery: recoveries[readerIndex]! }, reader);
+        delta = record.origin_subject_key === subject ? -amount : amount;
+      } else throw new Error(`Unsupported financial audit operation: ${operation}`);
+      mirror += delta;
+      if (mirror < 0n || mirror > max) throw new Error('Invalid confidential audit mirror history');
+    }
+    if (sequence !== BigInt(last)) throw new Error('Incomplete confidential audit history');
+    await this.recovery.verify(reader, decodeWire<Ciphertext>(ciphertext), mirror);
+    return mirror.toString();
   }
 
   private async recoverBalance(snapshot: LedgerSnapshot, subject: string, key: KeyReference, record: { spending_ciphertext: number[]; inbox_ciphertext: number[]; recovery_start_sequence?: string }, signal?: AbortSignal): Promise<{ spending: string; inbox: string }> {
@@ -245,6 +342,7 @@ export class LedgerWallet {
 
   async prepareUnshield(accountId: string, amount: string, signal?: AbortSignal): Promise<PreparedCall> {
     const balance = await this.holder(accountId, undefined, signal), snapshot = balance.snapshot;
+    requireSpendable(balance.spending, balance.inbox, amount, 'unshield');
     const context = await this.context(snapshot, { operation: 'unshield', account_id: accountId }, signal);
     const proof = await this.proofs.conversion(context, this.spending(balance), amount, this.conversionReaders(snapshot, balance.key), 'Debit');
     return this.prepared(snapshot, 'unshield', { args: { amount, expected_spending_version: balance.record.spending_version, proof: proofArguments(proof) } }, proof);
@@ -252,6 +350,7 @@ export class LedgerWallet {
 
   async prepareTransfer(accountId: string, destination: string, amount: string, signal?: AbortSignal): Promise<PreparedCall> {
     const balance = await this.holder(accountId, undefined, signal), snapshot = balance.snapshot;
+    requireSpendable(balance.spending, balance.inbox, amount, 'transfer');
     const target = await this.view<LedgerHolder | null>(snapshot.block, 'get_holder', { owner: destination }, signal);
     if (!target || destination === accountId) throw new Error('Choose another registered holder');
     const recipient = decodeWire<EncryptionPublicKey>(target.encryption_public_key);
@@ -302,6 +401,7 @@ export class LedgerWallet {
       if (decodeWire<{ point: string }>(stored).point !== commitment.point) throw new Error('Draft commitment does not match the agreed proposal');
     }
     const balance = await this.broker(proposal.broker_id, snapshot, signal);
+    requireSpendable(balance.spending, balance.inbox, draft.terms.principal, 'origination');
     const proof = await this.proofs.originate(await this.context(snapshot, { operation: 'originate', primary_id: proposalId }, signal), this.spending(balance), draft);
     return this.prepared(snapshot, 'originate', { args: { proposal_id: proposalId, proof: proofArguments(proof) } }, proof);
   }
@@ -312,6 +412,8 @@ export class LedgerWallet {
     if (record.borrower !== accountId || !['active', 'impaired'].includes(loan.amounts.status)) throw new Error('Loan is not payable by this account');
     const broker = await this.view<LedgerBroker | null>(snapshot.block, 'get_broker', { broker_id: record.broker_id }, signal);
     if (!broker) throw new Error('Loan broker is unavailable');
+    const payment = mode === 'Full' ? loan.amounts.owed : amount ?? loan.amounts.periodic;
+    requireSpendable(balance.spending, balance.inbox, payment, 'repayment');
     const borrowerKey = this.keys.publicKey(balance.key), brokerKey = decodeWire<EncryptionPublicKey>(broker.encryption_public_key), auditor = decodeWire<EncryptionPublicKey>(record.loan_auditor_public_key);
     const readers = [borrowerKey, brokerKey, auditor];
     const loanViews = (ciphertexts: number[][]): ReaderView[] => ciphertexts.map((bytes, index) => ({ reader_key: readers[index]!, ciphertext: decodeWire(bytes) }));
@@ -320,7 +422,7 @@ export class LedgerWallet {
       owedViews: loanViews(record.amount_owed_ciphertexts), paymentViews: loanViews(record.periodic_payment_ciphertexts), principalViews: loanViews(record.principal_remaining_ciphertexts),
       transferKeys: [borrowerKey, brokerKey, decodeWire(snapshot.asset.issuer_key.public_key), decodeWire(snapshot.asset.token_auditor_key.public_key), auditor],
       paymentRemaining: record.payment_remaining, loanVersion: record.loan_version,
-    }, mode, amount);
+    }, mode, payment);
     return this.prepared(snapshot, 'repay', { args: { loan_id: loanId, mode, expected_loan_version: record.loan_version,
       expected_borrower_spending_version: balance.record.spending_version, proof: proofArguments(proof) } }, proof);
   }
@@ -337,8 +439,10 @@ export class LedgerWallet {
     const snapshot = balance.snapshot;
     const { loan_high_water: maximum } = await this.view<{ loan_high_water: string }>(snapshot.block, 'get_counters', {}, signal);
     let active = 0n, impaired = 0n;
-    for (let cursor = 0n; cursor < BigInt(maximum); cursor += 64n) {
-      const loans = await this.view<LedgerLoan[]>(snapshot.block, 'list_loans', { cursor: cursor.toString(), limit: 64, borrower: null, broker_id: balance.record.broker_id }, signal);
+    // Core caps bounded list pages at 50. Keep the cursor stride identical to
+    // the requested page size so filtered/deleted loan IDs cannot be skipped.
+    for (let cursor = 0n; cursor < BigInt(maximum); cursor += 50n) {
+      const loans = await this.view<LedgerLoan[]>(snapshot.block, 'list_loans', { cursor: cursor.toString(), limit: 50, borrower: null, broker_id: balance.record.broker_id }, signal);
       for (const loan of loans) {
         if (loan.broker_id !== balance.record.broker_id || ['Paid', 'Defaulted'].includes(loan.status)) continue;
         const recovered = await this.loan(loan.loan_id, balance.key, snapshot, signal);
@@ -390,6 +494,7 @@ export class LedgerWallet {
 
   async prepareSettlement(brokerId: string, amount: string, checkpointId?: string, signal?: AbortSignal): Promise<PreparedCall> {
     const balance = await this.broker(brokerId, undefined, signal), snapshot = balance.snapshot;
+    requireSpendable(balance.spending, balance.inbox, amount, 'settlement');
     const context = await this.context(snapshot, { operation: 'settle', broker_id: brokerId, amount }, signal);
     const proof = await this.proofs.conversion(context, this.spending(balance), amount, this.conversionReaders(snapshot, balance.key), 'Debit');
     const reconciliationId = checkpointId ?? (BigInt(balance.record.impairment_provision) > 0n || balance.record.accounting_pending
@@ -411,3 +516,4 @@ export class LedgerWallet {
     return this.prepared(snapshot, 'delete_broker', { broker_id: brokerId, zero_proof: { broker_id: brokerId, combined_proof: proofArguments(proof) } }, proof);
   }
 }
+
