@@ -57,7 +57,7 @@ export async function deployProtocol(directory = process.env.CRYPTO_ARTIFACT_DIR
       issuer_key_id: '1', issuer_public_key: jsonBytes(keys.publicKey(issuerKey)),
       token_auditor_key_id: '1', token_auditor_public_key: jsonBytes(keys.publicKey(auditorKey)),
       crypto_profile_hash: wireBytes(manifest.profileHash), network_id: manifest.networkId,
-      token_trust_policy: 'sandbox-test-token-v1', freeze_policy: 'controller-freeze-v1',
+      token_trust_policy: 'sandbox-test-token-v1', authorization_policy: 'permissionless-v1', freeze_policy: 'controller-freeze-v1',
       custody_cap: ((1n << 63n) - 1n).toString(), verifier_key: [], verifier_manifest_hash: wireBytes(pin.manifestHash),
       verifier_manifest_json: canonicalManifest(manifest),
     } }, { gas: maximumGas });

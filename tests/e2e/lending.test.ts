@@ -93,8 +93,7 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
     await reject(actors.recipient, brokerMerge, /UNAUTHORIZED/);
     await submit(actors.broker, brokerMerge);
     const borrowerClaim = await deposit(actors.borrower, '100000000', 'lifecycle-borrower');
-    await submit(actors.borrower, await wallet.prepareShield(actors.borrower.accountId, borrowerClaim));
-    await submit(actors.borrower, await wallet.prepareMergeHolder(actors.borrower.accountId));
+    const shieldBeforeIncomingLoan = await wallet.prepareShield(actors.borrower.accountId, borrowerClaim);
 
     console.log('Lifecycle: joint loan consent and confidential origination');
     const draft = await wallet.agreement(brokerId, actors.borrower.accountId, auditorPublicKey,
@@ -131,6 +130,10 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
     assert.deepEqual(auditedLoan.amounts, borrowerLoan.amounts);
     assertPrivatePayload(borrowerLoan.record, privateAmounts);
     assertNoKeys(borrowerLoan.record);
+    // Origination credited the inbox after this proof was prepared. Public
+    // shielding adds its proved delta to the current inbox without replacing it.
+    await submit(actors.borrower, shieldBeforeIncomingLoan);
+    assert.equal((await wallet.holder(actors.borrower.accountId)).inbox, '700000000');
     await submit(actors.borrower, await wallet.prepareMergeHolder(actors.borrower.accountId));
 
     console.log('Lifecycle: private spending and repayment with a concurrent inbox credit');
