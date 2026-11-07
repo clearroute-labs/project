@@ -222,7 +222,7 @@ export interface PayoutSummary {
   claimId: string
   amount: string
   recipientId: string
-  status: 'requested' | 'in_flight' | 'result_recorded' | 'succeeded' | 'failed' | 'unknown'
+  status: 'requested' | 'in_flight' | 'result_recorded_success' | 'result_recorded_failure' | 'succeeded' | 'failed' | 'unknown'
   attempt: number
   lastUpdatedAt: number
 }
@@ -509,6 +509,7 @@ export interface ProtocolClient {
   redeemAmount(input: { vaultId: string; assetsOut: string; maxSharesIn: string; expiresAt: number; soleShareholderWaiver?: boolean; brokerZeroProofs?: PreparedProof[] }): Promise<ActionReceipt>
   transferShares(input: { vaultId: string; receiverId: string; shares: string }): Promise<ActionReceipt>
   requestPayout(input: { claimId: string; operationId: string; recipientId: string }): Promise<ActionReceipt>
+  finalizePayout(input: { operationId: string }): Promise<ActionReceipt>
   shield(input: { claimId: string; amount: string; proof: PreparedProof }): Promise<ActionReceipt>
   unshield(input: { amount: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt>
   deleteLoan(input: { loanId: string }): Promise<ActionReceipt>

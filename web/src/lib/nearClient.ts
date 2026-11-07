@@ -99,12 +99,59 @@ function bytesToHex(value: unknown): string {
   throw new TypeError('Core returned an invalid byte encoding')
 }
 
+function bytesToPointHex(value: unknown, field = 'public key'): string {
+  const encoded = bytesToHex(value).toLowerCase()
+  if (/^[a-f\d]{64}$/.test(encoded)) return encoded
+  let decoded: string
+  try {
+    decoded = new TextDecoder().decode(Uint8Array.from(hexToBytes(encoded)))
+    const parsed = JSON.parse(decoded) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || typeof (parsed as { point?: unknown }).point !== 'string') throw new TypeError('missing point')
+    const point = (parsed as { point: string }).point.toLowerCase()
+    if (!/^[a-f\d]{64}$/.test(point) || JSON.stringify({ point }) !== decoded) throw new TypeError('non-canonical point')
+    return point
+  } catch {
+    throw new ProtocolError({ category: 'INVALID_ENCODING', message: `Core returned an invalid ${field}.` })
+  }
+}
+
 function hexToBytes(value: string): number[] {
   const normalized = value.trim().replace(/^0x/, '')
   if (!normalized || normalized.length % 2 !== 0 || !/^[a-f\d]+$/i.test(normalized)) throw new TypeError('Expected canonical hex bytes')
   const bytes: number[] = []
   for (let index = 0; index < normalized.length; index += 2) bytes.push(Number.parseInt(normalized.slice(index, index + 2), 16))
   return bytes
+}
+
+/**
+ * Core stores crypto public keys as canonical JSON bytes, not as the raw
+ * 32-byte point.  The browser-facing form accepts either representation so a
+ * deployment manifest can expose the point while a recovered proposal can be
+ * passed back through the RPC adapter without changing its bytes.
+ */
+function publicKeyBytes(value: string): number[] {
+  const normalized = value.trim().replace(/^0x/, '').toLowerCase()
+  const bytes = hexToBytes(normalized)
+  if (bytes.length === 32) return utf8Bytes(JSON.stringify({ point: normalized }))
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bytes))) as unknown
+  } catch {
+    throw new TypeError('Expected a 32-byte point or canonical JSON public key bytes')
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || typeof (parsed as { point?: unknown }).point !== 'string') throw new TypeError('Expected canonical JSON public key bytes')
+  const point = (parsed as { point: string }).point.toLowerCase()
+  if (!/^[a-f\d]{64}$/.test(point) || JSON.stringify({ point }) !== new TextDecoder().decode(Uint8Array.from(bytes))) throw new TypeError('Expected canonical JSON public key bytes')
+  return bytes
+}
+
+export function canonicalPublicKeyHex(value: string): string {
+  return publicKeyBytes(value).map((item) => item.toString(16).padStart(2, '0')).join('')
+}
+
+export function publicKeyPointHex(value: unknown, field = 'public key'): string {
+  return bytesToPointHex(value, field)
 }
 
 function namedHexToBytes(value: string, field: string): number[] {
@@ -293,6 +340,23 @@ function mapKeeperScope(values: string[] | undefined): KeeperGrant['scope'] {
   return result
 }
 
+function mapPayout(raw: RawPayout): import('./types').PayoutSummary {
+  const status = raw.status === 'Requested'
+    ? 'requested'
+    : raw.status === 'InFlight'
+      ? 'in_flight'
+      : raw.status === 'ResultRecordedSuccess'
+        ? 'result_recorded_success'
+        : raw.status === 'ResultRecordedFailure'
+          ? 'result_recorded_failure'
+          : raw.status === 'Succeeded'
+            ? 'succeeded'
+            : raw.status === 'Failed'
+              ? 'failed'
+              : 'unknown'
+  return { operationId: decimal(raw.operation_id), claimId: decimal(raw.claim_id), amount: decimal(raw.amount), recipientId: raw.recipient, status, attempt: raw.attempt, lastUpdatedAt: safeNumber(raw.created_at, 'payout timestamp') }
+}
+
 const CORE_VIEW_PAGE_LIMIT = 50
 type PageArgs = Record<string, unknown>
 
@@ -345,7 +409,7 @@ async function readDashboardProposals(transport: NearContractTransport, accountI
 }
 
 function mapAsset(raw: RawAssetProfile): AssetProfile {
-  return { tokenAccount: raw.token_account, decimals: raw.decimals, controllerAccount: raw.controller_account, issuerKeyId: decimal(raw.issuer_key.key_id), issuerPublicKey: bytesToHex(raw.issuer_key.public_key), tokenAuditorKeyId: decimal(raw.token_auditor_key.key_id), tokenAuditorPublicKey: bytesToHex(raw.token_auditor_key.public_key), cryptoProfileHash: bytesToHex(raw.crypto_profile_hash), tokenTrustPolicy: raw.token_trust_policy, ...(raw.authorization_policy === undefined ? {} : { authorizationPolicy: raw.authorization_policy }), ...(raw.freeze_policy === undefined ? {} : { freezePolicy: raw.freeze_policy }), ...(raw.custody_cap === undefined ? {} : { custodyCap: decimal(raw.custody_cap) }), ...(raw.confidential_outstanding === undefined ? {} : { confidentialOutstanding: decimal(raw.confidential_outstanding) }) }
+  return { tokenAccount: raw.token_account, decimals: raw.decimals, controllerAccount: raw.controller_account, issuerKeyId: decimal(raw.issuer_key.key_id), issuerPublicKey: bytesToPointHex(raw.issuer_key.public_key, 'issuer public key'), tokenAuditorKeyId: decimal(raw.token_auditor_key.key_id), tokenAuditorPublicKey: bytesToPointHex(raw.token_auditor_key.public_key, 'token auditor public key'), cryptoProfileHash: bytesToHex(raw.crypto_profile_hash), tokenTrustPolicy: raw.token_trust_policy, ...(raw.authorization_policy === undefined ? {} : { authorizationPolicy: raw.authorization_policy }), ...(raw.freeze_policy === undefined ? {} : { freezePolicy: raw.freeze_policy }), ...(raw.custody_cap === undefined ? {} : { custodyCap: decimal(raw.custody_cap) }), ...(raw.confidential_outstanding === undefined ? {} : { confidentialOutstanding: decimal(raw.confidential_outstanding) }) }
 }
 
 function mapHolder(raw: RawHolder): PrivateAccountView {
@@ -372,7 +436,7 @@ function mapVault(raw: RawVault, shares?: string): import('./types').VaultSummar
 function mapLoan(raw: RawLoan): import('./types').LoanSummary {
   const status = raw.status.toLowerCase()
   const mappedStatus = raw.impaired && status === 'active' ? 'impaired' : status === 'active' || status === 'defaulted' || status === 'paid' || status === 'deleted' ? status : 'active'
-  return { loanId: decimal(raw.loan_id), proposalId: decimal(raw.proposal_id), brokerId: decimal(raw.broker_id), borrowerId: raw.borrower, vaultId: '', auditorKeyId: raw.loan_auditor_key_id === undefined ? '' : decimal(raw.loan_auditor_key_id), auditorPublicKey: raw.loan_auditor_public_key === undefined ? undefined : bytesToHex(raw.loan_auditor_public_key), status: mappedStatus, paymentRemaining: raw.payment_remaining, paymentCount: raw.payment_total, paymentIntervalSeconds: safeNumber(raw.payment_interval, 'payment interval'), gracePeriodSeconds: safeNumber(raw.grace_period, 'grace period'), nextPaymentDue: raw.next_due === null || raw.next_due === undefined ? 0 : safeNumber(raw.next_due, 'next due date'), stateVersion: decimal(raw.loan_version), termsDigest: '', principalCiphertextDigest: bytesToHex(raw.principal_ciphertexts?.[0] || ''), owedCiphertextDigest: bytesToHex(raw.amount_owed_ciphertexts?.[0] || ''), principalCiphertexts: raw.principal_ciphertexts?.map(bytesToHex), initialOwedCiphertexts: raw.initial_owed_ciphertexts?.map(bytesToHex), amountOwedCiphertexts: raw.amount_owed_ciphertexts?.map(bytesToHex), periodicPaymentCiphertexts: raw.periodic_payment_ciphertexts?.map(bytesToHex), principalRemainingCiphertexts: raw.principal_remaining_ciphertexts?.map(bytesToHex), cumulativeRepaidCiphertexts: raw.cumulative_repaid_ciphertexts?.map(bytesToHex), accountingLeaf: raw.accounting_leaf === undefined ? undefined : bytesToHex(raw.accounting_leaf), borrowerKeyId: raw.borrower_key_id === undefined ? undefined : decimal(raw.borrower_key_id), brokerKeyId: raw.broker_key_id === undefined ? undefined : decimal(raw.broker_key_id) }
+  return { loanId: decimal(raw.loan_id), proposalId: decimal(raw.proposal_id), brokerId: decimal(raw.broker_id), borrowerId: raw.borrower, vaultId: '', auditorKeyId: raw.loan_auditor_key_id === undefined ? '' : decimal(raw.loan_auditor_key_id), auditorPublicKey: raw.loan_auditor_public_key === undefined ? undefined : bytesToPointHex(raw.loan_auditor_public_key, 'loan auditor public key'), status: mappedStatus, paymentRemaining: raw.payment_remaining, paymentCount: raw.payment_total, paymentIntervalSeconds: safeNumber(raw.payment_interval, 'payment interval'), gracePeriodSeconds: safeNumber(raw.grace_period, 'grace period'), nextPaymentDue: raw.next_due === null || raw.next_due === undefined ? 0 : safeNumber(raw.next_due, 'next due date'), stateVersion: decimal(raw.loan_version), termsDigest: '', principalCiphertextDigest: bytesToHex(raw.principal_ciphertexts?.[0] || ''), owedCiphertextDigest: bytesToHex(raw.amount_owed_ciphertexts?.[0] || ''), principalCiphertexts: raw.principal_ciphertexts?.map(bytesToHex), initialOwedCiphertexts: raw.initial_owed_ciphertexts?.map(bytesToHex), amountOwedCiphertexts: raw.amount_owed_ciphertexts?.map(bytesToHex), periodicPaymentCiphertexts: raw.periodic_payment_ciphertexts?.map(bytesToHex), principalRemainingCiphertexts: raw.principal_remaining_ciphertexts?.map(bytesToHex), cumulativeRepaidCiphertexts: raw.cumulative_repaid_ciphertexts?.map(bytesToHex), accountingLeaf: raw.accounting_leaf === undefined ? undefined : bytesToHex(raw.accounting_leaf), borrowerKeyId: raw.borrower_key_id === undefined ? undefined : decimal(raw.borrower_key_id), brokerKeyId: raw.broker_key_id === undefined ? undefined : decimal(raw.broker_key_id) }
 }
 
 function mapProposal(raw: RawProposal): ProposalSummary {
@@ -398,7 +462,7 @@ function mapProposal(raw: RawProposal): ProposalSummary {
     principalCommitment: raw.principal_commitment === undefined ? undefined : bytesToHex(raw.principal_commitment),
     owedCommitment: raw.owed_commitment === undefined ? undefined : bytesToHex(raw.owed_commitment),
     paymentCommitment: raw.payment_commitment === undefined ? undefined : bytesToHex(raw.payment_commitment),
-    loanAuditorPublicKey: raw.loan_auditor_public_key === undefined ? undefined : bytesToHex(raw.loan_auditor_public_key),
+    loanAuditorPublicKey: raw.loan_auditor_public_key === undefined ? undefined : bytesToPointHex(raw.loan_auditor_public_key, 'loan auditor public key'),
     brokerSignature: raw.broker_signature ? bytesToHex(raw.broker_signature) : '',
     borrowerSignature: raw.borrower_signature ? bytesToHex(raw.borrower_signature) : '',
     borrowerKeyId: raw.borrower_key_id === undefined ? undefined : decimal(raw.borrower_key_id),
@@ -473,7 +537,7 @@ export class NearProtocolClient implements ProtocolClient {
       }),
       proposals: uniqueProposals.map(mapProposal),
       claims: rawClaims.map((claim) => ({ claimId: decimal(claim.claim_id), ownerId: claim.owner, amount: decimal(claim.amount), assetAccount: asset.tokenAccount, status: claim.reserved_by === null || claim.reserved_by === undefined ? 'available' : 'reserved', payoutOperationId: optionalDecimal(claim.reserved_by) })),
-      payouts: rawPayouts.map((payout) => ({ operationId: decimal(payout.operation_id), claimId: decimal(payout.claim_id), amount: decimal(payout.amount), recipientId: payout.recipient, status: payout.status === 'Succeeded' ? 'succeeded' : payout.status === 'Failed' || payout.status === 'ResultRecordedFailure' ? 'failed' : payout.status === 'InFlight' ? 'in_flight' : payout.status === 'ResultRecordedSuccess' ? 'result_recorded' : 'unknown', attempt: payout.attempt, lastUpdatedAt: safeNumber(payout.created_at, 'payout timestamp') })),
+      payouts: rawPayouts.map(mapPayout),
       keeperGrants: rawBrokers.flatMap((broker) => (broker.delegates || []).map((delegate) => ({ delegateId: delegate.delegate_account, brokerId: decimal(broker.broker_id), scope: mapKeeperScope(delegate.allowed_operations), maxAmount: decimal(delegate.allowed_settlement_per_operation), expiresAt: safeNumber(delegate.expires_at, 'keeper expiry'), epoch: decimal(delegate.revocation_epoch), revoked: !delegate.active }))),
       publicNotice: uniqueProposals.length || rawBrokers.some((broker) => broker.delegates?.length) ? undefined : 'This deployment returned no optional proposal/keeper index entries. Core get_proposal/get_broker reads remain available by ID; the UI never invents records.',
     }
@@ -488,13 +552,13 @@ export class NearProtocolClient implements ProtocolClient {
   async getHolderEncryptionKey(accountId: string): Promise<HolderKeyView> {
     const holder = await this.transport.view<{ key_id: string | number; public_key: unknown } | null>('get_holder_key', { owner: accountId, key_id: null })
     if (!holder) throw new ProtocolError({ category: 'NOT_REGISTERED', message: `The destination account ${accountId} has no registered encryption key.` })
-    return { accountId, encryptionKeyId: decimal(holder.key_id), publicKey: bytesToHex(holder.public_key) }
+    return { accountId, encryptionKeyId: decimal(holder.key_id), publicKey: bytesToPointHex(holder.public_key, 'holder encryption public key') }
   }
 
   async getBrokerEncryptionKey(brokerId: string): Promise<BrokerKeyView> {
     const key = await this.transport.view<{ key_id: string | number; public_key: unknown } | null>('get_broker_key', { broker_id: wireId(brokerId), key_id: null })
     if (!key) throw new ProtocolError({ category: 'NOT_REGISTERED', message: `Broker ${brokerId} has no registered encryption key.` })
-    return { brokerId, encryptionKeyId: decimal(key.key_id), publicKey: bytesToHex(key.public_key) }
+    return { brokerId, encryptionKeyId: decimal(key.key_id), publicKey: bytesToPointHex(key.public_key, 'broker encryption public key') }
   }
 
   async getVaultBrokerIds(vaultId: string): Promise<string[]> {
@@ -562,7 +626,7 @@ export class NearProtocolClient implements ProtocolClient {
     for (const [name, values] of [['principal', loan.principal_ciphertexts], ['initialOwed', loan.initial_owed_ciphertexts], ['amountOwed', loan.amount_owed_ciphertexts], ['periodicPayment', loan.periodic_payment_ciphertexts], ['principalRemaining', loan.principal_remaining_ciphertexts], ['cumulativeRepaid', loan.cumulative_repaid_ciphertexts]] as const) (values || []).forEach((value, index) => { ciphertexts[`${name}_${index}`] = bytesToHex(value) })
     if (ciphertexts.principal_0) ciphertexts.principal = ciphertexts.principal_0
     if (ciphertexts.amountOwed_0) ciphertexts.amountOwed = ciphertexts.amountOwed_0
-    return { scope: 'loan', subjectId: input.subjectId, auditorKeyId: loan.loan_auditor_key_id === undefined ? '' : decimal(loan.loan_auditor_key_id), auditorPublicKey: loan.loan_auditor_public_key === undefined ? undefined : bytesToHex(loan.loan_auditor_public_key), cryptoProfileHash: this.config.cryptoProfileHash, ciphertexts, commitments: {}, versions: { loan: decimal(loan.loan_version) }, fetchedAt: Date.now() }
+    return { scope: 'loan', subjectId: input.subjectId, auditorKeyId: loan.loan_auditor_key_id === undefined ? '' : decimal(loan.loan_auditor_key_id), auditorPublicKey: loan.loan_auditor_public_key === undefined ? undefined : bytesToPointHex(loan.loan_auditor_public_key, 'loan auditor public key'), cryptoProfileHash: this.config.cryptoProfileHash, ciphertexts, commitments: {}, versions: { loan: decimal(loan.loan_version) }, fetchedAt: Date.now() }
   }
 
   private async callWithOptions(method: string, args: Record<string, unknown>, options?: { deposit?: string; gas?: string; receiverId?: string }): Promise<ActionReceipt> {
@@ -647,6 +711,10 @@ export class NearProtocolClient implements ProtocolClient {
     return this.callStruct('request_payout', { claim_id: input.claimId, operation_id: input.operationId, recipient: input.recipientId })
   }
 
+  finalizePayout(input: { operationId: string }): Promise<ActionReceipt> {
+    return this.call('finalize_payout', { operation_id: input.operationId })
+  }
+
   shield(input: { claimId: string; amount: string; proof: PreparedProof }): Promise<ActionReceipt> {
     return this.callStruct('shield', { claim_id: input.claimId, amount: input.amount, ...proofArgs(input.proof) })
   }
@@ -692,7 +760,7 @@ export class NearProtocolClient implements ProtocolClient {
       if (!broker || broker.authorization_epoch === undefined) throw new ProtocolError({ category: 'STALE_STATE', message: 'The broker authorization epoch could not be read from finalized Core state.' })
       brokerEpoch = decimal(broker.authorization_epoch)
     }
-    return this.callStruct('create_proposal', { borrower: input.borrowerId, broker_id: input.brokerId, vault_id: input.vaultId, borrower_key_id: input.borrowerKeyId, broker_key_id: input.brokerKeyId, ...(input.brokerAuthorizationKeyId ? { broker_authorization_key_id: input.brokerAuthorizationKeyId } : {}), ...(input.borrowerAuthorizationKeyId ? { borrower_authorization_key_id: input.borrowerAuthorizationKeyId } : {}), loan_auditor_key_id: input.auditorKeyId, loan_auditor_public_key: hexToBytes(input.auditorPublicKey), payment_count: input.paymentCount, payment_interval: decimal(input.paymentIntervalSeconds), grace_period: decimal(input.gracePeriodSeconds), expiry: decimal(input.expiresAt), principal_ciphertexts: input.encryptedPrincipal.map(hexToBytes), initial_owed_ciphertexts: input.encryptedOwed.map(hexToBytes), periodic_payment_ciphertexts: input.encryptedPayment.map(hexToBytes), principal_commitment: hexToBytes(input.principalCommitment), owed_commitment: hexToBytes(input.owedCommitment), payment_commitment: hexToBytes(input.paymentCommitment), agreement_digest: input.termsDigest.trim() ? hexToBytes(input.termsDigest) : [], broker_signature: optionalHexToBytes(input.brokerSignature), borrower_signature: optionalHexToBytes(input.borrowerSignature), broker_authorization_epoch: brokerEpoch, borrower_authorization_epoch: borrowerEpoch, broker_authorization_nonce: input.brokerAuthorizationNonce || '0', borrower_authorization_nonce: input.borrowerAuthorizationNonce || '0' })
+    return this.callStruct('create_proposal', { borrower: input.borrowerId, broker_id: input.brokerId, vault_id: input.vaultId, borrower_key_id: input.borrowerKeyId, broker_key_id: input.brokerKeyId, ...(input.brokerAuthorizationKeyId ? { broker_authorization_key_id: input.brokerAuthorizationKeyId } : {}), ...(input.borrowerAuthorizationKeyId ? { borrower_authorization_key_id: input.borrowerAuthorizationKeyId } : {}), loan_auditor_key_id: input.auditorKeyId, loan_auditor_public_key: publicKeyBytes(input.auditorPublicKey), payment_count: input.paymentCount, payment_interval: decimal(input.paymentIntervalSeconds), grace_period: decimal(input.gracePeriodSeconds), expiry: decimal(input.expiresAt), principal_ciphertexts: input.encryptedPrincipal.map(hexToBytes), initial_owed_ciphertexts: input.encryptedOwed.map(hexToBytes), periodic_payment_ciphertexts: input.encryptedPayment.map(hexToBytes), principal_commitment: hexToBytes(input.principalCommitment), owed_commitment: hexToBytes(input.owedCommitment), payment_commitment: hexToBytes(input.paymentCommitment), agreement_digest: input.termsDigest.trim() ? hexToBytes(input.termsDigest) : [], broker_signature: optionalHexToBytes(input.brokerSignature), borrower_signature: optionalHexToBytes(input.borrowerSignature), broker_authorization_epoch: brokerEpoch, borrower_authorization_epoch: borrowerEpoch, broker_authorization_nonce: input.brokerAuthorizationNonce || '0', borrower_authorization_nonce: input.borrowerAuthorizationNonce || '0' })
   }
 
   authorizeProposal(input: { proposalId: string; authorizationSignature: string }): Promise<ActionReceipt> {

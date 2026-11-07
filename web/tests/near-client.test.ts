@@ -16,6 +16,12 @@ const config: DeploymentConfig = {
   assetSymbol: 'USDC',
 }
 
+const issuerPoint = '11'.repeat(32)
+const auditorPoint = '22'.repeat(32)
+const issuerPublicKeyBytes = [...new TextEncoder().encode(JSON.stringify({ point: issuerPoint }))]
+const auditorPublicKeyBytes = [...new TextEncoder().encode(JSON.stringify({ point: auditorPoint }))]
+const proposalAuditorPublicKeyBytes = [...new TextEncoder().encode(JSON.stringify({ point: 'aa'.repeat(32) }))]
+
 const proof: PreparedProof = {
   context: 'aa',
   proof: 'bb',
@@ -71,6 +77,53 @@ describe('real Core client mapping', () => {
     expect(argsByMethod.get('sign_proposal')).toEqual({ proposal_id: '12', signature: [170] })
   })
 
+  it('maps permissionless payout finalization to the scalar Core ABI', async () => {
+    let captured: { method: string; args: Record<string, unknown> } | undefined
+    const transport: NearContractTransport = {
+      view: async () => { throw new Error('not used') },
+      call: async (method, args) => { captured = { method, args }; return { transactionHash: 'tx', status: 'succeeded', finalized: true } },
+    }
+    await new NearProtocolClient(transport, config).finalizePayout({ operationId: '9007199254740993' })
+    expect(captured).toEqual({ method: 'finalize_payout', args: { operation_id: '9007199254740993' } })
+  })
+
+  it('normalizes recorded payout outcomes without making either outcome terminal', async () => {
+    const transport: NearContractTransport = {
+      view: async <T>(method: string) => {
+        if (method === 'get_asset_profile') return { token_account: 'token.testnet', decimals: 6, controller_account: 'issuer.testnet', crypto_profile_hash: Array(32).fill(1), token_trust_policy: 'fixed', issuer_key: { key_id: '4', public_key: issuerPublicKeyBytes }, token_auditor_key: { key_id: '5', public_key: auditorPublicKeyBytes } } as T
+        if (method === 'get_counters') return { vault_high_water: '0', broker_high_water: '0', loan_high_water: '0', proposal_high_water: '0', claim_high_water: '0', payout_high_water: '2' } as T
+        if (method === 'list_payouts') return [{ operation_id: '1', owner: 'alice.testnet', recipient: 'recipient.testnet', amount: '10', claim_id: '7', attempt: 1, status: 'ResultRecordedSuccess', created_at: '1' }, { operation_id: '2', owner: 'alice.testnet', recipient: 'recipient.testnet', amount: '11', claim_id: '8', attempt: 1, status: 'ResultRecordedFailure', created_at: '2' }] as T
+        if (method === 'list_loans') return [] as T
+        throw new Error(`unexpected view ${method}`)
+      },
+      call: async () => { throw new Error('not used') },
+    }
+    const dashboard = await new NearProtocolClient(transport, config).getDashboard('alice.testnet')
+    expect(dashboard.payouts.map((payout) => payout.status)).toEqual(['result_recorded_success', 'result_recorded_failure'])
+  })
+
+  it('decodes canonical public-key bytes on asset, holder, broker and proposal reads', async () => {
+    const transport: NearContractTransport = {
+      view: async <T>(method: string) => {
+        if (method === 'get_asset_profile') return { token_account: 'token.testnet', decimals: 6, controller_account: 'issuer.testnet', crypto_profile_hash: Array(32).fill(1), token_trust_policy: 'fixed', issuer_key: { key_id: '4', public_key: issuerPublicKeyBytes }, token_auditor_key: { key_id: '5', public_key: auditorPublicKeyBytes } } as T
+        if (method === 'get_holder') return { owner: 'borrower.testnet', asset_id: 'token.testnet', key_id: '3', spending_ciphertext: [1], inbox_ciphertext: [2], spending_version: '4', spending_commitment: [3], inbox_commitment: [4] } as T
+        if (method === 'get_broker') return { owner: 'broker.testnet', encryption_key_id: '5', spending_ciphertext: [1], spending_commitment: [2], inbox_ciphertext: [3], inbox_commitment: [4], spending_version: '6' } as T
+        if (method === 'get_holder_key') return { key_id: '3', public_key: issuerPublicKeyBytes } as T
+        if (method === 'get_broker_key') return { key_id: '5', public_key: auditorPublicKeyBytes } as T
+        if (method === 'get_proposal') return { proposal_id: '7', borrower: 'borrower.testnet', broker_id: '2', vault_id: '1', expiry: '9999999999', agreement_digest: [5], principal_ciphertexts: [[6]], initial_owed_ciphertexts: [[7]], periodic_payment_ciphertexts: [[8]], principal_commitment: [9], owed_commitment: [10], payment_commitment: [11], loan_auditor_public_key: proposalAuditorPublicKeyBytes, consumed: false, revoked: false, loan_auditor_key_id: '8' } as T
+        throw new Error(`unexpected view ${method}`)
+      },
+      call: async () => { throw new Error('not used') },
+    }
+    const client = new NearProtocolClient(transport, config)
+    await expect(client.getAssetProfile()).resolves.toMatchObject({ issuerPublicKey: issuerPoint, tokenAuditorPublicKey: auditorPoint })
+    await expect(client.getPrivateAccount('borrower.testnet')).resolves.toMatchObject({ accountId: 'borrower.testnet', spendingVersion: '4', balanceCiphertext: '01' })
+    await expect(client.getBrokerPrivateAccount('2')).resolves.toMatchObject({ accountId: 'broker.testnet', spendingVersion: '6', balanceCiphertext: '01' })
+    await expect(client.getProposal('7')).resolves.toMatchObject({ proposalId: '7', loanAuditorPublicKey: 'aa'.repeat(32), encryptedPrincipal: ['06'] })
+    await expect(client.getHolderEncryptionKey('borrower.testnet')).resolves.toMatchObject({ publicKey: issuerPoint })
+    await expect(client.getBrokerEncryptionKey('2')).resolves.toMatchObject({ publicKey: auditorPoint })
+  })
+
   it('maps a pure inbox merge to the homomorphic Core ABI without a fake proof', async () => {
     const calls: Array<{ method: string; args: Record<string, unknown> }> = []
     const transport: NearContractTransport = {
@@ -115,7 +168,7 @@ describe('real Core client mapping', () => {
     }
     const client = new NearProtocolClient(transport, config)
     await client.createProposal({ brokerId: '2', borrowerId: 'borrower.testnet', vaultId: '1', borrowerKeyId: '3', brokerKeyId: '4', borrowerAuthorizationKeyId: '8', brokerAuthorizationKeyId: '9', auditorKeyId: '5', auditorPublicKey: 'aa'.repeat(32), paymentCount: 4, paymentIntervalSeconds: 60, gracePeriodSeconds: 30, encryptedPrincipal: ['aa', 'bb', 'cc', 'dd', 'ee'], encryptedOwed: ['ff', '11', '22'], encryptedPayment: ['33', '44', '55'], principalCommitment: '66', owedCommitment: '77', paymentCommitment: '88', encryptedAgreement: '99', termsDigest: 'aa', brokerSignature: 'bb', borrowerSignature: 'cc', brokerAuthorizationEpoch: '1', borrowerAuthorizationEpoch: '2', expiresAt: 9999999999 })
-    expect(captured).toEqual({ method: 'create_proposal', args: { args: expect.objectContaining({ broker_authorization_key_id: '9', borrower_authorization_key_id: '8', loan_auditor_public_key: Array(32).fill(170), payment_interval: '60', grace_period: '30', expiry: '9999999999', principal_commitment: [102], owed_commitment: [119], payment_commitment: [136], principal_ciphertexts: [[170], [187], [204], [221], [238]], initial_owed_ciphertexts: [[255], [17], [34]], periodic_payment_ciphertexts: [[51], [68], [85]] }) } })
+    expect(captured).toEqual({ method: 'create_proposal', args: { args: expect.objectContaining({ broker_authorization_key_id: '9', borrower_authorization_key_id: '8', loan_auditor_public_key: proposalAuditorPublicKeyBytes, payment_interval: '60', grace_period: '30', expiry: '9999999999', principal_commitment: [102], owed_commitment: [119], payment_commitment: [136], principal_ciphertexts: [[170], [187], [204], [221], [238]], initial_owed_ciphertexts: [[255], [17], [34]], periodic_payment_ciphertexts: [[51], [68], [85]] }) } })
   })
 
   it('reads finalized authorization epochs when the proposal caller omits them', async () => {
@@ -216,7 +269,7 @@ describe('real Core client mapping', () => {
       view: async <T>(method: string, args?: Record<string, unknown>) => {
         const nextArgs = args || {}
         requests.push({ method, args: nextArgs })
-        if (method === 'get_asset_profile') return { token_account: 'token.testnet', decimals: 6, controller_account: 'issuer.testnet', crypto_profile_hash: Array(32).fill(1), token_trust_policy: 'fixed', issuer_key: { key_id: '4', public_key: [1] }, token_auditor_key: { key_id: '5', public_key: [2] } } as T
+        if (method === 'get_asset_profile') return { token_account: 'token.testnet', decimals: 6, controller_account: 'issuer.testnet', crypto_profile_hash: Array(32).fill(1), token_trust_policy: 'fixed', issuer_key: { key_id: '4', public_key: issuerPublicKeyBytes }, token_auditor_key: { key_id: '5', public_key: auditorPublicKeyBytes } } as T
         if (method === 'get_counters') return { vault_high_water: '51', broker_high_water: '51', loan_high_water: '51', proposal_high_water: '51', claim_high_water: '51', payout_high_water: '51' } as T
         if (method === 'get_proposal') return null as T
         if (nextArgs.limit !== undefined) {
@@ -311,7 +364,7 @@ describe('real Core client mapping', () => {
     const transport: NearContractTransport = {
       view: async <T>(method: string, args?: Record<string, unknown>) => {
         calls.push({ method, args: args || {} })
-        if (method === 'get_asset_profile') return { token_account: 'token.testnet', decimals: 6, controller_account: 'issuer.testnet', crypto_profile_hash: Array(32).fill(1), token_trust_policy: 'fixed', issuer_key: { key_id: '4', public_key: [1] }, token_auditor_key: { key_id: '5', public_key: [2] } } as T
+        if (method === 'get_asset_profile') return { token_account: 'token.testnet', decimals: 6, controller_account: 'issuer.testnet', crypto_profile_hash: Array(32).fill(1), token_trust_policy: 'fixed', issuer_key: { key_id: '4', public_key: issuerPublicKeyBytes }, token_auditor_key: { key_id: '5', public_key: auditorPublicKeyBytes } } as T
         if (method === 'get_holder') return { owner: 'alice.testnet', spending_version: '7' } as T
         throw new Error(`unexpected view ${method}`)
       },
@@ -330,7 +383,7 @@ describe('real Core client mapping', () => {
     const transport: NearContractTransport = {
       view: async <T>(method: string, args?: Record<string, unknown>) => {
         calls.push({ method, args: args || {} })
-        if (method === 'get_asset_profile') return { token_account: 'token.testnet', decimals: 6, controller_account: 'issuer.testnet', crypto_profile_hash: Array(32).fill(1), token_trust_policy: 'fixed', issuer_key: { key_id: '4', public_key: [1] }, token_auditor_key: { key_id: '5', public_key: [2] } } as T
+        if (method === 'get_asset_profile') return { token_account: 'token.testnet', decimals: 6, controller_account: 'issuer.testnet', crypto_profile_hash: Array(32).fill(1), token_trust_policy: 'fixed', issuer_key: { key_id: '4', public_key: issuerPublicKeyBytes }, token_auditor_key: { key_id: '5', public_key: auditorPublicKeyBytes } } as T
         if (method === 'get_broker') return { broker_id: '9', spending_version: '12' } as T
         throw new Error(`unexpected view ${method}`)
       },

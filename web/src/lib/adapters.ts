@@ -83,6 +83,7 @@ class UnavailableProtocolClient implements ProtocolClient {
   redeemAmount(_input: { vaultId: string; assetsOut: string; maxSharesIn: string; expiresAt: number; soleShareholderWaiver?: boolean; brokerZeroProofs?: PreparedProof[] }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   transferShares(_input: { vaultId: string; receiverId: string; shares: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   requestPayout(_input: { claimId: string; operationId: string; recipientId: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  finalizePayout(_input: { operationId: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   shield(_input: { claimId: string; amount: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   unshield(_input: { amount: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   deleteLoan(_input: { loanId: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }

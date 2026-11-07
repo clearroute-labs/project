@@ -4,7 +4,7 @@ import { ActionFeedback, Button, Card, EmptyState, Field, Metric, Mono, Money, N
 import { useAction } from '../lib/actionState'
 import { readBrokerZeroProof, type BrokerZeroProofPackage } from '../lib/brokerZeroProof'
 import { parseAmount, parseNonNegativeAmount, randomUint64Decimal, unixSecondsNow } from '../lib/money'
-import type { PublicClaim, VaultSummary } from '../lib/types'
+import type { PayoutSummary, PublicClaim, VaultSummary } from '../lib/types'
 import { AmountCell, AssetBoundary, ConnectionGate, EmptyRow, IdLabel, PageHeader, PublicPrivateNotice, StateFreshness, VaultPolicyNotice } from './shared'
 
 export function LenderPage() {
@@ -228,8 +228,21 @@ function RequestPayoutCard({ claims }: { claims: PublicClaim[] }) {
   return <Card className="form-card"><SectionHeading eyebrow="External token rail" title="Request payout" description="The recipient is bound to this operation. Finalization is permissionless only after an authenticated result is recorded." /><form onSubmit={submit} className="form-stack"><Field label="Claim" htmlFor="payout-claim"><SelectInput id="payout-claim" value={claimId} onChange={(event) => setClaimId(event.target.value)}><option value="">Select a claim</option>{availableClaims.map((claim) => <option key={claim.claimId} value={claim.claimId}>{claim.claimId} · {claim.status}</option>)}</SelectInput></Field><Field label="Recipient account" htmlFor="payout-recipient" hint="Public destination; never enter a secret here."><TextInput id="payout-recipient" value={recipient} onChange={(event) => setRecipient(event.target.value)} placeholder="recipient.testnet" /></Field>{error ? <p className="field-error" role="alert">{error}</p> : null}<Button type="submit" disabled={!availableClaims.length} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Reserve payout</Button><ActionFeedback state={action.state} /></form></Card>
 }
 
-function PayoutStatusCard({ payouts, decimals }: { payouts: import('../lib/types').PayoutSummary[]; decimals: number }) {
-  return <Card><SectionHeading eyebrow="Operation monitor" title="Payout status" description="No result is inferred from RPC availability or wallet UI state." />{payouts.length ? <div className="operation-list">{payouts.slice(0, 6).map((payout) => <div className="operation-row" key={payout.operationId}><div><strong>{payout.operationId}</strong><p className="muted">Claim {payout.claimId} · attempt {payout.attempt}</p></div><div className="operation-meta"><AmountCell units={payout.amount} decimals={decimals} /><StatusBadge tone={payout.status === 'succeeded' ? 'success' : payout.status === 'failed' ? 'danger' : payout.status === 'unknown' ? 'warning' : 'neutral'}>{payout.status.replace('_', ' ')}</StatusBadge></div></div>)}</div> : <EmptyState title="No payout operations" description="Finalized payout reservations will appear here." />}</Card>
+function PayoutStatusCard({ payouts, decimals }: { payouts: PayoutSummary[]; decimals: number }) {
+  return <Card><SectionHeading eyebrow="Operation monitor" title="Payout status" description="No result is inferred from RPC availability or wallet UI state. Finalize only after Core records an authenticated token result." />{payouts.length ? <div className="operation-list">{payouts.slice(0, 6).map((payout) => <PayoutOperationRow key={payout.operationId} payout={payout} decimals={decimals} />)}</div> : <EmptyState title="No payout operations" description="Finalized payout reservations will appear here." />}</Card>
+}
+
+function PayoutOperationRow({ payout, decimals }: { payout: PayoutSummary; decimals: number }) {
+  const { adapters, refresh } = useAppContext()
+  const action = useAction()
+  const finalizable = payout.status === 'result_recorded_success' || payout.status === 'result_recorded_failure'
+  const finalize = async () => {
+    const receipt = await action.run('Finalize payout', () => adapters.protocol.finalizePayout({ operationId: payout.operationId }))
+    if (receipt) void refresh()
+  }
+  const tone = payout.status === 'succeeded' || payout.status === 'result_recorded_success' ? 'success' : payout.status === 'failed' || payout.status === 'result_recorded_failure' ? 'danger' : payout.status === 'unknown' ? 'warning' : 'neutral'
+  const statusLabel = payout.status.replaceAll('_', ' ')
+  return <div className="operation-row"><div><strong>{payout.operationId}</strong><p className="muted">Claim {payout.claimId} · attempt {payout.attempt}</p></div><div className="operation-meta"><AmountCell units={payout.amount} decimals={decimals} /><StatusBadge tone={tone}>{statusLabel}</StatusBadge>{finalizable ? <Button type="button" variant="secondary" onClick={() => void finalize()} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Finalize payout</Button> : payout.status === 'unknown' || payout.status === 'requested' || payout.status === 'in_flight' ? <small className="field-hint">Locked until Core records the token result.</small> : null}<ActionFeedback state={action.state} /></div></div>
 }
 
 function VaultTable({ vaults, decimals, onSelect, selectedVaultId }: { vaults: VaultSummary[]; decimals: number; onSelect?: (vault: VaultSummary) => void; selectedVaultId?: string }) {
