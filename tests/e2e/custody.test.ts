@@ -25,6 +25,11 @@ test('actual token callbacks preserve custody through duplicate ingress, failed 
     assert.equal(BigInt(await balance(actors.lender.accountId)), initial - 1000n);
     await deposit();
     assert.equal(BigInt(await balance(actors.lender.accountId)), initial - 1000n);
+    await actors.lender.call(token, 'ft_transfer_call', {
+      receiver_id: core.accountId, amount: '1001', memo: null,
+      msg: JSON.stringify({ version: 1, deposit_id: 'custody-deposit-1' }),
+    }, { attachedDeposit: 1n, gas: maximumGas });
+    assert.equal(BigInt(await balance(actors.lender.accountId)), initial - 1000n, 'Mismatched reuse must refund the new transfer');
     assert.equal(await balance(core.accountId), '1000');
     assert.equal(await core.view('get_custody_total'), '1000');
     const forgedDeposit = await actors.lender.callRaw(core, 'ft_on_transfer', { sender_id: actors.lender.accountId, amount: '1000', msg: JSON.stringify({ version: 1, deposit_id: 'forged' }) }, { gas: maximumGas });
@@ -38,10 +43,18 @@ test('actual token callbacks preserve custody through duplicate ingress, failed 
     let operation = await core.view<Payout>('get_payout', { operation_id: '9007199254740993' });
     assert.equal(operation.status, 'ResultRecordedFailure');
     assert.equal((await claim())?.reserved_by, '9007199254740993');
+    await actors.issuer.call(core, 'set_asset_frozen', { frozen: true });
     await finalizer.call(core, 'finalize_payout', { operation_id: '9007199254740993' }, { gas: maximumGas });
     assert.equal((await claim())?.reserved_by, null);
     assert.equal(await balance(core.accountId), '1000');
     await finalizer.call(core, 'finalize_payout', { operation_id: '9007199254740993' });
+    const frozenPayout = await actors.lender.callRaw(core, 'request_payout', { args: {
+      claim_id: receipt.claim_id, recipient: actors.recipient.accountId, operation_id: '9007199254740994',
+    } }, { gas: maximumGas });
+    assert.equal(frozenPayout.failed, true);
+    assert.match(JSON.stringify(frozenPayout.status), /ACCOUNT_FROZEN/);
+    assert.equal((await claim())?.reserved_by, null);
+    await actors.issuer.call(core, 'set_asset_frozen', { frozen: false });
     await worker.rootAccount.call(token, 'set_transfer_mode', { mode: 2 });
     await actors.lender.call(core, 'request_payout', { args: { claim_id: receipt.claim_id, recipient: actors.recipient.accountId, operation_id: '9007199254740994' } }, { gas: maximumGas });
     operation = await core.view<Payout>('get_payout', { operation_id: '9007199254740994' });

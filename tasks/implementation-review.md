@@ -44,6 +44,27 @@ This is an internal engineering checklist, not an independent security audit.
 
 ## Evidence so far
 
+### Final conformance pass
+
+The following concrete gaps were found during the implementation review and are being resolved before acceptance:
+
+- [ ] Require exact proposal reader counts and validate every persisted ciphertext; no trailing unvalidated vectors.
+- [ ] Implement amount-specified redemption with ceiling rounding and a maximum-share guard.
+- [ ] Enforce full loan maturity, grace period and redemption buffer for closed-ended vaults.
+- [ ] Increment origination accounting versions and bind the complete loan leaf and current book root.
+- [ ] Charge proposal signatures and revocation tombstones to an authorized storage payer.
+- [ ] Expose the immutable authorization policy and required public accounting counters.
+- [ ] Emit proof-authoritative ciphertexts or durable recovery references for compact calls.
+- [ ] Bound proof/proposal parsing and final-redemption proof batches; keep sequential broker closure executable.
+- [ ] Keep wide IDs canonical across every current and compatibility API.
+- [ ] Enforce encryption/recovery randomness, ownership ranges and u128 limbs inside the circuits; regenerate the profile and all keys.
+- [ ] Recover token-auditor balances from finalized history using only authorized auditor keys.
+- [ ] Review agreement plaintext against finalized proposal fields using bounded recovery data.
+- [ ] Merge inboxes before proof construction when required spending exceeds the available spending balance.
+- [ ] Exercise connected browser operations, backup restore and authorized audit against the deployed contract.
+
+The persisted-state decoder optimization is restricted to Core's authenticated fixed financial slots. The read-only provenance audit confirmed those slots originate in validated keys, successful proof statements or trusted group arithmetic. Proposal vectors currently permit unvalidated trailing entries; exact vector lengths and validation before persistence are required even though repayment only reads the fixed reader slots.
+
 - `near-verifier` native tests passed with real Groth16 proofs, altered public input rejection and canonical scalar/proof checks.
 - `verifier-probe` built for wasm32 with NEAR SDK 5.30.1 / Rust 1.95.0.
 - Client typecheck and 10 unit tests passed for exact amounts, artifact hash/size validation, finalized RPC reads, pending outcomes and receipt-event filtering.

@@ -119,12 +119,13 @@ export class NearRpc {
 
   private async queryView<T>(accountId: string, method: string, args: Arguments, block?: FinalizedBlock, signal?: AbortSignal): Promise<T> {
     assertAccountId(accountId);
-    const result = await this.request<{ result: number[]; block_hash?: string; block_height?: number }>('query', {
+    const result = await this.request<{ result?: number[]; error?: string; block_hash?: string; block_height?: number }>('query', {
       request_type: 'call_function', ...(block ? { block_id: block.hash } : { finality: 'final' }), account_id: accountId,
       method_name: method,
       args_base64: base64Encode(new TextEncoder().encode(JSON.stringify(args))),
     }, signal);
     if (block && (result.block_hash !== block.hash || result.block_height !== block.height)) throw new RpcError('encoding', 'Contract view returned a different block');
+    if (typeof result.error === 'string') throw new RpcError('rpc', `Contract view ${method} failed: ${result.error}`);
     if (!Array.isArray(result.result) || result.result.some(n => !Number.isInteger(n) || n < 0 || n > 255)) {
       throw new RpcError('encoding', 'Malformed contract view response');
     }

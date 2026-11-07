@@ -25,6 +25,16 @@ test('RPC rejects invalid transport and mismatched response IDs', async () => {
   await assert.rejects(rpc.view('core.testnet', 'get_config'), RpcError);
 });
 
+test('contract view panics are reported as execution errors without decoding a missing result', async () => {
+  const hash = '1'.repeat(32);
+  const rpc = new NearRpc('https://rpc.example.org', { fetch: rpcFetch(() => ({
+    error: 'wasm execution failed: Smart contract panicked: INVALID_AMOUNT',
+    logs: [], block_hash: hash, block_height: 10,
+  })) });
+  await assert.rejects(rpc.viewAt({ hash, height: 10 }, 'core.near', 'list_loans', { cursor: '0', limit: 64 }),
+    (error: unknown) => error instanceof RpcError && error.kind === 'rpc' && /list_loans.*INVALID_AMOUNT/.test(error.message));
+});
+
 test('recovery snapshots pin all views to the same finalized block', async () => {
   const hash = '1'.repeat(32);
   let responseHash = hash;

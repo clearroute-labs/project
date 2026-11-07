@@ -18,7 +18,12 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
   const deployment = await deployProtocol();
   const { worker, core, token, actors, rpc, crypto, keys } = deployment;
   const wallet = new LedgerWallet(rpc, keys, crypto, deployment.manifestHash);
-  const measurements: Array<{ method: string; gas: string; argumentBytes: number; milliseconds: number; succeeded: boolean }> = [];
+  const measurements: Array<{ method: string; gas: string; argumentBytes: number; milliseconds: number; storageBytesBefore: number; storageBytesAfter: number; succeeded: boolean }> = [];
+  const storageBytes = async (): Promise<number> => {
+    const account = await rpc.request<{ storage_usage: number }>('query', { request_type: 'view_account', finality: 'final', account_id: core.accountId });
+    assert.ok(Number.isSafeInteger(account.storage_usage) && account.storage_usage >= 0);
+    return account.storage_usage;
+  };
   const privateAmounts = new Set(['600000000', '660000000', '220000000', '440000000', '40000000', '1000000']);
   const confidentialMethods = new Set(['create_proposal', 'sign_proposal', 'originate', 'confidential_send', 'repay', 'manage_loan', 'delete_loan']);
   const assertNoKeys = (value: unknown): void => {
@@ -30,6 +35,7 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
   };
   await mkdir('.artifacts', { recursive: true });
   const call = async <T>(actor: NearAccount, method: string, input: Record<string, unknown>): Promise<T> => {
+    const storageBytesBefore = await storageBytes();
     const before = Date.now();
     assertNoKeys(input);
     if (confidentialMethods.has(method)) assertPrivatePayload(input, privateAmounts);
@@ -38,10 +44,10 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
     for (const log of outcome.logs) {
       if (confidentialMethods.has(method) && log.startsWith('EVENT_JSON:')) assertPrivatePayload(JSON.parse(log.slice('EVENT_JSON:'.length)), privateAmounts);
     }
-    measurements.push({ method, gas: outcome.gas_burnt, argumentBytes: Buffer.byteLength(JSON.stringify(input)), milliseconds: Date.now() - before, succeeded: !outcome.failed });
+    await rpc.waitForFinalOutcome(outcome.transactionReceipt.hash, actor.accountId);
+    measurements.push({ method, gas: outcome.gas_burnt, argumentBytes: Buffer.byteLength(JSON.stringify(input)), milliseconds: Date.now() - before, storageBytesBefore, storageBytesAfter: await storageBytes(), succeeded: !outcome.failed });
     await writeFile('.artifacts/lifecycle-benchmark.json', JSON.stringify({ complete: false, core: core.accountId, manifestHash: deployment.manifestHash, coreWasmHash: deployment.coreWasmHash, measurements }, null, 2));
     assert.equal(outcome.failed, false, `${method}: ${JSON.stringify(outcome.status)}`);
-    await rpc.waitForFinalOutcome(outcome.transactionReceipt.hash, actor.accountId);
     return outcome.parseResult<T>();
   };
   const submit = <T>(actor: NearAccount, prepared: PreparedCall): Promise<T> => call(actor, prepared.method, prepared.args);
