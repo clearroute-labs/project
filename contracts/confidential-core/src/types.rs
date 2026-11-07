@@ -143,12 +143,28 @@ pub struct AuthorizationKey {
 pub struct VerifierConfig {
     pub profile_hash: Vec<u8>,
     pub manifest_hash: Vec<u8>,
+    /// The exact artifact commitments pinned by the canonical deployment
+    /// manifest.  These records are immutable after initialization and are
+    /// checked before any prepared verifier key can be staged.
+    pub manifest_artifacts: Vec<VerifierArtifactExpectation>,
     /// True once every immutable prepared verifier key has been activated.
     /// This is an operational readiness bit, not a cryptographic review or
     /// production-environment claim.
     pub ready: bool,
     pub activated: bool,
     pub key_count: u8,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(crate = "serde")]
+pub struct VerifierArtifactExpectation {
+    pub statement_kind: u8,
+    pub family: String,
+    pub verifying_key_sha256: Vec<u8>,
+    pub verifying_key_bytes: u32,
+    pub prepared_key_sha256: Vec<u8>,
+    pub prepared_key_bytes: u32,
+    pub public_input_count: u32,
 }
 
 /// A prepared Groth16 key is uploaded and validated once before activation.
@@ -711,6 +727,9 @@ pub struct InitArgs {
     #[serde(default)]
     pub verifier_key: Vec<u8>,
     pub verifier_manifest_hash: Vec<u8>,
+    /// Canonical, compact JSON artifact manifest.  Core hashes these exact
+    /// bytes and requires the result to equal `verifier_manifest_hash`.
+    pub verifier_manifest_json: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

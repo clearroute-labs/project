@@ -10,12 +10,25 @@ is accepted as a plaintext argument or returned by a view.
 
 'new(InitArgs)' is the only deployment initializer. The configured NEP-141
 token account, decimals, controller, network ID, asset encryption keys,
-'crypto_profile_hash', and verifier manifest hash are immutable. Verifier keys
-are uploaded one statement kind at a time with 'stage_verifier_key' and become
-immutable only after the owner calls 'activate_verifier_keys'; all required
-statement kinds must be present before any financial method is enabled. The
-legacy single-key initializer is rejected. There is no unrestricted upgrade,
-verifier replacement, debt reset, or payout redirection method.
+'crypto_profile_hash', verifier manifest hash, and canonical manifest JSON are
+immutable. `InitArgs.verifier_manifest_json` must be the compact canonical JSON
+whose fields are, in order, `schema`, `profileHash`, `networkId`,
+`coreAccountId`, `setup`, and an alphabetically ordered `artifacts` object.
+Each artifact entry has exactly `path`, `sha256`, and `bytes`; the object must
+contain exactly `<family>.vk` and `<family>.prepared-vk` for all eight families:
+`key-possession`, `public-conversion`, `confidential-transfer`, `origination`,
+`repayment`, `reconciliation`, `zero-balance`, and `ownership`. Core hashes the
+exact JSON bytes and requires that digest to equal `verifier_manifest_hash`,
+then pins every artifact hash/length and the profile's public-input count in
+state. Duplicate, missing, unknown, non-canonical, or deployment-mismatched
+entries are rejected. Verifier keys are uploaded one statement kind at a time
+with `stage_verifier_key`; a staged prepared key must match its manifest byte
+length and SHA-256, embed the manifest's canonical `.vk` hash, and expose the
+family's expected public-input count. Keys become immutable only after the
+owner calls `activate_verifier_keys`; all eight exact pinned kinds must be
+present before any financial method is enabled. The legacy single-key
+initializer is rejected. There is no unrestricted upgrade, verifier
+replacement, debt reset, or payout redirection method.
 
 All public amounts are JSON decimal strings ('U128'). IDs, timestamps, and
 versions are serialized as canonical decimal strings (no JSON numbers, leading
@@ -195,6 +208,15 @@ accounting version and the derived checkpoint ID. It is the only context a
 keeper needs for the bundled path; no keeper authority is granted for
 `prepare_reconciliation` or arbitrary reconciliation.
 
+Proposal `broker_authorization_epoch`/`broker_authorization_nonce` refer to
+the broker owner's registered application authorization key, when one is
+provided; they never refer to the broker encryption key epoch. A direct
+broker-owner proposal uses no application key and pins those fields to zero.
+The encryption key ID remains separately pinned in the proposal ciphertext
+terms. Signed broker and borrower agreements are verified over the exact
+stored agreement digest and current registered key epoch/nonce; a typed proof
+cannot substitute for either party authorization.
+
 For wallet registration flows, `get_proof_context` uses operation
 `register-holder` with `{ account_id, key_id }` and `create-broker` with
 `{ account_id, primary_id: vault_id, broker_id, key_id }`; these contexts pin
@@ -243,8 +265,10 @@ includes the immutable network ID, Core account, configured asset account,
 profile hash, subject label, encryption key ID and key authorization epoch.
 The fixed domain prevents a zero ciphertext from one deployment, account or
 rotation from being replayed as another subject's state. Holder key rotation
-therefore requires four typed zero-balance proofs over the existing spending,
-inbox, issuer-mirror and token-auditor-mirror ciphertexts; byte equality with a
+therefore requires one typed zero-balance proof over the homomorphic sum of
+the existing spending and inbox ciphertexts under the old holder key; the
+ledger's non-negative mirror invariant implies the issuer/auditor mirrors are
+zero as well, so their private keys are not required. Byte equality with a
 legacy fixed zero is not accepted.
 
 Each broker has a domain-separated sparse Merkle loan book with depth 64 over

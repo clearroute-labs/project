@@ -22,7 +22,9 @@ use near_sdk::{
     AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise, PromiseError,
     PromiseOrValue, env, ext_contract, near, near_bindgen, require,
 };
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 pub use types::*;
 
@@ -34,6 +36,7 @@ const PAYOUT_GAS: Gas = Gas::from_tgas(20);
 const MAX_CHECKPOINT_EPOCH: u64 = 86_400;
 const MIN_CHECKPOINT_EPOCH: u64 = 60;
 const MAX_PREPARED_KEY_BYTES: usize = 512 * 1024;
+const MAX_VERIFIER_MANIFEST_BYTES: usize = 64 * 1024;
 const REQUIRED_VERIFIER_KEYS: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 const MAX_BROKERS_PER_VAULT: usize = 64;
 
@@ -60,6 +63,39 @@ const ERR_UNSUPPORTED_PROFILE: &str = "UNSUPPORTED_PROFILE";
 const ERR_REPLAY: &str = "REPLAY";
 const ERR_NOT_FOUND: &str = "NOT_FOUND";
 const ERR_STORAGE: &str = "STORAGE";
+
+const VERIFIER_FAMILIES: [(&str, u8); 8] = [
+    ("key-possession", 1),
+    ("public-conversion", 2),
+    ("confidential-transfer", 3),
+    ("origination", 4),
+    ("repayment", 5),
+    ("reconciliation", 6),
+    ("zero-balance", 7),
+    ("ownership", 8),
+];
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VerifierManifestDocument {
+    schema: String,
+    #[serde(rename = "profileHash")]
+    profile_hash: String,
+    #[serde(rename = "networkId")]
+    network_id: String,
+    #[serde(rename = "coreAccountId")]
+    core_account_id: String,
+    setup: String,
+    artifacts: BTreeMap<String, VerifierManifestArtifact>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VerifierManifestArtifact {
+    path: String,
+    sha256: String,
+    bytes: u64,
+}
 
 struct ReconciliationCheck {
     new_vault_provision: u128,
@@ -119,6 +155,119 @@ enum StorageKey {
     RecoverySubjectIndex,
     RecoverySubjectCounts,
     BookNodes,
+}
+
+fn manifest_sha256(value: &str) -> Option<Vec<u8>> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return None;
+    }
+    let decoded = hex::decode(value).ok()?;
+    (decoded.len() == 32).then_some(decoded)
+}
+
+fn statement_kind_for_manifest(kind: u8) -> Option<StatementKind> {
+    Some(match kind {
+        1 => StatementKind::KeyPossession,
+        2 => StatementKind::PublicConversion,
+        3 => StatementKind::ConfidentialTransfer,
+        4 => StatementKind::Origination,
+        5 => StatementKind::Repayment,
+        6 => StatementKind::Reconciliation,
+        7 => StatementKind::ZeroBalance,
+        8 => StatementKind::Ownership,
+        _ => return None,
+    })
+}
+
+fn parse_verifier_manifest(args: &InitArgs) -> Vec<VerifierArtifactExpectation> {
+    require!(
+        !args.verifier_manifest_json.is_empty()
+            && args.verifier_manifest_json.len() <= MAX_VERIFIER_MANIFEST_BYTES,
+        ERR_UNSUPPORTED_PROFILE
+    );
+    require!(
+        args.verifier_manifest_hash.len() == 32,
+        ERR_UNSUPPORTED_PROFILE
+    );
+    let digest = Sha256::digest(args.verifier_manifest_json.as_bytes());
+    require!(
+        &digest[..] == args.verifier_manifest_hash.as_slice(),
+        ERR_UNSUPPORTED_PROFILE
+    );
+    let manifest: VerifierManifestDocument =
+        near_sdk::serde_json::from_str(&args.verifier_manifest_json)
+            .unwrap_or_else(|_| env::panic_str(ERR_UNSUPPORTED_PROFILE));
+    // Re-serialization enforces the same compact field order and escaping as
+    // the deployment tooling. It also rejects duplicate object keys: a
+    // duplicate cannot survive this typed parse and exact-byte comparison.
+    let canonical = near_sdk::serde_json::to_string(&manifest)
+        .unwrap_or_else(|_| env::panic_str(ERR_UNSUPPORTED_PROFILE));
+    require!(
+        canonical == args.verifier_manifest_json,
+        ERR_UNSUPPORTED_PROFILE
+    );
+    require!(
+        manifest.schema == "confidential-lending-artifacts/v1"
+            && manifest.profile_hash == hex::encode(confidential_crypto::PROFILE_HASH)
+            && manifest.network_id == args.network_id
+            && manifest.core_account_id == env::current_account_id().as_str()
+            && (manifest.setup == "development-single-party"
+                || manifest.setup == "reviewed-ceremony"),
+        ERR_UNSUPPORTED_PROFILE
+    );
+    require!(
+        manifest.artifacts.len() == VERIFIER_FAMILIES.len() * 2,
+        ERR_UNSUPPORTED_PROFILE
+    );
+
+    VERIFIER_FAMILIES
+        .iter()
+        .map(|(family, statement_kind)| {
+            let vk_name = format!("{family}.vk");
+            let prepared_name = format!("{family}.prepared-vk");
+            let vk = manifest
+                .artifacts
+                .get(&vk_name)
+                .unwrap_or_else(|| env::panic_str(ERR_UNSUPPORTED_PROFILE));
+            let prepared = manifest
+                .artifacts
+                .get(&prepared_name)
+                .unwrap_or_else(|| env::panic_str(ERR_UNSUPPORTED_PROFILE));
+            require!(
+                !vk.path.is_empty()
+                    && !prepared.path.is_empty()
+                    && vk.path.len() <= MAX_VERIFIER_MANIFEST_BYTES
+                    && prepared.path.len() <= MAX_VERIFIER_MANIFEST_BYTES,
+                ERR_UNSUPPORTED_PROFILE
+            );
+            require!(
+                vk.bytes > 0
+                    && vk.bytes <= 128 * 1024
+                    && prepared.bytes > 0
+                    && prepared.bytes <= MAX_PREPARED_KEY_BYTES as u64,
+                ERR_UNSUPPORTED_PROFILE
+            );
+            let vk_hash = manifest_sha256(&vk.sha256)
+                .unwrap_or_else(|| env::panic_str(ERR_UNSUPPORTED_PROFILE));
+            let prepared_hash = manifest_sha256(&prepared.sha256)
+                .unwrap_or_else(|| env::panic_str(ERR_UNSUPPORTED_PROFILE));
+            let kind = statement_kind_for_manifest(*statement_kind)
+                .unwrap_or_else(|| env::panic_str(ERR_UNSUPPORTED_PROFILE));
+            VerifierArtifactExpectation {
+                statement_kind: *statement_kind,
+                family: (*family).to_string(),
+                verifying_key_sha256: vk_hash,
+                verifying_key_bytes: vk.bytes as u32,
+                prepared_key_sha256: prepared_hash,
+                prepared_key_bytes: prepared.bytes as u32,
+                public_input_count: kind.slot_count() as u32,
+            }
+        })
+        .collect()
 }
 
 struct NearSha256;
@@ -234,6 +383,7 @@ impl Core {
             args.verifier_manifest_hash.len() == 32,
             ERR_UNSUPPORTED_PROFILE
         );
+        let manifest_artifacts = parse_verifier_manifest(&args);
         require!(
             args.custody_cap.0 > 0 && args.custody_cap.0 <= MAX_ASSET_UNITS,
             ERR_INVALID_AMOUNT
@@ -266,6 +416,7 @@ impl Core {
             verifier: VerifierConfig {
                 profile_hash: args.crypto_profile_hash,
                 manifest_hash: args.verifier_manifest_hash,
+                manifest_artifacts,
                 ready: false,
                 activated: false,
                 key_count: 0,
@@ -354,10 +505,33 @@ impl Core {
             self.verifier_keys.get(&statement_kind).is_none(),
             ERR_REPLAY
         );
+        let expected = self
+            .verifier
+            .manifest_artifacts
+            .iter()
+            .find(|artifact| artifact.statement_kind == statement_kind)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str(ERR_UNSUPPORTED_PROFILE));
+        require!(
+            prepared_key.len() == expected.prepared_key_bytes as usize,
+            ERR_UNSUPPORTED_PROFILE
+        );
+        require!(
+            &Sha256::digest(&prepared_key)[..] == expected.prepared_key_sha256.as_slice(),
+            ERR_UNSUPPORTED_PROFILE
+        );
         let public_input_count = near_verifier::validate_prepared_key(&prepared_key)
             .unwrap_or_else(|_| env::panic_str(ERR_UNSUPPORTED_PROFILE));
         let hash = near_verifier::prepared_key_hash(&prepared_key)
             .unwrap_or_else(|_| env::panic_str(ERR_UNSUPPORTED_PROFILE));
+        require!(
+            hash.as_slice() == expected.verifying_key_sha256.as_slice(),
+            ERR_UNSUPPORTED_PROFILE
+        );
+        require!(
+            public_input_count == expected.public_input_count as usize,
+            ERR_UNSUPPORTED_PROFILE
+        );
         self.verifier_keys.insert(
             &statement_kind,
             &VerifierKeyRecord {
@@ -391,9 +565,25 @@ impl Core {
             ERR_UNAUTHORIZED
         );
         require!(!self.verifier.activated, ERR_REPLAY);
+        require!(
+            self.verifier.manifest_artifacts.len() == REQUIRED_VERIFIER_KEYS.len()
+                && self.verifier.key_count as usize == REQUIRED_VERIFIER_KEYS.len(),
+            ERR_UNSUPPORTED_PROFILE
+        );
         for kind in REQUIRED_VERIFIER_KEYS {
+            let key = self
+                .verifier_keys
+                .get(&kind)
+                .unwrap_or_else(|| env::panic_str(ERR_UNSUPPORTED_PROFILE));
+            let expected = self
+                .verifier
+                .manifest_artifacts
+                .iter()
+                .find(|artifact| artifact.statement_kind == kind)
+                .unwrap_or_else(|| env::panic_str(ERR_UNSUPPORTED_PROFILE));
             require!(
-                self.verifier_keys.get(&kind).is_some(),
+                key.verifying_key_hash == expected.verifying_key_sha256
+                    && key.public_input_count == expected.public_input_count,
                 ERR_UNSUPPORTED_PROFILE
             );
         }
@@ -916,10 +1106,6 @@ impl Core {
             ERR_STALE_STATE
         );
         require!(
-            broker.encryption_key.authorization_epoch == args.broker_authorization_epoch,
-            ERR_STALE_STATE
-        );
-        require!(
             args.payment_count > 0 && args.payment_count <= MAX_PAYMENT_COUNT,
             ERR_INVALID_AMOUNT
         );
@@ -948,6 +1134,9 @@ impl Core {
             args.broker_authorization_epoch,
             args.broker_authorization_nonce,
         );
+        if args.broker_authorization_key_id.is_none() {
+            require!(args.broker_authorization_epoch == 0, ERR_STALE_STATE);
+        }
         validate_authorization_nonce(
             self,
             &args.borrower,
@@ -1102,10 +1291,6 @@ impl Core {
                 proposal.borrower_signature = signature;
             }
         } else {
-            require!(
-                broker.encryption_key.authorization_epoch == proposal.broker_authorization_epoch,
-                ERR_STALE_STATE
-            );
             if signature.is_empty() {
                 proposal.broker_direct_authorized = true;
             } else {
@@ -2103,10 +2288,6 @@ impl Core {
         );
         require!(
             borrower.authorization_epoch == proposal.borrower_authorization_epoch,
-            ERR_STALE_STATE
-        );
-        require!(
-            broker.encryption_key.authorization_epoch == proposal.broker_authorization_epoch,
             ERR_STALE_STATE
         );
         let vault = self.vault_or_panic(broker.vault_id);
@@ -6773,6 +6954,10 @@ impl Core {
         expected_kind: StatementKind,
         expected_context: &OperationContext,
     ) -> Statement {
+        require!(
+            self.verifier.activated && self.verifier.ready,
+            ERR_UNSUPPORTED_PROFILE
+        );
         require!(!args.statement.is_empty(), ERR_BAD_PROOF);
         let statement = crypto_adapter::parse_statement(&args.statement)
             .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
@@ -7133,7 +7318,7 @@ fn validate_authorization_nonce(
 fn statement_kind_for_operation(operation: &str) -> Option<u8> {
     match operation {
         "register-holder" | "create-broker" => Some(1),
-        "shield" | "unshield" | "merge-holder" | "merge-broker" | "draw" => Some(2),
+        "shield" | "unshield" | "merge-holder" | "merge-broker" | "draw" | "settle" => Some(2),
         "confidential-send" => Some(3),
         "originate" => Some(4),
         "repay" => Some(5),
@@ -7312,34 +7497,74 @@ mod tests {
         serde_json::to_vec(&secret.public_key()).unwrap()
     }
 
-    fn init() -> Core {
-        let issuer_public_key = test_public_key(3);
-        let auditor_public_key = test_public_key(5);
-        testing_env!(
-            VMContextBuilder::new()
-                .predecessor_account_id(account("owner.testnet"))
-                .build()
-        );
-        let mut core = Core::new(InitArgs {
+    fn test_manifest() -> (String, Vec<u8>) {
+        let mut artifacts = BTreeMap::new();
+        for (family, statement_kind) in VERIFIER_FAMILIES {
+            let vk_hash = format!("{statement_kind:02x}").repeat(32);
+            let prepared_hash = format!("{:02x}", statement_kind + 16).repeat(32);
+            artifacts.insert(
+                format!("{family}.vk"),
+                json!({
+                    "path": format!("{family}.vk"),
+                    "sha256": vk_hash,
+                    "bytes": 1
+                }),
+            );
+            artifacts.insert(
+                format!("{family}.prepared-vk"),
+                json!({
+                    "path": format!("{family}.prepared-vk"),
+                    "sha256": prepared_hash,
+                    "bytes": 2
+                }),
+            );
+        }
+        let manifest = json!({
+            "schema": "confidential-lending-artifacts/v1",
+            "profileHash": hex::encode(confidential_crypto::PROFILE_HASH),
+            "networkId": "local",
+            "coreAccountId": env::current_account_id().to_string(),
+            "setup": "development-single-party",
+            "artifacts": artifacts
+        });
+        let bytes = serde_json::to_string(&manifest).unwrap();
+        let hash = Sha256::digest(bytes.as_bytes()).to_vec();
+        (bytes, hash)
+    }
+
+    fn test_init_args(manifest_json: String, manifest_hash: Vec<u8>) -> InitArgs {
+        InitArgs {
             token_account: account("token.testnet"),
             decimals: 6,
             controller_account: account("issuer.testnet"),
             issuer_key_id: 1,
-            issuer_public_key,
+            issuer_public_key: test_public_key(3),
             token_auditor_key_id: 2,
-            token_auditor_public_key: auditor_public_key,
+            token_auditor_public_key: test_public_key(5),
             crypto_profile_hash: confidential_crypto::PROFILE_HASH.to_vec(),
             network_id: "local".to_string(),
             token_trust_policy: "local-test".to_string(),
             freeze_policy: "none".to_string(),
             custody_cap: U128(MAX_ASSET_UNITS),
             verifier_key: Vec::new(),
-            verifier_manifest_hash: vec![5; 32],
-        });
+            verifier_manifest_hash: manifest_hash,
+            verifier_manifest_json: manifest_json,
+        }
+    }
+
+    fn init() -> Core {
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(account("owner.testnet"))
+                .build()
+        );
+        let (manifest_json, manifest_hash) = test_manifest();
+        let mut core = Core::new(test_init_args(manifest_json, manifest_hash));
         // Tests exercise accounting/custody transitions without running the
         // staged eight-key deployment ceremony.  This mutation is confined to
         // the unit-test fixture; production state can only reach activation
         // through stage_verifier_key + activate_verifier_keys.
+        core.verifier.ready = true;
         core.verifier.activated = true;
         for name in [
             "owner.testnet",
@@ -7352,6 +7577,111 @@ mod tests {
             core.storage_deposits.insert(&account(name), &u128::MAX);
         }
         core
+    }
+
+    #[test]
+    fn init_rejects_invalid_manifest_identity_and_missing_family() {
+        let _guard = test_guard();
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(account("owner.testnet"))
+                .build()
+        );
+        let (manifest_json, _) = test_manifest();
+        let mut value: serde_json::Value = serde_json::from_str(&manifest_json).unwrap();
+        value["artifacts"]
+            .as_object_mut()
+            .unwrap()
+            .remove("ownership.vk");
+        let missing_json = serde_json::to_string(&value).unwrap();
+        let missing_hash = Sha256::digest(missing_json.as_bytes()).to_vec();
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Core::new(test_init_args(missing_json, missing_hash));
+            }))
+            .is_err()
+        );
+
+        let mismatched_json =
+            manifest_json.replace("\"networkId\":\"local\"", "\"networkId\":\"other\"");
+        let mismatched_hash = Sha256::digest(mismatched_json.as_bytes()).to_vec();
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Core::new(test_init_args(mismatched_json, mismatched_hash));
+            }))
+            .is_err()
+        );
+
+        let (valid_json, _) = test_manifest();
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Core::new(test_init_args(valid_json, vec![0; 32]));
+            }))
+            .is_err()
+        );
+
+        let (canonical_json, _) = test_manifest();
+        let duplicate_json = canonical_json.replace(
+            "\"schema\":\"confidential-lending-artifacts/v1\",",
+            "\"schema\":\"confidential-lending-artifacts/v1\",\"schema\":\"confidential-lending-artifacts/v1\",",
+        );
+        let duplicate_hash = Sha256::digest(duplicate_json.as_bytes()).to_vec();
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Core::new(test_init_args(duplicate_json, duplicate_hash));
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn staging_rejects_bytes_not_pinned_by_manifest() {
+        let _guard = test_guard();
+        let mut core = init();
+        core.verifier.activated = false;
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(account("owner.testnet"))
+                .build()
+        );
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.stage_verifier_key(1, vec![0; 2]);
+        }));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn registration_requires_activated_verifier_set() {
+        let _guard = test_guard();
+        let mut core = init();
+        core.verifier.ready = false;
+        core.verifier.activated = false;
+        let owner = account("alice.testnet");
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(owner.clone())
+                .build()
+        );
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.register_holder(RegisterHolderArgs {
+                key_id: 22,
+                public_key: test_public_key(22),
+                encryption_public_key: Vec::new(),
+                proof_of_possession: ProofArgs {
+                    statement: Vec::new(),
+                    context: vec![0; 32],
+                    proof: vec![1],
+                    statement_kind: Some(1),
+                    public_inputs: Vec::new(),
+                    verifying_key_hash: vec![0; 32],
+                    profile_hash: confidential_crypto::PROFILE_HASH.to_vec(),
+                },
+                zero_proofs: Vec::new(),
+                authorization_signature: Vec::new(),
+            });
+        }));
+        assert!(result.is_err());
+        assert!(core.holders.get(&owner).is_none());
     }
 
     #[test]
@@ -7518,6 +7848,123 @@ mod tests {
             validate_authorization_nonce(&core, &owner, Some(8), 3, 2)
         }));
         assert!(revoked.is_err());
+    }
+
+    #[test]
+    fn signed_broker_proposal_uses_registered_application_epoch() {
+        let _guard = test_guard();
+        let mut core = init();
+        let owner = account("owner.testnet");
+        let borrower = account("alice.testnet");
+        let public_key =
+            hex::decode("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
+                .unwrap();
+        let signature = hex::decode(
+            "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155".to_string()
+                + "5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b",
+        )
+        .unwrap();
+        core.authorization_keys.insert(
+            &authorization_key(&owner, 7),
+            &AuthorizationKey {
+                owner: owner.clone(),
+                key_id: 7,
+                public_key,
+                epoch: 3,
+                nonce: 2,
+                revoked: false,
+            },
+        );
+        core.brokers.insert(
+            &7,
+            &Broker {
+                broker_id: 7,
+                owner: owner.clone(),
+                vault_id: 1,
+                encryption_key: EncryptionKey {
+                    key_id: 11,
+                    public_key: Vec::new(),
+                    registered_at: 0,
+                    authorization_epoch: 0,
+                },
+                authorization_epoch: 0,
+                debt_total: 0,
+                debt_maximum: 0,
+                loan_sequence: 0,
+                active_loan_count: 0,
+                impaired_loan_count: 0,
+                spending_ciphertext: Vec::new(),
+                inbox_ciphertext: Vec::new(),
+                issuer_balance_ciphertext: Vec::new(),
+                auditor_balance_ciphertext: Vec::new(),
+                spending_commitment: Vec::new(),
+                inbox_commitment: Vec::new(),
+                spending_version: 0,
+                loan_book_root: Vec::new(),
+                book_version: 0,
+                active_principal_ciphertext: Vec::new(),
+                impaired_principal_ciphertext: Vec::new(),
+                active_principal_commitment: Vec::new(),
+                impaired_principal_commitment: Vec::new(),
+                impairment_provision: 0,
+                cumulative_draws: 0,
+                cumulative_settlements: 0,
+                cumulative_yield: 0,
+                cumulative_realized_losses: 0,
+                accounting_version: 0,
+                risk_version: 0,
+                reconciled_risk_version: 0,
+                accounting_pending: false,
+                accounting_pending_since: 0,
+                reconciliation_checkpoint_id: None,
+                delegates: Vec::new(),
+                last_settlement_at: 0,
+                tombstoned: false,
+            },
+        );
+        core.proposals.insert(
+            &1,
+            &Proposal {
+                proposal_id: 1,
+                borrower,
+                broker_id: 7,
+                vault_id: 1,
+                borrower_key_id: 2,
+                broker_key_id: 11,
+                loan_auditor_key_id: 3,
+                loan_auditor_public_key: Vec::new(),
+                payment_count: 1,
+                payment_interval: 1,
+                grace_period: 0,
+                expiry: u64::MAX,
+                principal_ciphertexts: Vec::new(),
+                initial_owed_ciphertexts: Vec::new(),
+                periodic_payment_ciphertexts: Vec::new(),
+                principal_commitment: Vec::new(),
+                owed_commitment: Vec::new(),
+                payment_commitment: Vec::new(),
+                agreement_digest: Vec::new(),
+                broker_signature: Vec::new(),
+                borrower_signature: Vec::new(),
+                broker_authorization_epoch: 3,
+                borrower_authorization_epoch: 1,
+                broker_authorization_nonce: 2,
+                borrower_authorization_nonce: 0,
+                broker_authorization_key_id: Some(7),
+                borrower_authorization_key_id: None,
+                broker_direct_authorized: false,
+                borrower_direct_authorized: true,
+                consumed: false,
+                revoked: false,
+            },
+        );
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(owner)
+                .build()
+        );
+        core.sign_proposal(U64(1), signature.clone());
+        assert_eq!(core.proposals.get(&1).unwrap().broker_signature, signature);
     }
 
     #[test]
