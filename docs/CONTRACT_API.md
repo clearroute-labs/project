@@ -199,11 +199,10 @@ is the executable client endpoint: it takes explicit affected account,
 destination, primary ID, broker/checkpoint, action, and public amount and
 returns canonical 'OperationContext' bytes plus current ciphertexts, keys,
 commitments, versions, and the prepared-key hash. It never uses the RPC
-predecessor as an implicit party. 'prepare_statement' accepts a canonical
-typed 'confidential_crypto::Statement' JSON value, validates its kind and
-authoritative context, derives public inputs from that statement, and returns
-the same statement/context for local proving. It does not hash arbitrary
-caller-selected outputs. A wallet must
+predecessor as an implicit party. This context is authoritative: the wallet
+constructs its typed `confidential_crypto::Statement` locally from these
+state-bound values and submits it with the mutation proof; there is no generic
+caller-selected statement-preparation endpoint. A wallet must
 refresh these views after a merge or any stale-state error.
 
 `get_proof_context` operation `settle-reconcile` returns the post-settlement

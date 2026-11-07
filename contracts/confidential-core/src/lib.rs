@@ -277,6 +277,7 @@ fn parse_verifier_manifest(args: &InitArgs) -> Vec<VerifierArtifactExpectation> 
                 verifying_key_bytes: vk.bytes as u32,
                 prepared_key_sha256: prepared_hash,
                 prepared_key_bytes: prepared.bytes as u32,
+                // The context digest precedes the typed statement slots.
                 public_input_count: (kind.slot_count() + 1) as u32,
             }
         })
@@ -1335,6 +1336,7 @@ impl Core {
             ERR_UNAUTHORIZED
         );
         require!(!proposal.consumed, ERR_REPLAY);
+        require!(!proposal.revoked, ERR_REPLAY);
         proposal.revoked = true;
         self.proposals.insert(&proposal_id, &proposal);
         self.proposal_tombstones.insert(&proposal_id);
@@ -1452,6 +1454,13 @@ impl Core {
         } else {
             mul_div_floor(args.shares.0, nav, vault.shares_total)
         };
+        // A non-worthless redemption must make economic progress.  Allowing
+        // floor rounding to burn shares for zero assets strands value and
+        // violates the explicit zero-result rule; only the NAV-zero
+        // worthless-share path above may return zero.
+        if nav > 0 {
+            require!(assets_out > 0, ERR_SLIPPAGE);
+        }
         require!(
             assets_out <= vault.assets_available,
             ERR_INSUFFICIENT_PUBLIC_FUNDS
@@ -2337,19 +2346,6 @@ impl Core {
                 require!(provided == expected, ERR_BAD_PROOF);
             }
         }
-        require!(
-            !self.is_canonical_zero_for(
-                &broker.encryption_key.public_key,
-                &format!("broker:{}:spending", broker.broker_id),
-                broker.encryption_key.key_id,
-                broker.encryption_key.authorization_epoch,
-                &broker.spending_ciphertext,
-            ),
-            ERR_INSUFFICIENT_PRIVATE_FUNDS
-        );
-        validate_ciphertext_set(&proposal.principal_ciphertexts, 5);
-        validate_ciphertext_set(&proposal.initial_owed_ciphertexts, 3);
-        validate_ciphertext_set(&proposal.periodic_payment_ciphertexts, 3);
         let stored_principal_ciphertexts = loan_reader_views(&proposal.principal_ciphertexts);
         // The loan sequence is part of the authenticated book key.  Compute
         // it before any proof is accepted so a proof cannot be replayed for a
@@ -6415,47 +6411,6 @@ impl Core {
         Some(context)
     }
 
-    pub fn prepare_statement(&self, args: PrepareStatementArgs) -> Option<ProofContextView> {
-        require!(args.operation.len() <= MAX_ID_BYTES, ERR_INVALID_ENCODING);
-        require!(
-            args.statement.len() <= MAX_PROOF_BYTES,
-            ERR_INVALID_ENCODING
-        );
-        require!(
-            args.ciphertexts.is_empty()
-                && args.commitments.is_empty()
-                && args.public_values.is_empty(),
-            ERR_INVALID_ENCODING
-        );
-        let statement = crypto_adapter::parse_statement(&args.statement)
-            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
-        let expected_kind = statement_kind_for_operation(&args.operation)
-            .unwrap_or_else(|| env::panic_str(ERR_UNSUPPORTED_PROFILE));
-        require!(statement.kind().as_u8() == expected_kind, ERR_BAD_PROOF);
-        let mut context =
-            self.get_statement_context(args.operation.clone(), U64(args.primary_id))?;
-        let canonical_statement =
-            crypto_adapter::encode(&statement).unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
-        let inputs = crypto_adapter::statement_inputs(&statement)
-            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
-        context.statement = canonical_statement.clone();
-        context.operation_context = serde_json::to_vec(statement.context())
-            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
-        context.public_inputs = inputs.into_iter().map(|input| input.to_vec()).collect();
-        context.statement_kind = Some(statement.kind().as_u8());
-        context.state_digest = hash_bytes(&(
-            context.operation.clone(),
-            context.ids.clone(),
-            context.account_ids.clone(),
-            context.versions.clone(),
-            context.ciphertexts.clone(),
-            context.commitments.clone(),
-            context.public_values.clone(),
-            canonical_statement,
-        ));
-        Some(context)
-    }
-
     /// Return one immutable proof-bound recovery entry.  The record contains
     /// only the canonical statement and public key/version metadata.
     pub fn get_recovery_record(&self, event_id: U64) -> Option<RecoveryRecordView> {
@@ -6741,8 +6696,12 @@ impl Core {
             (VaultKind::OpenEnded, _) => {}
             (VaultKind::ClosedEnded, Some(phases)) => {
                 let now = now_seconds();
+                require!(now >= phases.subscription_start, ERR_WRONG_PHASE);
                 if redemption {
-                    require!(now >= phases.redemption_start, ERR_WRONG_PHASE);
+                    require!(
+                        now < phases.investment_start || now >= phases.redemption_start,
+                        ERR_WRONG_PHASE
+                    );
                 } else if deposit {
                     require!(now < phases.investment_start, ERR_WRONG_PHASE);
                 } else {
@@ -7494,6 +7453,7 @@ mod tests {
     #[allow(deprecated)]
     use near_sdk::test_utils::{VMContextBuilder, testing_env_with_promise_results};
     use near_sdk::{NearToken, PromiseResult, testing_env};
+    use rand::{SeedableRng, rngs::StdRng};
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
     fn account(value: &str) -> AccountId {
@@ -7618,6 +7578,184 @@ mod tests {
         core
     }
 
+    fn minimal_broker(owner: AccountId, broker_id: u64, vault_id: u64) -> Broker {
+        Broker {
+            broker_id,
+            owner,
+            vault_id,
+            encryption_key: EncryptionKey {
+                key_id: 11,
+                public_key: Vec::new(),
+                registered_at: 0,
+                authorization_epoch: 0,
+            },
+            authorization_epoch: 0,
+            debt_total: 0,
+            debt_maximum: 0,
+            loan_sequence: 0,
+            active_loan_count: 0,
+            impaired_loan_count: 0,
+            spending_ciphertext: Vec::new(),
+            inbox_ciphertext: Vec::new(),
+            issuer_balance_ciphertext: Vec::new(),
+            auditor_balance_ciphertext: Vec::new(),
+            spending_commitment: Vec::new(),
+            inbox_commitment: Vec::new(),
+            spending_version: 0,
+            loan_book_root: Vec::new(),
+            book_version: 0,
+            active_principal_ciphertext: Vec::new(),
+            impaired_principal_ciphertext: Vec::new(),
+            active_principal_commitment: Vec::new(),
+            impaired_principal_commitment: Vec::new(),
+            impairment_provision: 0,
+            cumulative_draws: 0,
+            cumulative_settlements: 0,
+            cumulative_yield: 0,
+            cumulative_realized_losses: 0,
+            accounting_version: 0,
+            risk_version: 0,
+            reconciled_risk_version: 0,
+            accounting_pending: false,
+            accounting_pending_since: 0,
+            reconciliation_checkpoint_id: None,
+            delegates: Vec::new(),
+            last_settlement_at: 0,
+            tombstoned: false,
+        }
+    }
+
+    fn minimal_holder(core: &Core, owner: AccountId, key_id: u64) -> HolderBalance {
+        HolderBalance {
+            owner,
+            asset_id: core.asset.token_account.clone(),
+            encryption_key: EncryptionKey {
+                key_id,
+                public_key: Vec::new(),
+                registered_at: 0,
+                authorization_epoch: 0,
+            },
+            spending_ciphertext: Vec::new(),
+            inbox_ciphertext: Vec::new(),
+            issuer_balance_ciphertext: Vec::new(),
+            auditor_balance_ciphertext: Vec::new(),
+            spending_version: 0,
+            authorization_epoch: 0,
+            open_loan_count: 0,
+            recovery_start_sequence: 0,
+            frozen: false,
+        }
+    }
+
+    fn minimal_proposal(
+        borrower: AccountId,
+        broker_id: u64,
+        vault_id: u64,
+        expiry: u64,
+    ) -> Proposal {
+        Proposal {
+            proposal_id: 1,
+            borrower,
+            broker_id,
+            vault_id,
+            borrower_key_id: 22,
+            broker_key_id: 11,
+            loan_auditor_key_id: 3,
+            loan_auditor_public_key: Vec::new(),
+            payment_count: 1,
+            payment_interval: 1,
+            grace_period: 0,
+            expiry,
+            principal_ciphertexts: Vec::new(),
+            initial_owed_ciphertexts: Vec::new(),
+            periodic_payment_ciphertexts: Vec::new(),
+            principal_commitment: Vec::new(),
+            owed_commitment: Vec::new(),
+            payment_commitment: Vec::new(),
+            agreement_digest: Vec::new(),
+            broker_signature: Vec::new(),
+            borrower_signature: Vec::new(),
+            broker_authorization_epoch: 0,
+            borrower_authorization_epoch: 0,
+            broker_authorization_nonce: 0,
+            borrower_authorization_nonce: 0,
+            broker_authorization_key_id: None,
+            borrower_authorization_key_id: None,
+            broker_direct_authorized: true,
+            borrower_direct_authorized: true,
+            consumed: false,
+            revoked: false,
+        }
+    }
+
+    fn empty_originate_args(proposal_id: u64) -> OriginateArgs {
+        OriginateArgs {
+            proposal_id,
+            borrower_spending_ciphertext: Vec::new(),
+            borrower_issuer_ciphertext: Vec::new(),
+            borrower_auditor_ciphertext: Vec::new(),
+            broker_spending_ciphertext: Vec::new(),
+            broker_issuer_ciphertext: Vec::new(),
+            broker_auditor_ciphertext: Vec::new(),
+            loan_principal_ciphertexts: Vec::new(),
+            loan_initial_owed_ciphertexts: Vec::new(),
+            loan_periodic_payment_ciphertexts: Vec::new(),
+            principal_commitment: Vec::new(),
+            owed_commitment: Vec::new(),
+            payment_commitment: Vec::new(),
+            broker_active_principal_ciphertext: Vec::new(),
+            broker_impaired_principal_ciphertext: Vec::new(),
+            broker_book_root: Vec::new(),
+            accounting_leaf: Vec::new(),
+            broker_spending_commitment: Vec::new(),
+            broker_active_principal_commitment: Vec::new(),
+            broker_impaired_principal_commitment: Vec::new(),
+            proof: ProofArgs {
+                statement: Vec::new(),
+                context: Vec::new(),
+                proof: Vec::new(),
+                statement_kind: None,
+                public_inputs: Vec::new(),
+                verifying_key_hash: Vec::new(),
+                profile_hash: Vec::new(),
+            },
+        }
+    }
+
+    fn create_claim(core: &mut Core, claim_id: u64, owner: &AccountId, amount: u128) {
+        core.claims.insert(
+            &claim_id,
+            &PublicClaim {
+                claim_id,
+                owner: owner.clone(),
+                amount,
+                created_at: 0,
+                reserved_by: None,
+            },
+        );
+        core.public_claim_total = core.public_claim_total.checked_add(amount).unwrap();
+        core.custody_total = core.custody_total.checked_add(amount).unwrap();
+    }
+
+    fn closed_vault_args() -> CreateVaultArgs {
+        CreateVaultArgs {
+            assets_maximum: U128(0),
+            kind: VaultKind::ClosedEnded,
+            phase_times: Some(PhaseTimes {
+                subscription_start: 100,
+                investment_start: 200,
+                redemption_start: 300,
+                redemption_buffer: 0,
+            }),
+            share_scale: 0,
+            shares_transferable: true,
+            checkpoint_policy: CheckpointPolicy {
+                epoch_seconds: 60,
+                disclosure_policy: "aggregate".into(),
+            },
+        }
+    }
+
     #[test]
     fn init_rejects_invalid_manifest_identity_and_missing_family() {
         let _guard = test_guard();
@@ -7687,6 +7825,47 @@ mod tests {
             core.stage_verifier_key(1, vec![0; 2]);
         }));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn staging_accepts_real_prepared_key_with_complete_input_count() {
+        let _guard = test_guard();
+        let mut core = init();
+        core.verifier.activated = false;
+        core.verifier.ready = false;
+        core.verifier.key_count = 0;
+
+        let mut rng = StdRng::seed_from_u64(7);
+        let artifacts = confidential_crypto::setup(StatementKind::KeyPossession, &mut rng)
+            .expect("key-possession fixture");
+        let artifact = artifacts
+            .get(StatementKind::KeyPossession)
+            .expect("key-possession artifact");
+        let verifying_key = artifact.verifying_key_bytes().expect("canonical vk");
+        let prepared_key = near_verifier::prepare_key(&verifying_key).expect("prepared vk");
+        let expected = core
+            .verifier
+            .manifest_artifacts
+            .iter_mut()
+            .find(|entry| entry.statement_kind == 1)
+            .expect("key-possession expectation");
+        expected.verifying_key_sha256 = Sha256::digest(&verifying_key).to_vec();
+        expected.verifying_key_bytes = verifying_key.len() as u32;
+        expected.prepared_key_sha256 = Sha256::digest(&prepared_key).to_vec();
+        expected.prepared_key_bytes = prepared_key.len() as u32;
+        expected.public_input_count = (StatementKind::KeyPossession.slot_count() + 1) as u32;
+
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(account("owner.testnet"))
+                .build()
+        );
+        let hash = core.stage_verifier_key(1, prepared_key);
+        assert_eq!(hash, Sha256::digest(&verifying_key).to_vec());
+        assert_eq!(
+            core.get_verifier_key(1).unwrap().public_input_count as usize,
+            StatementKind::KeyPossession.slot_count() + 1
+        );
     }
 
     #[test]
@@ -7780,6 +7959,369 @@ mod tests {
             core.get_vault(vault_id).unwrap().assets_total,
             U128(1_000_000)
         );
+    }
+
+    #[test]
+    fn closed_ended_vault_enforces_subscription_investment_redemption_boundaries() {
+        let _guard = test_guard();
+        let mut core = init();
+        let owner = account("owner.testnet");
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(owner)
+                .block_timestamp(0)
+                .build()
+        );
+        let vault_id = core.create_vault(closed_vault_args());
+        let lender = account("lender.testnet");
+        create_claim(&mut core, 31, &lender, 100);
+
+        // Before subscription starts, even a public claim cannot enter the
+        // vault.  The claim remains available after the rejected call.
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(lender.clone())
+                .block_timestamp(50_000_000_000)
+                .build()
+        );
+        let before_subscription = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.deposit_to_vault(DepositToVaultArgs {
+                claim_id: 31,
+                vault_id: vault_id.0,
+                amount: U128(100),
+                min_shares_out: U128(100),
+                expiry: 1_000,
+            });
+        }));
+        assert!(before_subscription.is_err());
+        assert!(core.get_claim(U64(31)).is_some());
+
+        // Subscription permits both deposits and redemptions.
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(lender.clone())
+                .block_timestamp(150_000_000_000)
+                .build()
+        );
+        core.deposit_to_vault(DepositToVaultArgs {
+            claim_id: 31,
+            vault_id: vault_id.0,
+            amount: U128(100),
+            min_shares_out: U128(100),
+            expiry: 1_000,
+        });
+        assert_eq!(core.get_share_balance(vault_id, lender.clone()), U128(100));
+        let subscription_redeem = core.redeem_shares(RedeemSharesArgs {
+            vault_id: vault_id.0,
+            shares: U128(10),
+            min_assets_out: U128(10),
+            expiry: 1_000,
+            sole_shareholder_waiver: false,
+            burn_worthless: false,
+            broker_zero_proofs: Vec::new(),
+        });
+        assert!(core.get_claim(subscription_redeem).is_some());
+
+        // The investment phase is the only closed-ended phase for new
+        // origination/draw paths; deposits and redemptions are rejected.
+        create_claim(&mut core, 32, &lender, 1);
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(lender.clone())
+                .block_timestamp(250_000_000_000)
+                .build()
+        );
+        let investment_deposit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.deposit_to_vault(DepositToVaultArgs {
+                claim_id: 32,
+                vault_id: vault_id.0,
+                amount: U128(1),
+                min_shares_out: U128(1),
+                expiry: 1_000,
+            });
+        }));
+        assert!(investment_deposit.is_err());
+        let investment_redeem = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.redeem_shares(RedeemSharesArgs {
+                vault_id: vault_id.0,
+                shares: U128(1),
+                min_assets_out: U128(1),
+                expiry: 1_000,
+                sole_shareholder_waiver: false,
+                burn_worthless: false,
+                broker_zero_proofs: Vec::new(),
+            });
+        }));
+        assert!(investment_redeem.is_err());
+
+        // Redemption reopens withdrawals while continuing to reject deposits.
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(lender)
+                .block_timestamp(350_000_000_000)
+                .build()
+        );
+        let redemption = core.redeem_shares(RedeemSharesArgs {
+            vault_id: vault_id.0,
+            shares: U128(1),
+            min_assets_out: U128(1),
+            expiry: 1_000,
+            sole_shareholder_waiver: false,
+            burn_worthless: false,
+            broker_zero_proofs: Vec::new(),
+        });
+        assert_eq!(core.get_claim(redemption).unwrap().amount, U128(1));
+    }
+
+    #[test]
+    fn share_mint_and_redeem_guards_reject_rounding_slippage_and_illiquidity() {
+        let _guard = test_guard();
+        let mut core = init();
+        let owner = account("owner.testnet");
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(owner)
+                .build()
+        );
+        let vault_id = core.create_vault(CreateVaultArgs {
+            assets_maximum: U128(0),
+            kind: VaultKind::OpenEnded,
+            phase_times: None,
+            share_scale: 0,
+            shares_transferable: true,
+            checkpoint_policy: CheckpointPolicy {
+                epoch_seconds: 60,
+                disclosure_policy: "aggregate".into(),
+            },
+        });
+        let lender = account("lender.testnet");
+        create_claim(&mut core, 41, &lender, 100);
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(lender.clone())
+                .block_timestamp(1_000_000_000)
+                .build()
+        );
+        core.deposit_to_vault(DepositToVaultArgs {
+            claim_id: 41,
+            vault_id: vault_id.0,
+            amount: U128(100),
+            min_shares_out: U128(100),
+            expiry: 100,
+        });
+
+        // Slippage is checked before consuming the claim.
+        create_claim(&mut core, 42, &lender, 1);
+        let mint_slippage = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.deposit_to_vault(DepositToVaultArgs {
+                claim_id: 42,
+                vault_id: vault_id.0,
+                amount: U128(1),
+                min_shares_out: U128(2),
+                expiry: 100,
+            });
+        }));
+        assert!(mint_slippage.is_err());
+        assert!(core.get_claim(U64(42)).is_some());
+
+        // A positive NAV can still round a tiny deposit to zero shares.
+        let mut vault = core.vaults.get(&vault_id.0).unwrap();
+        vault.shares_total = 1;
+        vault.assets_total = 100;
+        vault.assets_available = 100;
+        core.vaults.insert(&vault_id.0, &vault);
+        core.shares.insert(&share_key(vault_id.0, &lender), &1);
+        create_claim(&mut core, 43, &lender, 1);
+        let zero_mint = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.deposit_to_vault(DepositToVaultArgs {
+                claim_id: 43,
+                vault_id: vault_id.0,
+                amount: U128(1),
+                min_shares_out: U128(0),
+                expiry: 100,
+            });
+        }));
+        assert!(zero_mint.is_err());
+        assert!(core.get_claim(U64(43)).is_some());
+
+        // Redemption slippage and liquidity failures likewise leave shares
+        // untouched and never create a claim.
+        let redeem_slippage = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.redeem_shares(RedeemSharesArgs {
+                vault_id: vault_id.0,
+                shares: U128(1),
+                min_assets_out: U128(101),
+                expiry: 100,
+                sole_shareholder_waiver: false,
+                burn_worthless: false,
+                broker_zero_proofs: Vec::new(),
+            });
+        }));
+        assert!(redeem_slippage.is_err());
+        assert_eq!(core.get_share_balance(vault_id, lender.clone()), U128(1));
+        let mut vault = core.vaults.get(&vault_id.0).unwrap();
+        vault.assets_available = 0;
+        core.vaults.insert(&vault_id.0, &vault);
+        let insufficient = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.redeem_shares(RedeemSharesArgs {
+                vault_id: vault_id.0,
+                shares: U128(1),
+                min_assets_out: U128(0),
+                expiry: 100,
+                sole_shareholder_waiver: false,
+                burn_worthless: false,
+                broker_zero_proofs: Vec::new(),
+            });
+        }));
+        assert!(insufficient.is_err());
+
+        // A positive NAV cannot be consumed by a zero-result partial burn.
+        vault.assets_total = 1;
+        vault.assets_available = 1;
+        vault.shares_total = 3;
+        core.vaults.insert(&vault_id.0, &vault);
+        core.shares.insert(&share_key(vault_id.0, &lender), &1);
+        let other = account("bob.testnet");
+        core.shares.insert(&share_key(vault_id.0, &other), &2);
+        let zero_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.redeem_shares(RedeemSharesArgs {
+                vault_id: vault_id.0,
+                shares: U128(1),
+                min_assets_out: U128(0),
+                expiry: 100,
+                sole_shareholder_waiver: false,
+                burn_worthless: false,
+                broker_zero_proofs: Vec::new(),
+            });
+        }));
+        assert!(zero_result.is_err());
+        assert_eq!(core.get_share_balance(vault_id, lender), U128(1));
+
+        // Pending accounting blocks both NAV-priced directions.
+        vault.accounting_pending = true;
+        vault.assets_available = 1;
+        core.vaults.insert(&vault_id.0, &vault);
+        let pending = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.redeem_shares(RedeemSharesArgs {
+                vault_id: vault_id.0,
+                shares: U128(1),
+                min_assets_out: U128(0),
+                expiry: 100,
+                sole_shareholder_waiver: false,
+                burn_worthless: false,
+                broker_zero_proofs: Vec::new(),
+            });
+        }));
+        assert!(pending.is_err());
+    }
+
+    #[test]
+    fn final_redemption_releases_rounding_dust_and_sole_waiver_is_explicit() {
+        let _guard = test_guard();
+        let mut core = init();
+        let owner = account("owner.testnet");
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(owner)
+                .build()
+        );
+        let vault_id = core.create_vault(CreateVaultArgs {
+            assets_maximum: U128(0),
+            kind: VaultKind::OpenEnded,
+            phase_times: None,
+            share_scale: 0,
+            shares_transferable: true,
+            checkpoint_policy: CheckpointPolicy {
+                epoch_seconds: 60,
+                disclosure_policy: "aggregate".into(),
+            },
+        });
+        let first = account("lender.testnet");
+        let second = account("bob.testnet");
+        let mut vault = core.vaults.get(&vault_id.0).unwrap();
+        vault.assets_total = 5;
+        vault.assets_available = 5;
+        vault.shares_total = 3;
+        core.vaults.insert(&vault_id.0, &vault);
+        core.shares.insert(&share_key(vault_id.0, &first), &1);
+        core.shares.insert(&share_key(vault_id.0, &second), &2);
+
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(first)
+                .block_timestamp(1_000_000_000)
+                .build()
+        );
+        let first_claim = core.redeem_shares(RedeemSharesArgs {
+            vault_id: vault_id.0,
+            shares: U128(1),
+            min_assets_out: U128(1),
+            expiry: 100,
+            sole_shareholder_waiver: false,
+            burn_worthless: false,
+            broker_zero_proofs: Vec::new(),
+        });
+        assert_eq!(core.get_claim(first_claim).unwrap().amount, U128(1));
+
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(second)
+                .block_timestamp(1_000_000_000)
+                .build()
+        );
+        let final_claim = core.redeem_shares(RedeemSharesArgs {
+            vault_id: vault_id.0,
+            shares: U128(2),
+            min_assets_out: U128(4),
+            expiry: 100,
+            sole_shareholder_waiver: false,
+            burn_worthless: false,
+            broker_zero_proofs: Vec::new(),
+        });
+        assert_eq!(core.get_claim(final_claim).unwrap().amount, U128(4));
+        let closed = core.get_vault(vault_id).unwrap();
+        assert_eq!(closed.shares_total, U128(0));
+        assert_eq!(closed.assets_total, U128(0));
+        assert_eq!(closed.assets_available, U128(0));
+
+        // With unrealized loss, only the explicit sole-owner waiver can use
+        // gross T rather than NAV.  It is still a normal partial redemption.
+        let waiver_vault = core.create_vault(CreateVaultArgs {
+            assets_maximum: U128(0),
+            kind: VaultKind::OpenEnded,
+            phase_times: None,
+            share_scale: 0,
+            shares_transferable: true,
+            checkpoint_policy: CheckpointPolicy {
+                epoch_seconds: 60,
+                disclosure_policy: "aggregate".into(),
+            },
+        });
+        let waiver_owner = account("lender.testnet");
+        let mut waiver_state = core.vaults.get(&waiver_vault.0).unwrap();
+        waiver_state.assets_total = 100;
+        waiver_state.assets_available = 100;
+        waiver_state.loss_unrealized = 20;
+        waiver_state.shares_total = 100;
+        core.vaults.insert(&waiver_vault.0, &waiver_state);
+        core.shares
+            .insert(&share_key(waiver_vault.0, &waiver_owner), &100);
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(waiver_owner)
+                .block_timestamp(1_000_000_000)
+                .build()
+        );
+        let waiver_claim = core.redeem_shares(RedeemSharesArgs {
+            vault_id: waiver_vault.0,
+            shares: U128(10),
+            min_assets_out: U128(10),
+            expiry: 100,
+            sole_shareholder_waiver: true,
+            burn_worthless: false,
+            broker_zero_proofs: Vec::new(),
+        });
+        assert_eq!(core.get_claim(waiver_claim).unwrap().amount, U128(10));
     }
 
     #[test]
@@ -8004,6 +8546,133 @@ mod tests {
         );
         core.sign_proposal(U64(1), signature.clone());
         assert_eq!(core.proposals.get(&1).unwrap().broker_signature, signature);
+    }
+
+    #[test]
+    fn proposal_dates_and_authorization_boundaries_are_terminal() {
+        let _guard = test_guard();
+        let mut core = init();
+        let owner = account("owner.testnet");
+        let borrower = account("alice.testnet");
+        let broker_id = 7;
+        core.brokers
+            .insert(&broker_id, &minimal_broker(owner.clone(), broker_id, 1));
+        core.holders
+            .insert(&borrower, &minimal_holder(&core, borrower.clone(), 22));
+
+        let make_args = |payment_interval: u64, expiry: u64| CreateProposalArgs {
+            borrower: borrower.clone(),
+            broker_id,
+            vault_id: 1,
+            borrower_key_id: 22,
+            broker_key_id: 11,
+            loan_auditor_key_id: 3,
+            loan_auditor_public_key: Vec::new(),
+            payment_count: 1,
+            payment_interval,
+            grace_period: 0,
+            expiry,
+            principal_ciphertexts: Vec::new(),
+            initial_owed_ciphertexts: Vec::new(),
+            periodic_payment_ciphertexts: Vec::new(),
+            principal_commitment: Vec::new(),
+            owed_commitment: Vec::new(),
+            payment_commitment: Vec::new(),
+            agreement_digest: Vec::new(),
+            broker_signature: Vec::new(),
+            borrower_signature: Vec::new(),
+            broker_authorization_epoch: 0,
+            borrower_authorization_epoch: 0,
+            broker_authorization_nonce: 0,
+            borrower_authorization_nonce: 0,
+            broker_authorization_key_id: None,
+            borrower_authorization_key_id: None,
+        };
+
+        // A non-party cannot submit even a malformed proposal.  Date and
+        // interval checks then reject overflow-equivalent wire values before
+        // any ciphertext/commitment parsing.
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(account("mallory.testnet"))
+                .build()
+        );
+        let unauthorized_create = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.create_proposal(make_args(1, u64::MAX));
+        }));
+        assert!(unauthorized_create.is_err());
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(owner.clone())
+                .build()
+        );
+        let interval_overflow = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.create_proposal(make_args(u64::MAX, u64::MAX));
+        }));
+        assert!(interval_overflow.is_err());
+        let expired_create = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.create_proposal(make_args(1, 0));
+        }));
+        assert!(expired_create.is_err());
+
+        // Cancellation is owner/borrower-only, permanent, and blocks the
+        // subsequent origination entrypoint before proof processing.
+        core.proposals.insert(
+            &1,
+            &minimal_proposal(borrower.clone(), broker_id, 1, u64::MAX),
+        );
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(account("mallory.testnet"))
+                .build()
+        );
+        let unauthorized_revoke = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.revoke_proposal(U64(1));
+        }));
+        assert!(unauthorized_revoke.is_err());
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(owner.clone())
+                .build()
+        );
+        core.revoke_proposal(U64(1));
+        assert!(core.proposals.get(&1).unwrap().revoked);
+        let duplicate_revoke = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.revoke_proposal(U64(1));
+        }));
+        assert!(duplicate_revoke.is_err());
+        let canceled_origination = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.originate(empty_originate_args(1));
+        }));
+        assert!(canceled_origination.is_err());
+
+        // Expiry is checked before holder/proof material, and an unrelated
+        // caller cannot use a valid broker's proposal.
+        core.proposals
+            .insert(&2, &minimal_proposal(borrower.clone(), broker_id, 1, 0));
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(owner.clone())
+                .block_timestamp(1_000_000_000)
+                .build()
+        );
+        let expired_origination = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.originate(empty_originate_args(2));
+        }));
+        assert!(expired_origination.is_err());
+
+        core.proposals
+            .insert(&3, &minimal_proposal(borrower, broker_id, 1, u64::MAX));
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(account("mallory.testnet"))
+                .build()
+        );
+        let unauthorized_origination =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                core.originate(empty_originate_args(3));
+            }));
+        assert!(unauthorized_origination.is_err());
     }
 
     #[test]

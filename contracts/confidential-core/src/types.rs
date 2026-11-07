@@ -1481,19 +1481,3 @@ pub struct ProtocolCounters {
     #[serde(with = "u64_string")]
     pub recovery_high_water: u64,
 }
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(crate = "serde")]
-pub struct PrepareStatementArgs {
-    pub operation: String,
-    #[serde(with = "u64_string")]
-    pub primary_id: u64,
-    /// Canonical confidential-crypto `Statement` JSON.  The contract checks
-    /// that its pre-state/context matches current storage and returns the
-    /// canonical statement plus verifier inputs; it never hashes an
-    /// arbitrary caller output tuple as a substitute statement.
-    pub statement: Vec<u8>,
-    pub ciphertexts: Vec<Vec<u8>>,
-    pub commitments: Vec<Vec<u8>>,
-    pub public_values: Vec<U128>,
-}

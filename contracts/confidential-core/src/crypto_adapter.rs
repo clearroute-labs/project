@@ -45,12 +45,6 @@ pub fn parse_commitment(bytes: &[u8]) -> Result<Commitment, WireError> {
     parse(bytes)
 }
 
-/// Build the complete public-input vector for read-only context views.  A view
-/// is not on the proof hot path, so it may evaluate the transcript digest.
-pub fn statement_inputs(statement: &Statement) -> Result<Vec<[u8; 32]>, WireError> {
-    statement.public_input_bytes().map_err(|_| ())
-}
-
 pub fn statement_inputs_with_digest(
     statement: &Statement,
     context_digest: &[u8],

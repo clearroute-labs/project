@@ -25,3 +25,4 @@ unit-testing = ["near-sdk/unit-testing"]
 
 [dev-dependencies]
 near-sdk = { workspace = true, features = ["unit-testing"] }
+rand = { workspace = true }
