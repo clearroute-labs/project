@@ -29,7 +29,7 @@ view with `custody_cap: U128`; the native storage record is not exposed.
 | Method | Input | Authority | Result |
 | --- | --- | --- | --- |
 | 'storage_deposit' | optional self account | account | Records NEAR storage budget |
-| 'register_holder' | key ID, public key, possession proof; four zero proofs when rotating | holder | Registers an encryption/authorization epoch |
+| 'register_holder' | key ID, public key, possession proof; one aggregate zero proof when rotating | holder | Registers an encryption/authorization epoch |
 | 'register_authorization_key' / 'revoke_authorization_key' | application key, or key ID | direct account | Advances public auth epoch and revokes a key without touching encrypted balances |
 | 'create_vault' | asset phase/share/checkpoint policy | caller | Vault ID |
 | 'create_broker' | vault, broker key, debt cap, PoP | vault owner | Broker ID |
@@ -54,6 +54,18 @@ view with `custody_cap: U128`; the native storage record is not exposed.
 | 'grant_keeper' / 'revoke_keeper' | broker scope/limits/expiry or delegate | broker owner | Changes settlement/merge grant epoch |
 | 'delete_loan' | closed loan ID and evidence | borrower or broker owner | Removes display entry; retains leaf tombstone |
 | 'delete_broker' | broker ID | broker owner | Removes only an entirely closed broker |
+
+`register_holder` is a key rotation when the account already has a holder
+record.  The rotation request must use a fresh `key_id` and public key and
+must carry exactly one `ZeroBalance` proof whose context operation is
+`holder-zero-total`.  Its ciphertext is the homomorphic sum of the previous
+key's spending and inbox balances, and its context binds the previous
+`spending_version` and `authorization_epoch`.  Issuer and auditor private
+keys are not required.  First registration carries no zero proof.  The
+resulting `HolderView.recovery_start_sequence` is the holder history count at
+the rotation boundary; clients replay recovery records from that sequence
+with the new key while retaining earlier records for audit.  Rotation
+preserves the holder's freeze state.
 
 'Regular' repayment requires the proof to establish 'Q <= X < O' and more
 than one installment remaining. 'Full' repayment requires 'X = O', clears all

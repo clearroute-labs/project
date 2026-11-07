@@ -393,6 +393,12 @@ pub struct HolderBalance {
     pub authorization_epoch: u64,
     #[serde(with = "u64_string")]
     pub open_loan_count: u64,
+    /// Subject-history sequence at which the current encryption key became
+    /// authoritative.  Recovery clients must not replay entries before this
+    /// boundary with the current key: those entries are encrypted for a
+    /// historical key and remain available only for audit.
+    #[serde(with = "u64_string")]
+    pub recovery_start_sequence: u64,
     pub frozen: bool,
 }
 
@@ -741,6 +747,9 @@ pub struct RegisterHolderArgs {
     pub public_key: Vec<u8>,
     pub proof_of_possession: ProofArgs,
     #[serde(default)]
+    /// Empty for first registration; exactly one aggregate ZeroBalance proof
+    /// for a rotation.  The proof covers spending+inbox under the previous
+    /// holder key, so rotation does not require issuer/auditor private keys.
     pub zero_proofs: Vec<ProofArgs>,
     #[serde(default)]
     pub authorization_signature: Vec<u8>,
@@ -1303,6 +1312,8 @@ pub struct HolderView {
     pub authorization_epoch: u64,
     #[serde(with = "u64_string")]
     pub open_loan_count: u64,
+    #[serde(with = "u64_string")]
+    pub recovery_start_sequence: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]

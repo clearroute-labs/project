@@ -487,17 +487,26 @@ impl Core {
             args.public_key.clone()
         };
         validate_public_key(&public_key);
+        let existing = self.holders.get(&owner);
+        if let Some(existing) = existing.as_ref() {
+            // A rotation must create a new immutable key identity.  Reusing
+            // either component would overwrite the recovery boundary while
+            // leaving historical ciphertexts attributable to the same wire
+            // identity.
+            require!(
+                args.key_id != existing.encryption_key.key_id
+                    && public_key != existing.encryption_key.public_key,
+                ERR_INVALID_ENCODING
+            );
+        } else {
+            require!(args.zero_proofs.is_empty(), ERR_INVALID_ENCODING);
+        }
         require!(!args.proof_of_possession.proof.is_empty(), ERR_BAD_PROOF);
-        let old_epoch = self
-            .holders
-            .get(&owner)
+        let old_epoch = existing
+            .as_ref()
             .map(|h| h.authorization_epoch)
             .unwrap_or(0);
-        let existing_open_loan_count = self
-            .holders
-            .get(&owner)
-            .map(|h| h.open_loan_count)
-            .unwrap_or(0);
+        let existing_open_loan_count = existing.as_ref().map(|h| h.open_loan_count).unwrap_or(0);
         require!(existing_open_loan_count == 0, ERR_HAS_OBLIGATIONS);
         let key = EncryptionKey {
             key_id: args.key_id,
@@ -507,76 +516,34 @@ impl Core {
                 .checked_add(1)
                 .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE)),
         };
-        if let Some(existing) = self.holders.get(&owner) {
-            require!(args.zero_proofs.len() == 4, ERR_HAS_OBLIGATIONS);
+        if let Some(existing) = existing.as_ref() {
+            require!(args.zero_proofs.len() == 1, ERR_HAS_OBLIGATIONS);
             let zero_subject = owner.to_string();
-            let contexts = [
-                self.crypto_context_with_subject(
-                    "holder-zero-spending",
-                    0,
-                    0,
-                    0,
-                    0,
-                    [existing.spending_version, 0, 0, 0, 0, 0, 0, 0],
-                    [existing.authorization_epoch, 0, 0, 0],
-                    0,
-                    &zero_subject,
-                ),
-                self.crypto_context_with_subject(
-                    "holder-zero-inbox",
-                    0,
-                    0,
-                    0,
-                    0,
-                    [existing.spending_version, 0, 0, 0, 0, 0, 0, 0],
-                    [existing.authorization_epoch, 0, 0, 0],
-                    0,
-                    &zero_subject,
-                ),
-                self.crypto_context_with_subject(
-                    "holder-zero-issuer",
-                    0,
-                    0,
-                    0,
-                    0,
-                    [existing.spending_version, 0, 0, 0, 0, 0, 0, 0],
-                    [existing.authorization_epoch, 0, 0, 0],
-                    0,
-                    &zero_subject,
-                ),
-                self.crypto_context_with_subject(
-                    "holder-zero-auditor",
-                    0,
-                    0,
-                    0,
-                    0,
-                    [existing.spending_version, 0, 0, 0, 0, 0, 0, 0],
-                    [existing.authorization_epoch, 0, 0, 0],
-                    0,
-                    &zero_subject,
-                ),
-            ];
-            let keys = [
-                existing.encryption_key.public_key.as_slice(),
-                existing.encryption_key.public_key.as_slice(),
-                self.asset.issuer_key.public_key.as_slice(),
-                self.asset.token_auditor_key.public_key.as_slice(),
-            ];
-            let ciphertexts = [
-                existing.spending_ciphertext.as_slice(),
-                existing.inbox_ciphertext.as_slice(),
-                existing.issuer_balance_ciphertext.as_slice(),
-                existing.auditor_balance_ciphertext.as_slice(),
-            ];
-            for index in 0..4 {
-                self.verify_zero_balance_statement(
-                    &args.zero_proofs[index],
-                    &contexts[index],
-                    keys[index],
-                    ciphertexts[index],
-                    existing.spending_version,
-                );
-            }
+            // The spending and inbox ciphertexts share the holder's current
+            // public key.  Their homomorphic sum is enough: the ledger
+            // invariant keeps every balance non-negative and mirrors the same
+            // amount, so a proven sum of zero implies all four balances are
+            // zero without asking the holder for issuer/auditor secrets.
+            let combined =
+                combine_ciphertexts(&existing.spending_ciphertext, &existing.inbox_ciphertext);
+            let context = self.crypto_context_with_subject(
+                "holder-zero-total",
+                0,
+                0,
+                0,
+                0,
+                [existing.spending_version, 0, 0, 0, 0, 0, 0, 0],
+                [existing.authorization_epoch, 0, 0, 0],
+                0,
+                &zero_subject,
+            );
+            self.verify_zero_balance_statement(
+                &args.zero_proofs[0],
+                &context,
+                &existing.encryption_key.public_key,
+                &combined,
+                existing.spending_version,
+            );
         }
         let context = self.crypto_context(
             "register-holder",
@@ -607,6 +574,18 @@ impl Core {
         let key_public = key.public_key.clone();
         let key_id = key.key_id;
         let key_epoch = key.authorization_epoch;
+        let recovery_start_sequence = existing
+            .as_ref()
+            .map(|_| {
+                self.recovery_subject_counts
+                    .get(&format!("holder:{owner}"))
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0);
+        let frozen = existing
+            .as_ref()
+            .map(|holder| holder.frozen)
+            .unwrap_or(false);
         self.holders.insert(
             &owner,
             &HolderBalance {
@@ -642,7 +621,8 @@ impl Core {
                     .checked_add(1)
                     .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE)),
                 open_loan_count: 0,
-                frozen: false,
+                recovery_start_sequence,
+                frozen,
             },
         );
         self.emit(
@@ -5125,6 +5105,7 @@ impl Core {
             spending_version: holder.spending_version,
             authorization_epoch: holder.authorization_epoch,
             open_loan_count: holder.open_loan_count,
+            recovery_start_sequence: holder.recovery_start_sequence,
         })
     }
 
@@ -7557,6 +7538,71 @@ mod tests {
         });
         assert_eq!(claim_id, U64(0));
         assert_eq!(core.get_share_balance(vault_id, owner), U128(0));
+    }
+
+    #[test]
+    fn holder_rotation_requires_fresh_key_and_exposes_recovery_boundary() {
+        let _guard = test_guard();
+        let mut core = init();
+        let owner = account("alice.testnet");
+        let old_public_key = test_public_key(17);
+        core.holders.insert(
+            &owner,
+            &HolderBalance {
+                owner: owner.clone(),
+                asset_id: core.asset.token_account.clone(),
+                encryption_key: EncryptionKey {
+                    key_id: 41,
+                    public_key: old_public_key.clone(),
+                    registered_at: 1,
+                    authorization_epoch: 3,
+                },
+                spending_ciphertext: Vec::new(),
+                inbox_ciphertext: Vec::new(),
+                issuer_balance_ciphertext: Vec::new(),
+                auditor_balance_ciphertext: Vec::new(),
+                spending_version: 7,
+                authorization_epoch: 3,
+                open_loan_count: 0,
+                recovery_start_sequence: 11,
+                frozen: true,
+            },
+        );
+        core.recovery_subject_counts
+            .insert(&format!("holder:{owner}"), &19);
+
+        let view = core.get_holder(owner.clone()).expect("holder view");
+        assert_eq!(view.recovery_start_sequence, 11);
+
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(owner.clone())
+                .build()
+        );
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.register_holder(RegisterHolderArgs {
+                key_id: 41,
+                encryption_public_key: old_public_key.clone(),
+                public_key: Vec::new(),
+                proof_of_possession: ProofArgs {
+                    statement: Vec::new(),
+                    context: Vec::new(),
+                    proof: Vec::new(),
+                    statement_kind: None,
+                    public_inputs: Vec::new(),
+                    verifying_key_hash: Vec::new(),
+                    profile_hash: Vec::new(),
+                },
+                zero_proofs: Vec::new(),
+                authorization_signature: Vec::new(),
+            });
+        }));
+        assert!(result.is_err());
+
+        let unchanged = core.holders.get(&owner).expect("holder remains");
+        assert_eq!(unchanged.encryption_key.key_id, 41);
+        assert!(unchanged.frozen);
+        assert_eq!(unchanged.recovery_start_sequence, 11);
     }
 
     #[test]
