@@ -11,8 +11,7 @@
 use ark_bn254::Fr;
 use borsh::{BorshDeserialize, BorshSerialize};
 use confidential_crypto::{
-    Ciphertext, Commitment, FieldHex, PROFILE_HASH, PROFILE_ID, PointHex, ProofEnvelope,
-    RecoveryPair, Statement, StatementKind, transcript_hash,
+    FieldHex, PROFILE_HASH, PROFILE_ID, ProofEnvelope, Statement, StatementKind, transcript_hash,
 };
 use near_sdk::{PanicOnDefault, near};
 use serde::{Deserialize, Serialize};
@@ -123,8 +122,11 @@ impl VerifierProbe {
     }
 
     /// Verify a typed statement/envelope pair with its immutable family key.
-    /// All public inputs are derived from the typed statement; envelope inputs
-    /// are accepted only when they are byte-for-byte canonical equivalents.
+    /// All authoritative slots are derived from the typed statement; the
+    /// envelope's first input is retained as the Poseidon digest because the
+    /// Groth16 circuit already constrains it to those slots. This avoids
+    /// recomputing the same digest in the host while preserving the binding
+    /// relation enforced by the proof.
     pub fn verify_typed(&self, statement_json: String, envelope_json: String) -> bool {
         let Some(statement) = serde_json::from_str::<Statement>(&statement_json).ok() else {
             return false;
@@ -138,13 +140,15 @@ impl VerifierProbe {
         {
             return false;
         }
-        let Some(expected_inputs) = statement_public_inputs(&statement) else {
+        let Some(expected_slots) = statement_public_slots(&statement) else {
             return false;
         };
-        let Some(statement_digest) = expected_inputs.first() else {
+        let Some(statement_digest) = envelope.public_inputs.first() else {
             return false;
         };
-        if envelope.context_digest != *statement_digest || envelope.public_inputs != expected_inputs
+        if envelope.context_digest != *statement_digest
+            || envelope.public_inputs.len() != expected_slots.len() + 1
+            || envelope.public_inputs[1..] != expected_slots[..]
         {
             return false;
         }
@@ -167,207 +171,26 @@ impl VerifierProbe {
     }
 }
 
-/// Derive public inputs without re-running subgroup validation for every
-/// point. `Statement` deserialization has already performed strict canonical
-/// decoding and subgroup checks. `PointHex::to_affine` reuses the bounded
-/// validated-point cache, so this traversal recovers coordinates without
-/// weakening the wire validation policy.
+/// Derive the authoritative public slots using the same typed builder exposed
+/// to Core. Statement deserialization has already performed strict canonical
+/// decoding and subgroup checks; the bounded point cache makes the subsequent
+/// coordinate extraction reusable within the transaction.
+fn statement_public_values(statement: &Statement) -> Option<Vec<Fr>> {
+    statement.public_slots_without_hash().ok()
+}
+
+fn statement_public_slots(statement: &Statement) -> Option<Vec<FieldHex>> {
+    statement_public_values(statement)
+        .map(|values| values.into_iter().map(FieldHex::from).collect())
+}
+
 fn statement_public_inputs(statement: &Statement) -> Option<Vec<FieldHex>> {
-    let mut values = statement.context().canonical_fields();
-    values.push(Fr::from(statement.kind().as_u8() as u64));
-    match statement {
-        Statement::KeyPossession(value) => {
-            push_key(&mut values, &value.public_key)?;
-        }
-        Statement::PublicConversion(value) => {
-            push_key(&mut values, &value.owner_key)?;
-            push_ciphertext(&mut values, &value.spending_before)?;
-            push_ciphertext(&mut values, &value.spending_after)?;
-            for view in &value.views {
-                push_view(&mut values, view)?;
-            }
-            push_u64(&mut values, value.public_amount);
-            push_u64(
-                &mut values,
-                u64::from(matches!(
-                    value.mode,
-                    confidential_crypto::ConversionMode::Debit
-                )),
-            );
-            push_u64(&mut values, value.spending_version);
-        }
-        Statement::ConfidentialTransfer(value) => {
-            push_key(&mut values, &value.sender_key)?;
-            push_key(&mut values, &value.recipient_key)?;
-            push_ciphertext(&mut values, &value.sender_spending_before)?;
-            push_ciphertext(&mut values, &value.sender_spending_after)?;
-            for view in &value.transfer_views {
-                push_view(&mut values, view)?;
-            }
-            for pair in &value.transfer_recovery {
-                push_recovery_pair(&mut values, pair)?;
-            }
-            push_commitment(&mut values, &value.amount_commitment)?;
-            push_u64(&mut values, value.sender_spending_version);
-        }
-        Statement::Origination(value) => {
-            push_key(&mut values, &value.broker_key)?;
-            push_key(&mut values, &value.borrower_key)?;
-            push_ciphertext(&mut values, &value.broker_spending_before)?;
-            push_ciphertext(&mut values, &value.broker_spending_after)?;
-            for view in &value.transfer_views {
-                push_view(&mut values, view)?;
-            }
-            for pair in &value.transfer_recovery {
-                push_recovery_pair(&mut values, pair)?;
-            }
-            push_commitment(&mut values, &value.principal_commitment)?;
-            for view in &value.owed_views {
-                push_view(&mut values, view)?;
-            }
-            for pair in &value.owed_recovery {
-                push_recovery_pair(&mut values, pair)?;
-            }
-            for view in &value.payment_views {
-                push_view(&mut values, view)?;
-            }
-            for pair in &value.payment_recovery {
-                push_recovery_pair(&mut values, pair)?;
-            }
-            push_commitment(&mut values, &value.owed_commitment)?;
-            push_commitment(&mut values, &value.payment_commitment)?;
-            push_u64(&mut values, value.payment_count as u64);
-            push_u64(&mut values, value.max_payment_count as u64);
-            push_u64(&mut values, value.broker_spending_version);
-            push_u64(&mut values, value.loan_version);
-        }
-        Statement::Repayment(value) => {
-            push_key(&mut values, &value.borrower_key)?;
-            push_key(&mut values, &value.broker_key)?;
-            push_ciphertext(&mut values, &value.borrower_spending_before)?;
-            push_ciphertext(&mut values, &value.borrower_spending_after)?;
-            for view in &value.transfer_views {
-                push_view(&mut values, view)?;
-            }
-            for pair in &value.transfer_recovery {
-                push_recovery_pair(&mut values, pair)?;
-            }
-            for view in &value.owed_before {
-                push_view(&mut values, view)?;
-            }
-            for view in &value.owed_after {
-                push_view(&mut values, view)?;
-            }
-            for (view, pair) in value
-                .owed_delta
-                .iter()
-                .zip(value.owed_delta_recovery.iter())
-            {
-                push_view(&mut values, view)?;
-                push_recovery_pair(&mut values, pair)?;
-            }
-            for view in &value.periodic_payment {
-                push_view(&mut values, view)?;
-            }
-            for view in &value.principal_before {
-                push_view(&mut values, view)?;
-            }
-            for view in &value.principal_after {
-                push_view(&mut values, view)?;
-            }
-            for (view, pair) in value
-                .principal_delta
-                .iter()
-                .zip(value.principal_delta_recovery.iter())
-            {
-                push_view(&mut values, view)?;
-                push_recovery_pair(&mut values, pair)?;
-            }
-            push_commitment(&mut values, &value.principal_delta_commitment)?;
-            push_u64(
-                &mut values,
-                u64::from(matches!(value.mode, confidential_crypto::PaymentMode::Full)),
-            );
-            push_u64(&mut values, value.payment_remaining_before as u64);
-            push_u64(&mut values, value.payment_remaining_after as u64);
-            push_u64(&mut values, value.borrower_spending_version);
-            push_u64(&mut values, value.loan_version_before);
-            push_u64(&mut values, value.loan_version_after);
-        }
-        Statement::Reconciliation(value) => {
-            push_key(&mut values, &value.broker_key)?;
-            push_ciphertext(&mut values, &value.cash)?;
-            push_ciphertext(&mut values, &value.active_principal)?;
-            push_ciphertext(&mut values, &value.impaired_principal)?;
-            push_commitment(&mut values, &value.cash_commitment)?;
-            push_commitment(&mut values, &value.active_principal_commitment)?;
-            push_commitment(&mut values, &value.impaired_principal_commitment)?;
-            push_u128(&mut values, value.debt_before);
-            push_u128(&mut values, value.debt_after);
-            push_u128(&mut values, value.vault_assets_before);
-            push_u128(&mut values, value.vault_assets_after);
-            push_u128(&mut values, value.vault_provision_before);
-            push_u128(&mut values, value.vault_provision_after);
-            push_u128(&mut values, value.provision_before);
-            push_u128(&mut values, value.provision_after);
-            push_u128(&mut values, value.realized_loss);
-            push_u64(&mut values, value.book_version);
-            push_u64(&mut values, value.accounting_version);
-        }
-        Statement::ZeroBalance(value) | Statement::Ownership(value) => {
-            push_key(&mut values, &value.owner_key)?;
-            push_ciphertext(&mut values, &value.ciphertext)?;
-            push_u64(&mut values, value.expected_amount);
-            push_u64(&mut values, value.spending_version);
-        }
-    }
-    if values.len() != statement.kind().slot_count() {
-        return None;
-    }
+    let values = statement_public_values(statement)?;
     let digest = transcript_hash(&values);
     let mut result = Vec::with_capacity(values.len() + 1);
     result.push(FieldHex::from(digest));
     result.extend(values.into_iter().map(FieldHex::from));
     Some(result)
-}
-
-fn push_u64(values: &mut Vec<Fr>, value: u64) {
-    values.push(Fr::from(value));
-}
-
-fn push_u128(values: &mut Vec<Fr>, value: u128) {
-    push_u64(values, value as u64);
-    push_u64(values, (value >> 64) as u64);
-}
-
-fn push_key(values: &mut Vec<Fr>, key: &confidential_crypto::PublicKey) -> Option<()> {
-    push_point(values, &key.point)
-}
-
-fn push_ciphertext(values: &mut Vec<Fr>, ciphertext: &Ciphertext) -> Option<()> {
-    push_point(values, &ciphertext.ephemeral)?;
-    push_point(values, &ciphertext.message)
-}
-
-fn push_view(values: &mut Vec<Fr>, view: &confidential_crypto::ReaderView) -> Option<()> {
-    push_key(values, &view.reader_key)?;
-    push_ciphertext(values, &view.ciphertext)
-}
-
-fn push_recovery_pair(values: &mut Vec<Fr>, pair: &RecoveryPair) -> Option<()> {
-    push_ciphertext(values, &pair.low_limb)?;
-    push_ciphertext(values, &pair.high_limb)
-}
-
-fn push_commitment(values: &mut Vec<Fr>, commitment: &Commitment) -> Option<()> {
-    push_point(values, &commitment.point)
-}
-
-fn push_point(values: &mut Vec<Fr>, point: &PointHex) -> Option<()> {
-    let affine = point.to_affine().ok()?;
-    values.push(affine.x);
-    values.push(affine.y);
-    Some(())
 }
 
 impl VerifierProbe {

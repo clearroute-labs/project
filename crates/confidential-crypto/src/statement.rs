@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::CryptoError;
 use crate::commitment::Commitment;
-use crate::context::{OperationContext, PublicSlots, SlotBuilder};
+use crate::context::{OperationContext, PublicSlots, SlotBuilder, transcript_hash};
 use crate::elgamal::{Ciphertext, PublicKey};
 use crate::encoding::{FieldHex, ScalarHex};
 
@@ -375,7 +375,7 @@ impl Statement {
         }
     }
 
-    pub fn public_slots(&self) -> Result<PublicSlots, CryptoError> {
+    fn build_slot_values(&self) -> Result<Vec<Fr>, CryptoError> {
         let mut b = SlotBuilder::new(self.context(), self.kind())?;
         match self {
             Self::KeyPossession(s) => {
@@ -523,11 +523,25 @@ impl Statement {
                 b.push_u64(s.spending_version);
             }
         }
-        let slots = b.finish()?;
-        if slots.values.len() != self.kind().slot_count() {
+        let values = b.values;
+        if values.len() != self.kind().slot_count() {
             return Err(CryptoError::ProfileMismatch);
         }
-        Ok(slots)
+        Ok(values)
+    }
+
+    pub fn public_slots(&self) -> Result<PublicSlots, CryptoError> {
+        let values = self.build_slot_values()?;
+        let digest = transcript_hash(&values);
+        Ok(PublicSlots { digest, values })
+    }
+
+    /// Return the authoritative public slots without evaluating the host
+    /// Poseidon digest. The Groth16 circuit constrains its digest input to
+    /// these exact slots; contract callers that already carry the canonical
+    /// envelope digest can therefore avoid duplicate host hashing.
+    pub fn public_slots_without_hash(&self) -> Result<Vec<Fr>, CryptoError> {
+        self.build_slot_values()
     }
 
     pub fn context_digest(&self) -> Result<FieldHex, CryptoError> {

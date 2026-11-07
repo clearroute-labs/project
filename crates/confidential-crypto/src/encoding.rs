@@ -1,7 +1,9 @@
 use ark_bn254::Fr as CircuitFr;
+use ark_ec::CurveGroup;
 use ark_ed_on_bn254::{EdwardsAffine, EdwardsProjective, Fr};
+use ark_ff::AdditiveGroup;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress, Validate};
-use ark_std::io::Cursor;
+use ark_std::{io::Cursor, Zero};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -270,7 +272,6 @@ pub(crate) fn encode_point(point: &EdwardsAffine) -> Result<String, CryptoError>
 }
 
 pub(crate) fn decode_point(value: &str, non_identity: bool) -> Result<EdwardsAffine, CryptoError> {
-    let bytes = decode_lower_hex(value, 32)?;
     if let Some(point) = VALIDATED_POINT_CACHE.with(|cache| cache.borrow().get(value).cloned()) {
         // Identity is valid for generic PointHex values but not for public
         // keys. Re-apply this cheap policy check on every cache hit rather
@@ -280,19 +281,41 @@ pub(crate) fn decode_point(value: &str, non_identity: bool) -> Result<EdwardsAff
         }
         return Ok(point);
     }
+
+    // Keep the compressed input on the stack. `decode_lower_hex` returns a
+    // fresh Vec because most scalar callers need owned bytes; point parsing
+    // is on the contract's hot path and only needs a fixed-size cursor.
+    if value.len() != 64
+        || value
+            .bytes()
+            .any(|byte| !byte.is_ascii_hexdigit() || byte.is_ascii_uppercase())
+    {
+        return Err(CryptoError::NonCanonicalEncoding);
+    }
+    let mut bytes = [0_u8; 32];
+    hex::decode_to_slice(value, &mut bytes).map_err(|_| CryptoError::NonCanonicalEncoding)?;
     let mut cursor = Cursor::new(bytes.as_slice());
-    let point = EdwardsAffine::deserialize_with_mode(&mut cursor, Compress::Yes, Validate::Yes)
+    // Canonical deserialization performs field and compressed-coordinate
+    // checks. The default arkworks subgroup check uses a bit-by-bit scalar
+    // multiplication by `r`; use the equivalent fixed-window multiplication
+    // below to retain the same full-order check at lower contract gas.
+    let point = EdwardsAffine::deserialize_with_mode(&mut cursor, Compress::Yes, Validate::No)
         .map_err(|_| CryptoError::MalformedPoint)?;
     if cursor.position() != bytes.len() as u64 {
         return Err(CryptoError::NonCanonicalEncoding);
     }
-    let encoded = encode_point(&point)?;
-    if encoded != value {
+    if !point.is_on_curve() || !is_in_prime_subgroup(&point) {
+        return Err(CryptoError::MalformedPoint);
+    }
+    let mut encoded = [0_u8; 32];
+    point
+        .serialize_with_mode(&mut encoded[..], Compress::Yes)
+        .map_err(|e| CryptoError::Serialization(e.to_string()))?;
+    if encoded != bytes {
         return Err(CryptoError::NonCanonicalEncoding);
     }
-    // `Validate::Yes` performs the canonical on-curve and subgroup checks for
-    // this arkworks affine type. Apply the identity policy before caching so
-    // no rejected identity can be promoted to a cached valid public key.
+    // Apply the identity policy before caching so no rejected identity can be
+    // promoted to a cached valid public key.
     if non_identity && point.is_zero() {
         return Err(CryptoError::IdentityPoint);
     }
@@ -306,6 +329,89 @@ pub(crate) fn decode_point(value: &str, non_identity: bool) -> Result<EdwardsAff
         cache.insert(value.to_owned(), point);
     });
     Ok(point)
+}
+
+/// Check `[r]P == 0` with a fixed width-4 non-adjacent form. The sparse digit
+/// table is the canonical width-4 recoding of the immutable BN254 scalar
+/// modulus, so this remains the same subgroup predicate as arkworks while
+/// replacing roughly half of the mixed additions in its generic check.
+const BN254_SCALAR_WNAF4: &[(usize, i8)] = &[
+    (0, 1),
+    (4, -1),
+    (8, 7),
+    (13, -7),
+    (17, 1),
+    (21, -7),
+    (25, -3),
+    (30, 1),
+    (34, 7),
+    (38, -1),
+    (43, 3),
+    (47, 5),
+    (52, 7),
+    (56, 7),
+    (61, 3),
+    (65, 5),
+    (73, 7),
+    (77, 7),
+    (85, -7),
+    (89, -3),
+    (94, 1),
+    (99, 7),
+    (103, -5),
+    (108, -1),
+    (112, -1),
+    (118, -3),
+    (122, -5),
+    (126, -1),
+    (130, 3),
+    (136, -5),
+    (140, 3),
+    (148, 3),
+    (156, -3),
+    (160, 7),
+    (164, -5),
+    (168, -7),
+    (172, 1),
+    (177, 5),
+    (184, 7),
+    (188, 3),
+    (192, 5),
+    (202, -3),
+    (206, -7),
+    (211, 5),
+    (218, 7),
+    (222, -7),
+    (228, -3),
+    (233, 5),
+    (239, -7),
+    (244, 1),
+    (249, 3),
+];
+
+fn is_in_prime_subgroup(point: &EdwardsAffine) -> bool {
+    let base = EdwardsProjective::from(*point);
+    let twice = base + base;
+    let mut table = [EdwardsProjective::default(); 4];
+    table[0] = base;
+    for index in 1..4 {
+        table[index] = table[index - 1] + twice;
+    }
+    let table = EdwardsProjective::normalize_batch(&table);
+    let mut digits = [0_i8; 250];
+    for &(index, digit) in BN254_SCALAR_WNAF4 {
+        digits[index] = digit;
+    }
+    let mut result = EdwardsProjective::default();
+    for bit in (0..digits.len()).rev() {
+        result.double_in_place();
+        match digits[bit] {
+            digit if digit > 0 => result += &table[((digit - 1) / 2) as usize],
+            digit if digit < 0 => result -= &table[((-digit - 1) / 2) as usize],
+            _ => {}
+        }
+    }
+    result.is_zero()
 }
 
 pub(crate) fn encode_scalar(value: &Fr) -> Result<String, CryptoError> {
@@ -366,7 +472,8 @@ fn decode_circuit_scalar(value: &str) -> Result<CircuitFr, CryptoError> {
 #[cfg(test)]
 mod tests {
     use ark_ec::CurveGroup;
-    use ark_ff::Zero;
+    use ark_ed_on_bn254::Fq;
+    use ark_ff::{Field, Zero};
 
     use super::*;
 
@@ -379,4 +486,30 @@ mod tests {
             Err(CryptoError::IdentityPoint)
         ));
     }
+
+    #[test]
+    fn windowed_subgroup_check_matches_arkworks() {
+        use ark_ff::UniformRand;
+        use ark_std::test_rng;
+
+        let mut rng = test_rng();
+        for _ in 0..16 {
+            let point = EdwardsProjective::rand(&mut rng).into_affine();
+            assert_eq!(
+                is_in_prime_subgroup(&point),
+                point.is_in_correct_subgroup_assuming_on_curve()
+            );
+        }
+    }
+
+    #[test]
+    fn windowed_subgroup_check_rejects_torsion_point() {
+        // (0, -1) is the order-two point on Baby-Jubjub and therefore is on
+        // the curve but outside its odd prime-order subgroup.
+        let torsion = EdwardsAffine::new_unchecked(Fq::ZERO, -Fq::ONE);
+        let encoded = encode_point(&torsion).expect("torsion point encodes");
+        assert!(!is_in_prime_subgroup(&torsion));
+        assert!(matches!(decode_point(&encoded, false), Err(CryptoError::MalformedPoint)));
+    }
+
 }

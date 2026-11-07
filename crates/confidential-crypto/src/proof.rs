@@ -787,7 +787,7 @@ impl ConstraintSynthesizer<Fr> for LendingCircuit {
         // arkworks configuration used by `context::transcript_hash`. This is
         // the binding constraint for every canonical slot; no private shadow
         // or caller-selected digest is accepted.
-        let mut sponge = PoseidonSpongeVar::<Fr>::new(cs.clone(), &poseidon_config());
+        let mut sponge = PoseidonSpongeVar::<Fr>::new(cs.clone(), poseidon_config());
         let mut transcript_inputs = Vec::with_capacity(self.slots.len() + 2);
         transcript_inputs.push(FpVar::constant(Fr::from_le_bytes_mod_order(
             b"NEAR-CONFIDENTIAL-LENDING/TRANSCRIPT/POSEIDON/v1",

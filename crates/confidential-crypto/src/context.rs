@@ -7,6 +7,7 @@ use ark_ff::PrimeField;
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::sync::OnceLock;
 
 use crate::commitment::Commitment;
 use crate::elgamal::{Ciphertext, PublicKey};
@@ -195,6 +196,7 @@ impl SlotBuilder {
         self.push_point(&commitment.point)
     }
 
+    #[allow(dead_code)]
     pub fn finish(self) -> Result<PublicSlots, CryptoError> {
         if self.values.len() > CONTEXT_SLOTS {
             return Err(CryptoError::StatementTooLarge);
@@ -237,7 +239,7 @@ pub fn transcript_hash(values: &[Fr]) -> Fr {
     ));
     input.push(Fr::from(values.len() as u64));
     input.extend_from_slice(values);
-    let mut sponge = PoseidonSponge::new(&poseidon_config());
+    let mut sponge = PoseidonSponge::new(poseidon_config());
     sponge.absorb(&input);
     sponge.squeeze_field_elements(1)[0]
 }
@@ -246,15 +248,19 @@ pub fn transcript_hash(values: &[Fr]) -> Fr {
 /// 5, 8 full rounds, 57 partial rounds, and Grain-generated ARK/MDS with no
 /// matrix skip. This is the arkworks/circomlib-compatible width-3 profile;
 /// the exact generated constants are part of the immutable CryptoProfile.
-pub(crate) fn poseidon_config() -> PoseidonConfig<Fr> {
-    let (ark, mds) = ark_crypto_primitives::sponge::poseidon::find_poseidon_ark_and_mds::<Fr>(
-        Fr::MODULUS_BIT_SIZE as u64,
-        2,
-        8,
-        57,
-        0,
-    );
-    PoseidonConfig::new(8, 57, 5, mds, ark, 2, 1)
+pub(crate) fn poseidon_config() -> &'static PoseidonConfig<Fr> {
+    static CONFIG: OnceLock<PoseidonConfig<Fr>> = OnceLock::new();
+    CONFIG.get_or_init(|| {
+        let (ark, mds) =
+            ark_crypto_primitives::sponge::poseidon::find_poseidon_ark_and_mds::<Fr>(
+                Fr::MODULUS_BIT_SIZE as u64,
+                2,
+                8,
+                57,
+                0,
+            );
+        PoseidonConfig::new(8, 57, 5, mds, ark, 2, 1)
+    })
 }
 
 #[cfg(test)]
@@ -265,7 +271,7 @@ mod poseidon_vectors {
 
     #[test]
     fn circomlib_bn254_width3_vector() {
-        let mut sponge = PoseidonSponge::new(&poseidon_config());
+        let mut sponge = PoseidonSponge::new(poseidon_config());
         let input = vec![Fr::from(0u64), Fr::from(1u64)];
         sponge.absorb(&input);
         let output = sponge.squeeze_field_elements::<Fr>(1)[0];
