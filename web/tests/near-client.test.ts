@@ -343,6 +343,32 @@ describe('real Core client mapping', () => {
       { method: 'get_broker', args: { broker_id: '9' } },
     ])
   })
+
+  it('preserves an archived-loan RPC failure instead of relabeling it as closed', async () => {
+    const transport: NearContractTransport = {
+      view: async <T>(method: string) => {
+        if (method === 'get_loan') return null as T
+        if (method === 'get_archived_loan') throw new Error('finalized RPC unavailable')
+        throw new Error(`unexpected view ${method}`)
+      },
+      call: async () => { throw new Error('not used') },
+    }
+    await expect(new NearProtocolClient(transport, config).getAuditBundle({ scope: 'loan', subjectId: '7' })).rejects.toThrow('finalized RPC unavailable')
+  })
+
+  it('uses the authoritative holder key view and preserves its RPC errors', async () => {
+    const calls: string[] = []
+    const transport: NearContractTransport = {
+      view: async <T>(method: string) => {
+        calls.push(method)
+        if (method === 'get_holder_key') throw new Error('holder key RPC unavailable')
+        throw new Error(`unexpected view ${method}`)
+      },
+      call: async () => { throw new Error('not used') },
+    }
+    await expect(new NearProtocolClient(transport, config).getHolderEncryptionKey('borrower.testnet')).rejects.toThrow('holder key RPC unavailable')
+    expect(calls).toEqual(['get_holder_key'])
+  })
 })
 
 describe('wallet initialization', () => {

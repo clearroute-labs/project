@@ -457,7 +457,8 @@ export class NearProtocolClient implements ProtocolClient {
     const uniqueProposals = [...new Map(proposals.map((proposal) => [decimal(proposal.proposal_id), proposal])).values()]
     const vaults = await Promise.all(rawVaults.map(async (vault) => {
       let shares: string | undefined
-      try { shares = decimal(await this.transport.view<unknown>('get_share_balance', { vault_id: wireId(decimal(vault.vault_id)), owner: accountId })) } catch { shares = undefined }
+      const shareBalance = await this.transport.view<unknown>('get_share_balance', { vault_id: wireId(decimal(vault.vault_id)), owner: accountId })
+      if (shareBalance !== null && shareBalance !== undefined) shares = decimal(shareBalance)
       return { ...mapVault(vault, shares), decimals: asset.decimals }
     }))
     return {
@@ -485,36 +486,15 @@ export class NearProtocolClient implements ProtocolClient {
   }
 
   async getHolderEncryptionKey(accountId: string): Promise<HolderKeyView> {
-    try {
-      const holder = await this.transport.view<{ key_id: string | number; public_key: unknown } | null>('get_holder_key', { owner: accountId, key_id: null })
-      if (holder) return { accountId, encryptionKeyId: decimal(holder.key_id), publicKey: bytesToHex(holder.public_key) }
-    } catch {
-      // Older Core deployments may not expose get_holder_key. Fall through to
-      // the holder's registered public record instead of accepting a key from
-      // the caller.
-    }
-    try {
-      const holder = await this.transport.view<RawHolder | null>('get_holder', { owner: accountId })
-      const publicKey = holder?.public_key ?? holder?.encryption_public_key ?? holder?.encryption_key?.public_key
-      if (holder && publicKey !== undefined) return { accountId: holder.owner, encryptionKeyId: decimal(holder.key_id), publicKey: bytesToHex(publicKey) }
-    } catch {
-      // Preserve the explicit unsupported-profile result below; no key is
-      // ever inferred from a ciphertext or authorization key.
-    }
-    throw new ProtocolError({ category: 'UNSUPPORTED_PROFILE', message: 'This Core deployment does not expose registered holder encryption public keys for recipient lookup.' })
+    const holder = await this.transport.view<{ key_id: string | number; public_key: unknown } | null>('get_holder_key', { owner: accountId, key_id: null })
+    if (!holder) throw new ProtocolError({ category: 'NOT_REGISTERED', message: `The destination account ${accountId} has no registered encryption key.` })
+    return { accountId, encryptionKeyId: decimal(holder.key_id), publicKey: bytesToHex(holder.public_key) }
   }
 
   async getBrokerEncryptionKey(brokerId: string): Promise<BrokerKeyView> {
-    try {
-      const key = await this.transport.view<{ key_id: string | number; public_key: unknown } | null>('get_broker_key', { broker_id: wireId(brokerId), key_id: null })
-      if (key) return { brokerId, encryptionKeyId: decimal(key.key_id), publicKey: bytesToHex(key.public_key) }
-    } catch {
-      // Fall through to the broker's registered public view for older Core deployments.
-    }
-    const broker = await this.transport.view<RawBroker | null>('get_broker', { broker_id: wireId(brokerId) })
-    const publicKey = broker?.encryption_public_key
-    if (broker && publicKey !== undefined) return { brokerId, encryptionKeyId: decimal(broker.encryption_key_id), publicKey: bytesToHex(publicKey) }
-    throw new ProtocolError({ category: 'UNSUPPORTED_PROFILE', message: 'This Core deployment does not expose the broker encryption public key.' })
+    const key = await this.transport.view<{ key_id: string | number; public_key: unknown } | null>('get_broker_key', { broker_id: wireId(brokerId), key_id: null })
+    if (!key) throw new ProtocolError({ category: 'NOT_REGISTERED', message: `Broker ${brokerId} has no registered encryption key.` })
+    return { brokerId, encryptionKeyId: decimal(key.key_id), publicKey: bytesToHex(key.public_key) }
   }
 
   async getVaultBrokerIds(vaultId: string): Promise<string[]> {
@@ -575,7 +555,7 @@ export class NearProtocolClient implements ProtocolClient {
       // Closed loans leave the active index but retain an immutable archived
       // record for the designated auditor. A deployment predating that view
       // simply reports the normal closed-scope error.
-      try { loan = await this.transport.view<RawLoan | null>('get_archived_loan', { loan_id: wireId(input.subjectId) }) } catch { loan = null }
+      loan = await this.transport.view<RawLoan | null>('get_archived_loan', { loan_id: wireId(input.subjectId) })
     }
     if (!loan) throw new ProtocolError({ category: 'LOAN_CLOSED', message: 'The requested loan is not available.' })
     const ciphertexts: Record<string, string> = {}
