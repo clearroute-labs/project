@@ -12,6 +12,8 @@ export interface BalanceHistoryEntry {
 }
 export interface BalanceSnapshot {
   lastSequence: string;
+  /** Authoritative history cursor at the most recent verified zero-balance key rotation. */
+  startSequence?: string;
   key: KeyReference;
   spending: Ciphertext;
   inbox: Ciphertext;
@@ -50,8 +52,9 @@ export class HistoryRecovery {
   constructor(readonly crypto: CryptoExecutor, readonly keys: Keyring) {}
 
   async balance(snapshot: BalanceSnapshot, entries: AsyncIterable<BalanceHistoryEntry>, signal?: AbortSignal): Promise<{ spending: string; inbox: string }> {
-    let sequence = 0n, spending = 0n, inbox = 0n;
+    let sequence = unsigned(snapshot.startSequence ?? '0', (1n << 64n) - 1n), spending = 0n, inbox = 0n;
     const last = unsigned(snapshot.lastSequence, (1n << 64n) - 1n);
+    if (sequence > last) throw new Error('Invalid recovery boundary');
     for await (const entry of entries) {
       signal?.throwIfAborted();
       sequence++;

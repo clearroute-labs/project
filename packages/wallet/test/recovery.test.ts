@@ -51,3 +51,13 @@ test('loan recovery preserves a defaulted claim and rejects repayments after def
   const badAllocation: LoanHistoryEntry = { ...records[1]!, change: { operation: 'repay', payment: { publicAmount: '30' }, principalPaid: { publicAmount: '10' }, full: false } };
   await assert.rejects(reader.loan(snapshot, entries([records[0]!, badAllocation, ...records.slice(2)])), /repayment history/);
 });
+
+test('a verified zero-balance rotation starts a new key history without accepting gaps or a false balance', async () => {
+  const reader = await recovery();
+  const snapshot = { startSequence: '9007199254740993', lastSequence: '9007199254740994', key: reference, spending: ciphertext('0'), inbox: ciphertext('7') };
+  const records: BalanceHistoryEntry[] = [{ sequence: snapshot.lastSequence, keyId: '1', change: { operation: 'credit', bucket: 'inbox', amount: { publicAmount: '7' } } }];
+  assert.deepEqual(await reader.balance(snapshot, entries(records)), { spending: '0', inbox: '7' });
+  await assert.rejects(reader.balance(snapshot, entries([])), /Incomplete/);
+  await assert.rejects(reader.balance({ ...snapshot, startSequence: snapshot.lastSequence }, entries([])), /does not match/);
+  await assert.rejects(reader.balance({ ...snapshot, startSequence: '9007199254740995' }, entries([])), /boundary/);
+});

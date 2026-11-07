@@ -39,3 +39,12 @@ Integration update:
 - Contract review is resolving typed statement/state binding, three-reader loan terms, authenticated book updates, durable recovery history, and callback storage allocation.
 - Native crypto and WASM browser artifacts build; strict crypto Clippy passes. Core/test-token/probe WASM builds pass. Workspace TypeScript checks and 56 tests pass (12 client, 11 wallet, 10 keeper, 21 web, two tooling).
 - Actual sandbox custody integration exposed the missing payable annotation on Core storage deposits. The fix is applied and the token callback/recovery test is being rerun; successful deployment alone is not custody acceptance.
+
+2026-11-07 integration evidence:
+
+- Real NEAR custody test passed: canonical duplicate deposits, forged callback rejection, failed payout restoration, oversized successful return, permissionless/idempotent finalization, and IDs above JavaScript's safe integer range.
+- All eight proof families passed in Chromium using the pinned WASM worker; both repayment modes and modified-context rejection were exercised. Largest measured operation in the first browser build was regular repayment at 129,271 ms. Native and browser validation now share one fixture implementation.
+- The integrated workspace has 69 passing TypeScript tests (12 client, 15 wallet, 12 keeper, 28 web, two tooling). Strict package typechecking exposed additional optional-property issues in the new web-facing wallet adapter; these are being corrected.
+- The real lending scenario passes registration, vault deposit, broker draw/merge, borrower shielding/merge, proposal creation and borrower consent. Origination still exceeds 300 Tgas in the initial contract build; full lifecycle acceptance remains open.
+- Fixed the contract build's missing `--cfg near`, which made the pinned NEAR SDK select local panic/hash implementations. Builds now assert required NEAR host imports. Release optimization targets execution cost (`opt-level = 3`).
+- Added real multi-broker impairment/default/redemption and restricted-keeper restart/limits/revocation scenarios. Their acceptance awaits the remaining contract/verifier integration fixes.

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import type { NearAccount } from 'near-workspaces';
-import { LedgerWallet, type LedgerVault, type PreparedCall } from '../../packages/wallet/src/ledger.js';
+import { decodeWire, LedgerWallet, type LedgerVault, type PreparedCall } from '../../packages/wallet/src/ledger.js';
 import { deployProtocol, maximumGas } from './deployment.js';
 
 function assertPrivatePayload(value: unknown, forbiddenAmounts: ReadonlySet<string>): void {
@@ -18,13 +18,15 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
   const deployment = await deployProtocol();
   const { worker, core, token, actors, rpc, crypto, keys } = deployment;
   const wallet = new LedgerWallet(rpc, keys, crypto, deployment.manifestHash);
-  const measurements: Array<{ method: string; gas: string; argumentBytes: number; milliseconds: number }> = [];
+  const measurements: Array<{ method: string; gas: string; argumentBytes: number; milliseconds: number; succeeded: boolean }> = [];
+  await mkdir('.artifacts', { recursive: true });
   const call = async <T>(actor: NearAccount, method: string, input: Record<string, unknown>): Promise<T> => {
     const before = Date.now();
     const outcome = await actor.callRaw(core, method, input, { gas: maximumGas });
+    measurements.push({ method, gas: outcome.gas_burnt, argumentBytes: Buffer.byteLength(JSON.stringify(input)), milliseconds: Date.now() - before, succeeded: !outcome.failed });
+    await writeFile('.artifacts/lifecycle-benchmark.json', JSON.stringify({ complete: false, core: core.accountId, manifestHash: deployment.manifestHash, measurements }, null, 2));
     assert.equal(outcome.failed, false, `${method}: ${JSON.stringify(outcome.status)}`);
     await rpc.waitForFinalOutcome(outcome.transactionReceipt.hash, actor.accountId);
-    measurements.push({ method, gas: outcome.gas_burnt, argumentBytes: Buffer.byteLength(JSON.stringify(input)), milliseconds: Date.now() - before });
     return outcome.parseResult<T>();
   };
   const submit = <T>(actor: NearAccount, prepared: PreparedCall): Promise<T> => call(actor, prepared.method, prepared.args);
@@ -115,7 +117,25 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
     assert.equal(await core.view('get_custody_total'), '40000000');
     const closedVault = await core.view<LedgerVault>('get_vault', { vault_id: vaultId });
     assert.equal(closedVault.assets_total, '0'); assert.equal(closedVault.assets_available, '0');
+
+    console.log('Lifecycle: zero-balance key rotation preserves issuer controls and starts recoverable history');
+    await submit(actors.borrower, await wallet.prepareMergeHolder(actors.borrower.accountId));
+    const convertedClaim = await submit<string>(actors.borrower, await wallet.prepareUnshield(actors.borrower.accountId, '1000000'));
+    await call(actors.issuer, 'set_holder_frozen', { account_id: actors.borrower.accountId, frozen: true });
+    await submit(actors.borrower, await wallet.prepareHolderRegistration(actors.borrower.accountId, '2'));
+    assert.equal((await core.view<{ holder_frozen: boolean }>('get_freeze_status', { account_id: actors.borrower.accountId })).holder_frozen, true,
+      'Changing an encryption key cannot remove the issuer freeze');
+    const rotated = await wallet.holder(actors.borrower.accountId);
+    assert.equal(rotated.record.key_id, '2'); assert.equal(rotated.spending, '0'); assert.equal(rotated.inbox, '0');
+    assert.ok(BigInt(rotated.record.recovery_start_sequence ?? '0') > 0n);
+    await call(actors.issuer, 'set_holder_frozen', { account_id: actors.borrower.accountId, frozen: false });
+    await submit(actors.borrower, await wallet.prepareShield(actors.borrower.accountId, convertedClaim));
+    const restored = await wallet.holder(actors.borrower.accountId);
+    assert.equal(restored.inbox, '1000000'); assert.equal(restored.spending, '0');
+    await wallet.recovery.verify({ role: 'issuer', subjectId: token.accountId, keyId: '1' }, decodeWire(restored.record.issuer_balance_ciphertext), 1000000n);
+    await wallet.recovery.verify({ role: 'token_auditor', subjectId: token.accountId, keyId: '1' }, decodeWire(restored.record.auditor_balance_ciphertext), 1000000n);
+    assert.equal(await core.view('get_custody_total'), '40000000');
     await mkdir('.artifacts', { recursive: true });
-    await writeFile('.artifacts/lifecycle-benchmark.json', JSON.stringify({ core: core.accountId, manifestHash: deployment.manifestHash, measurements }, null, 2));
+    await writeFile('.artifacts/lifecycle-benchmark.json', JSON.stringify({ complete: true, core: core.accountId, manifestHash: deployment.manifestHash, measurements }, null, 2));
   } finally { keys.clear(); await worker.tearDown(); }
 });

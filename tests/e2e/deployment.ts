@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import type { NearAccount, Worker } from 'near-workspaces';
-import { NearRpc, verifyManifestPin, type CryptoManifest } from '../../packages/client/src/index.js';
+import { NearRpc, canonicalManifest, verifyManifestPin, type CryptoManifest } from '../../packages/client/src/index.js';
 import { Keyring, type KeyReference } from '../../packages/wallet/src/keyring.js';
 import { NativeCrypto } from '../../packages/wallet/src/native.js';
 import { ProofBuilder, jsonBytes, wireBytes } from '../../packages/wallet/src/proofs.js';
@@ -55,6 +55,7 @@ export async function deployProtocol(directory = process.env.CRYPTO_ARTIFACT_DIR
       crypto_profile_hash: wireBytes(manifest.profileHash), network_id: manifest.networkId,
       token_trust_policy: 'sandbox-test-token-v1', freeze_policy: 'controller-freeze-v1',
       custody_cap: ((1n << 63n) - 1n).toString(), verifier_key: [], verifier_manifest_hash: wireBytes(pin.manifestHash),
+      verifier_manifest_json: canonicalManifest(manifest),
     } }, { gas: maximumGas });
     for (const [index, family] of proofFamilies.entries()) {
       const entry = manifest.artifacts[`${family}.prepared-vk`];

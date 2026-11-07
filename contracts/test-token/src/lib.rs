@@ -48,6 +48,7 @@ enum StorageKey {
 }
 
 #[ext_contract(ext_receiver)]
+#[allow(dead_code)]
 trait FungibleTokenReceiver {
     fn ft_on_transfer(
         &mut self,
@@ -58,6 +59,7 @@ trait FungibleTokenReceiver {
 }
 
 #[ext_contract(ext_self)]
+#[allow(dead_code)]
 trait TokenCallbacks {
     fn resolve_transfer(
         &mut self,

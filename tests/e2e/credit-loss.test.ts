@@ -87,18 +87,30 @@ test('multiple brokers reconcile impairment and default without charging the sam
     assert.equal((await wallet.broker(firstBroker)).record.impairment_provision, '50000000', 'Realized yield cushions aggregate impairment');
     assert.equal((await wallet.broker(secondBroker)).record.impairment_provision, '100000000');
 
+    // A positive provision requires an atomic post-settlement reconciliation.
+    // The wallet derives an inline checkpoint; no separate prepare transaction is needed.
+    await worker.provider.fastForward(120);
+    const impairedSettlement = await wallet.prepareSettlement(firstBroker, '50000000');
+    assert.equal((impairedSettlement.args.args as { reconciliation: { checkpoint_id: string } }).reconciliation.checkpoint_id, '0');
+    await submit(actors.broker, impairedSettlement);
+    vault = await core.view('get_vault', { vault_id: vaultId });
+    assert.equal(vault.assets_available, '50000000');
+    assert.equal(vault.assets_total, '300000000');
+    assert.equal(vault.loss_unrealized, '150000000');
+    assert.equal((await wallet.broker(firstBroker)).record.debt_total, '150000000');
+
     await submit(actors.broker, await wallet.prepareManagement(defaultingLoan, 'Default'));
     await reconcile(firstBroker);
     vault = await core.view('get_vault', { vault_id: vaultId });
     assert.equal(vault.assets_total, '250000000'); assert.equal(vault.loss_unrealized, '100000000');
-    assert.equal((await wallet.broker(firstBroker)).record.debt_total, '150000000');
+    assert.equal((await wallet.broker(firstBroker)).record.debt_total, '100000000');
     await assert.rejects(wallet.prepareRepayment(actors.recipient.accountId, defaultingLoan, 'Full'), /not payable/);
     await submit(actors.broker, await wallet.prepareManagement(recoverableLoan, 'Unimpair'));
     await reconcile(secondBroker);
     vault = await core.view('get_vault', { vault_id: vaultId });
     assert.equal(vault.assets_total, '250000000'); assert.equal(vault.loss_unrealized, '0');
     assert.equal((await wallet.broker(secondBroker)).record.debt_total, '100000000', 'Unimpairment cannot forgive principal');
-    await submit(actors.broker, await wallet.prepareSettlement(firstBroker, '150000000'));
+    await submit(actors.broker, await wallet.prepareSettlement(firstBroker, '100000000'));
     await submit(actors.borrower, await wallet.prepareRepayment(actors.borrower.accountId, recoverableLoan, 'Full'));
     await submit(actors.broker, await wallet.prepareMergeBroker(secondBroker));
     await submit(actors.broker, await wallet.prepareSettlement(secondBroker, '110000000'));

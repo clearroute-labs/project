@@ -7,12 +7,14 @@ export interface LedgerKey { key_id: string; public_key: number[]; authorization
 export interface LedgerAsset { token_account: string; network_id: string; crypto_profile_hash: number[]; issuer_key: LedgerKey; token_auditor_key: LedgerKey; frozen: boolean }
 export interface LedgerHolder {
   owner: string; key_id: string; encryption_public_key: number[]; spending_version: string; authorization_epoch: string;
+  recovery_start_sequence?: string;
   spending_ciphertext: number[]; inbox_ciphertext: number[]; issuer_balance_ciphertext: number[]; auditor_balance_ciphertext: number[];
 }
 export interface LedgerBroker {
   broker_id: string; owner: string; vault_id: string; encryption_key_id: string; encryption_public_key: number[];
   spending_version: string; accounting_version: string; risk_version: string; book_version: string; accounting_pending: boolean;
   authorization_epoch: string; last_settlement_at: string;
+  reconciliation_checkpoint_id: string | null;
   spending_ciphertext: number[]; inbox_ciphertext: number[]; issuer_balance_ciphertext: number[]; auditor_balance_ciphertext: number[];
   active_principal_ciphertext: number[]; impaired_principal_ciphertext: number[];
   debt_total: string; impairment_provision: string; loan_book_root: number[];
@@ -93,9 +95,10 @@ export class LedgerWallet {
     return { record, key, snapshot: state, ...await this.recoverBalance(state, `broker:${brokerId}`, key, record, signal) };
   }
 
-  private async recoverBalance(snapshot: LedgerSnapshot, subject: string, key: KeyReference, record: { spending_ciphertext: number[]; inbox_ciphertext: number[] }, signal?: AbortSignal): Promise<{ spending: string; inbox: string }> {
+  private async recoverBalance(snapshot: LedgerSnapshot, subject: string, key: KeyReference, record: { spending_ciphertext: number[]; inbox_ciphertext: number[]; recovery_start_sequence?: string }, signal?: AbortSignal): Promise<{ spending: string; inbox: string }> {
     const last = await this.historyEnd(snapshot, subject, signal);
-    return this.recovery.balance({ key, lastSequence: last, spending: decodeWire(record.spending_ciphertext), inbox: decodeWire(record.inbox_ciphertext) }, this.balanceEntries(snapshot, subject, key, signal), signal);
+    const startSequence = record.recovery_start_sequence ?? '0';
+    return this.recovery.balance({ key, lastSequence: last, startSequence, spending: decodeWire(record.spending_ciphertext), inbox: decodeWire(record.inbox_ciphertext) }, this.balanceEntries(snapshot, subject, key, signal, startSequence), signal);
   }
 
   async loan(loanId: string, key: KeyReference, snapshot?: LedgerSnapshot, signal?: AbortSignal): Promise<{ record: LedgerLoan; amounts: RecoveredLoan; snapshot: LedgerSnapshot }> {
@@ -116,8 +119,8 @@ export class LedgerWallet {
     return this.view<HistoryPage>(snapshot.block, 'list_recovery_history', { subject_key: subject, cursor: '18446744073709551615', limit: 1 }, signal).then(page => page.end_cursor);
   }
 
-  private async *history(snapshot: LedgerSnapshot, subject: string, signal?: AbortSignal): AsyncGenerator<HistoryRecord> {
-    let cursor = '0';
+  private async *history(snapshot: LedgerSnapshot, subject: string, signal?: AbortSignal, startSequence = '0'): AsyncGenerator<HistoryRecord> {
+    let cursor = startSequence;
     for (;;) {
       const page = await this.view<HistoryPage>(snapshot.block, 'list_recovery_history', { subject_key: subject, cursor, limit: 32 }, signal);
       for (const record of page.records) {
@@ -130,8 +133,8 @@ export class LedgerWallet {
     }
   }
 
-  private async *balanceEntries(snapshot: LedgerSnapshot, subject: string, key: KeyReference, signal?: AbortSignal): AsyncGenerator<BalanceHistoryEntry> {
-    for await (const record of this.history(snapshot, subject, signal)) {
+  private async *balanceEntries(snapshot: LedgerSnapshot, subject: string, key: KeyReference, signal?: AbortSignal, startSequence = '0'): AsyncGenerator<BalanceHistoryEntry> {
+    for await (const record of this.history(snapshot, subject, signal, startSequence)) {
       const common = { sequence: record.subject_sequence, keyId: key.keyId };
       if (record.operation === 'merge-holder' || record.operation === 'merge-broker') { yield { ...common, change: { operation: 'merge' } }; continue; }
       if (record.operation === 'manage-loan' || record.operation === 'reconcile-credit') { yield { ...common, change: { operation: 'noop' } }; continue; }
@@ -212,10 +215,22 @@ export class LedgerWallet {
 
   async prepareHolderRegistration(accountId: string, keyId: string, signal?: AbortSignal): Promise<PreparedCall> {
     const snapshot = await this.snapshot(signal), key: KeyReference = { role: 'holder', subjectId: accountId, keyId };
+    const existing = await this.view<LedgerHolder | null>(snapshot.block, 'get_holder', { owner: accountId }, signal);
+    const zeroProofs: ReturnType<typeof proofArguments>[] = [];
+    if (existing) {
+      if (BigInt(keyId) <= BigInt(existing.key_id)) throw new Error('Key rotation requires a newer key identifier');
+      const old = await this.holder(accountId, snapshot, signal);
+      if (old.spending !== '0' || old.inbox !== '0') throw new Error('Empty the confidential balance before rotating its key');
+      const proof = await this.proofs.balance(await this.context(snapshot, { operation: 'holder-zero-total', account_id: accountId }, signal), {
+        key: old.key, version: existing.spending_version, amount: '0',
+        ciphertext: await this.proofs.combine('add', decodeWire(existing.spending_ciphertext), decodeWire(existing.inbox_ciphertext)),
+      }, true);
+      zeroProofs.push(proofArguments(proof));
+    }
     const publicKey = await this.keys.generate(key);
     const context = await this.context(snapshot, { operation: 'register-holder', primary_id: keyId, account_id: accountId }, signal);
     const proof = await this.proofs.possession(context, key);
-    return this.prepared(snapshot, 'register_holder', { args: { key_id: keyId, encryption_public_key: jsonBytes(publicKey), public_key: jsonBytes(publicKey), proof_of_possession: proofArguments(proof), authorization_signature: [] } }, proof);
+    return this.prepared(snapshot, 'register_holder', { args: { key_id: keyId, encryption_public_key: jsonBytes(publicKey), public_key: jsonBytes(publicKey), proof_of_possession: proofArguments(proof), authorization_signature: [], zero_proofs: zeroProofs } }, proof);
   }
 
   async prepareBrokerCreation(owner: string, vaultId: string, keyId: string, debtMaximum: string, signal?: AbortSignal): Promise<PreparedCall & { brokerId: string }> {
@@ -342,7 +357,9 @@ export class LedgerWallet {
     const vault = await this.view<LedgerVault | null>(snapshot.block, 'get_vault', { vault_id: broker.vault_id }, signal);
     if (!vault) throw new Error('Broker vault is unavailable');
     const book = await this.brokerBook(balance, signal);
-    const context = await this.context(snapshot, { operation: 'reconcile-credit', broker_id: broker.broker_id, checkpoint_id: checkpointId }, signal);
+    const context = await this.context(snapshot, settlement && checkpointId === '0'
+      ? { operation: 'settle-reconcile', broker_id: broker.broker_id, amount: settlement.amount }
+      : { operation: 'reconcile-credit', broker_id: broker.broker_id, checkpoint_id: checkpointId }, signal);
     let cash = BigInt(balance.spending) + BigInt(balance.inbox), debt = BigInt(broker.debt_total), total = BigInt(vault.assets_total);
     let spending = decodeWire<Ciphertext>(broker.spending_ciphertext), accountingVersion = broker.accounting_version;
     if (settlement) {
@@ -375,8 +392,9 @@ export class LedgerWallet {
     const balance = await this.broker(brokerId, undefined, signal), snapshot = balance.snapshot;
     const context = await this.context(snapshot, { operation: 'settle', broker_id: brokerId, amount }, signal);
     const proof = await this.proofs.conversion(context, this.spending(balance), amount, this.conversionReaders(snapshot, balance.key), 'Debit');
-    if (BigInt(balance.record.impairment_provision) > 0n && !checkpointId) throw new Error('Settlement requires a current reconciliation checkpoint');
-    const reconciliation = checkpointId ? (await this.reconciliation(balance, checkpointId, { amount, proof }, signal)).input : null;
+    const reconciliationId = checkpointId ?? (BigInt(balance.record.impairment_provision) > 0n || balance.record.accounting_pending
+      ? balance.record.reconciliation_checkpoint_id ?? '0' : undefined);
+    const reconciliation = reconciliationId !== undefined ? (await this.reconciliation(balance, reconciliationId, { amount, proof }, signal)).input : null;
     return this.prepared(snapshot, 'settle', { args: { broker_id: brokerId, amount, expected_spending_version: balance.record.spending_version,
       expected_accounting_version: balance.record.accounting_version, reconciliation, proof: proofArguments(proof) } }, proof);
   }
