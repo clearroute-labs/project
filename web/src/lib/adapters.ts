@@ -61,6 +61,7 @@ class UnavailableProtocolClient implements ProtocolClient {
     throw unavailable('The NEAR client adapter is not connected. Configure the deployment and wallet adapter first.')
   }
 
+  getTransactionStatus(_input: { transactionHash: string; signerId: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   getAssetProfile(): Promise<never> { return Promise.reject(this.fail()) }
   storageBalanceOf(_accountId: string): Promise<string> { return Promise.reject(this.fail()) }
   storageDeposit(_input: { accountId: string; deposit: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }

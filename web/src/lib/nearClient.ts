@@ -19,6 +19,7 @@ import type {
   WalletAdapter,
 } from './types'
 import { ProtocolError } from './types'
+import { installPendingStatusReader, isClientTransactionError, toProtocolError } from './actionState'
 import { ContractClient, NearRpc, type FinalizedBlock, type WalletAdapter as RpcWalletAdapter } from '@confidential-lending/client'
 
 /**
@@ -32,10 +33,13 @@ export interface NearContractTransport {
   finalizedBlock?(signal?: AbortSignal): Promise<FinalizedBlock>
   viewAt?<T>(block: FinalizedBlock, method: string, args?: Record<string, unknown>, signal?: AbortSignal): Promise<T>
   call(method: string, args: Record<string, unknown>, options?: { deposit?: string; gas?: string; receiverId?: string; signal?: AbortSignal }): Promise<NearCallResult | undefined>
+  /** Read-only status lookup for a transaction whose final outcome was not observed. */
+  transactionStatus?(transactionHash: string, signerId: string, signal?: AbortSignal): Promise<NearCallResult | undefined>
 }
 
 export interface NearCallResult {
   transactionHash?: string
+  signerId?: string
   operationId?: string
   returnValue?: string
   finalized: boolean
@@ -493,6 +497,22 @@ export class NearProtocolClient implements ProtocolClient {
     this.config = config
   }
 
+  async getTransactionStatus(input: { transactionHash: string; signerId: string }): Promise<ActionReceipt> {
+    if (!this.transport.transactionStatus) {
+      throw new ProtocolError({ category: 'ADAPTER_UNAVAILABLE', message: 'The read-only transaction status endpoint is not available.', retryable: true })
+    }
+    const result = await this.transport.transactionStatus(input.transactionHash, input.signerId)
+    if (!result) return { operationId: input.transactionHash, transactionHash: input.transactionHash, signerId: input.signerId, status: 'pending', finalized: false }
+    return {
+      operationId: result.operationId || input.transactionHash,
+      ...(result.transactionHash ? { transactionHash: result.transactionHash } : { transactionHash: input.transactionHash }),
+      ...(result.signerId ? { signerId: result.signerId } : { signerId: input.signerId }),
+      ...(result.returnValue ? { returnValue: result.returnValue } : {}),
+      status: result.status,
+      finalized: result.finalized,
+    }
+  }
+
   async getAssetProfile(): Promise<AssetProfile> {
     return mapAsset(await this.transport.view<RawAssetProfile>('get_asset_profile'))
   }
@@ -691,12 +711,19 @@ export class NearProtocolClient implements ProtocolClient {
   }
 
   private async callWithOptions(method: string, args: Record<string, unknown>, options?: { deposit?: string; gas?: string; receiverId?: string }): Promise<ActionReceipt> {
-    const result = await this.transport.call(method, args, options)
+    let result: NearCallResult | undefined
+    try {
+      result = await this.transport.call(method, args, options)
+    } catch (error) {
+      if (isClientTransactionError(error)) throw toProtocolError(error)
+      throw error
+    }
     if (!result) return { operationId: `${method}:${Date.now()}`, status: 'pending', finalized: false }
     return {
       operationId: result.operationId || `${method}:${result.transactionHash || Date.now()}`,
-      transactionHash: result.transactionHash,
-      returnValue: result.returnValue,
+      ...(result.transactionHash ? { transactionHash: result.transactionHash } : {}),
+      ...(result.signerId ? { signerId: result.signerId } : {}),
+      ...(result.returnValue ? { returnValue: result.returnValue } : {}),
       status: result.status,
       finalized: result.finalized,
     }
@@ -922,9 +949,17 @@ export function createRpcProtocolClient(config: DeploymentConfig, session: NearW
     viewAt: (block, method, args, signal) => rpc.viewAt(block, config.coreAccountId, method, args as never, signal),
     call: async (method, args, options) => {
       const outcome = await contract.call(signer, method, args as never, options)
-      if (!outcome) return { status: 'pending', finalized: false }
-      return { transactionHash: outcome.transaction.hash, operationId: outcome.transaction.hash, returnValue: decodeMethodReturn('SuccessValue' in outcome.status ? outcome.status.SuccessValue : undefined), status: 'succeeded', finalized: true }
+      if (!outcome) return { status: 'pending', finalized: false, signerId: session.accountId }
+      return { transactionHash: outcome.transaction.hash, signerId: outcome.transaction.signer_id, operationId: outcome.transaction.hash, returnValue: decodeMethodReturn('SuccessValue' in outcome.status ? outcome.status.SuccessValue : undefined), status: 'succeeded', finalized: true }
+    },
+    transactionStatus: async (transactionHash, signerId, signal) => {
+      const outcome = await rpc.transactionStatus(transactionHash, signerId, signal)
+      if ('Failure' in outcome.status) return { transactionHash: outcome.transaction.hash, signerId: outcome.transaction.signer_id, operationId: outcome.transaction.hash, status: 'failed', finalized: true }
+      if ('SuccessValue' in outcome.status) return { transactionHash: outcome.transaction.hash, signerId: outcome.transaction.signer_id, operationId: outcome.transaction.hash, returnValue: decodeMethodReturn(outcome.status.SuccessValue), status: 'succeeded', finalized: true }
+      return { transactionHash: outcome.transaction.hash, signerId: outcome.transaction.signer_id, operationId: outcome.transaction.hash, status: 'unknown', finalized: false }
     },
   }
-  return { protocol: new NearProtocolClient(transport, config), wallet: createWalletAdapter(session) }
+  const protocol = new NearProtocolClient(transport, config)
+  installPendingStatusReader((pending) => protocol.getTransactionStatus({ transactionHash: pending.transactionHash!, signerId: pending.signerId! }))
+  return { protocol, wallet: createWalletAdapter(session) }
 }

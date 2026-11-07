@@ -3,7 +3,8 @@ import { NearProtocolClient, type NearContractTransport } from '../src/lib/nearC
 import { createBrowserAdapters } from '../src/lib/adapters'
 import { createRpcProtocolClient, type NearWalletSession } from '../src/lib/nearClient'
 import { NearWalletSelectorSession } from '../src/lib/nearWallet'
-import type { DeploymentConfig, PreparedProof } from '../src/lib/types'
+import { ProtocolError, type DeploymentConfig, type PreparedProof } from '../src/lib/types'
+import { TransactionFailure } from '@confidential-lending/client'
 
 const config: DeploymentConfig = {
   networkId: 'testnet',
@@ -37,6 +38,31 @@ const proof: PreparedProof = {
 }
 
 describe('real Core client mapping', () => {
+  it('maps the read-only finalized transaction status into an action receipt', async () => {
+    const hash = 'A'.repeat(44)
+    const transport: NearContractTransport = {
+      view: async () => { throw new Error('not used') },
+      call: async () => { throw new Error('not used') },
+      transactionStatus: async (transactionHash, signerId) => ({ transactionHash, signerId, operationId: transactionHash, returnValue: '42', status: 'succeeded', finalized: true }),
+    }
+    await expect(new NearProtocolClient(transport, config).getTransactionStatus({ transactionHash: hash, signerId: 'alice.testnet' })).resolves.toEqual({ operationId: hash, transactionHash: hash, signerId: 'alice.testnet', returnValue: '42', status: 'succeeded', finalized: true })
+  })
+
+  it('normalizes a real client transaction failure before it reaches action callers', async () => {
+    const hash = 'A'.repeat(44)
+    const failure = new TransactionFailure({
+      status: { Failure: { ActionError: { kind: { FunctionCallError: { ExecutionError: 'STALE_STATE' } } } } },
+      transaction: { hash, signer_id: 'alice.testnet', receiver_id: 'core.testnet' },
+      transaction_outcome: { id: 'B'.repeat(44), outcome: { executor_id: 'core.testnet', logs: [], status: {} } },
+      receipts_outcome: [],
+    } as ConstructorParameters<typeof TransactionFailure>[0])
+    const transport: NearContractTransport = {
+      view: async () => { throw new Error('not used') },
+      call: async () => { throw failure },
+    }
+    await expect(new NearProtocolClient(transport, config).storageDeposit({ accountId: 'alice.testnet', deposit: '1' })).rejects.toMatchObject({ details: { category: 'STALE_STATE', transactionHash: hash, signerId: 'alice.testnet' } } as Partial<ProtocolError>)
+  })
+
   it('maps proof-bound private calls without adding plaintext amounts', async () => {
     let captured: { method: string; args: Record<string, unknown> } | undefined
     const transport: NearContractTransport = {

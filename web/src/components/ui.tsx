@@ -78,7 +78,7 @@ export function ActionFeedback({ state }: { state: ActionState }) {
   if (state.phase === 'failed') {
     return (
       <div className="action-feedback action-failed" role="alert">
-        <div><strong>{state.label || 'Action'} could not be completed.</strong><p>{state.error?.details.message || 'No state was changed.'}</p></div>
+        <div><strong>{state.label || 'Action'} could not be completed.</strong><p>{state.error?.details.message || 'No state was changed.'}</p>{state.error?.details.transactionHash ? <p>Transaction <Mono>{state.error.details.transactionHash}</Mono></p> : null}</div>
         {state.error?.details.category ? <code>{state.error.details.category}</code> : null}
       </div>
     )
@@ -96,7 +96,17 @@ export function ActionFeedback({ state }: { state: ActionState }) {
     submitted: 'Submitted; waiting for finality…',
     pending: 'Submitted; the operation remains pending on-chain.',
   }
-  return <div className="action-feedback action-pending" role="status"><span className="button-spinner" aria-hidden="true" /><div><strong>{state.label || 'Action'}</strong><p>{copy[state.phase] || 'Working…'} Status updates after the network confirms the operation.</p></div></div>
+  return (
+    <div className="action-feedback action-pending" role="status">
+      <span className="button-spinner" aria-hidden="true" />
+      <div>
+        <strong>{state.label || 'Action'}</strong>
+        <p>{state.error?.details.message || copy[state.phase] || 'Working…'} {state.phase === 'pending' ? 'No second submission will be started until this transaction is resolved.' : 'Status updates after the network confirms the operation.'}</p>
+        {state.pending?.transactionHash ? <p>Transaction <Mono>{state.pending.transactionHash}</Mono></p> : null}
+        {state.resolvePending ? <Button variant="secondary" busy={state.pendingStatusChecking} onClick={() => void state.resolvePending?.()}>Check transaction status</Button> : null}
+      </div>
+    </div>
+  )
 }
 
 export function Notice({ tone = 'info', title, children }: { tone?: 'info' | 'warning' | 'danger' | 'success'; title?: string; children: ReactNode }) {

@@ -27,6 +27,8 @@ export interface DeploymentConfig {
 export interface ActionReceipt {
   operationId: string
   transactionHash?: string
+  /** Account that signed the transaction; public metadata used for status reads. */
+  signerId?: string
   /** JSON-decoded method return value when Core returns one (for example a checkpoint ID). */
   returnValue?: string
   status: 'submitted' | 'pending' | 'succeeded' | 'failed' | 'unknown'
@@ -55,12 +57,19 @@ export interface ProtocolErrorShape {
     | 'SLIPPAGE'
     | 'OPERATION_PENDING'
     | 'UNSUPPORTED_PROFILE'
+    | 'REPLAY'
+    | 'NOT_FOUND'
+    | 'STORAGE'
+    | 'GAS_EXCEEDED'
     | 'ADAPTER_UNAVAILABLE'
     | 'WALLET_REJECTED'
     | 'NETWORK_OFFLINE'
     | 'UNKNOWN'
   message: string
   retryable?: boolean
+  /** Public transaction metadata only; never include receipt logs or witnesses. */
+  transactionHash?: string
+  signerId?: string
 }
 
 export class ProtocolError extends Error {
@@ -480,6 +489,8 @@ export interface CryptoProvider {
 
 export interface ProtocolClient {
   readonly config: DeploymentConfig
+  /** Read-only finalized lookup for a previously submitted transaction. */
+  getTransactionStatus(input: { transactionHash: string; signerId: string }): Promise<ActionReceipt>
   getAssetProfile(): Promise<AssetProfile>
   storageBalanceOf(accountId: string): Promise<string>
   storageDeposit(input: { accountId: string; deposit: string }): Promise<ActionReceipt>
