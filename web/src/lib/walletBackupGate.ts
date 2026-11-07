@@ -14,6 +14,11 @@ export function hasEncryptedWalletBackup(scope: string | undefined): boolean {
   return Boolean(scope && savedScopes.has(scope))
 }
 
+export function subscribeEncryptedWalletBackup(listener: () => void): () => void {
+  listeners.add(listener)
+  return () => { listeners.delete(listener) }
+}
+
 /** Mark only after the user confirms that the encrypted file was saved. */
 export function markEncryptedWalletBackupSaved(scope: string | undefined): void {
   if (!scope) return

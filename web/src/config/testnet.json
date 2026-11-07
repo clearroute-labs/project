@@ -1,0 +1,11 @@
+{
+  "networkId": "testnet",
+  "coreAccountId": "clearroute-core-312a0a7a.testnet",
+  "tokenAccountId": "clearroute-token-312a0a7a.testnet",
+  "rpcUrl": "https://test.rpc.fastnear.com",
+  "cryptoProfileHash": "a4827cac06c9581120a6b10555397b499568b6ae89fc3d363816167648c80b3d",
+  "cryptoArtifactHash": "b2a94cc9d734cc7df5b1f060a7191dc36b62b8748df106b41a98b003f34ab41b",
+  "cryptoManifestUrl": "/crypto/manifest.json",
+  "assetDecimals": 6,
+  "assetSymbol": "TEST"
+}

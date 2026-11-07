@@ -9,6 +9,11 @@
 /.env
 /.env.*
 !/.env.example
+/web/.env.local
+/web/.env.*.local
+/web/public/crypto/
+/web/.crypto-staging-*/
+/web/.crypto-previous/
 *.log
 *.tsbuildinfo
 .DS_Store

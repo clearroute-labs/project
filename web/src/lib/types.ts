@@ -25,6 +25,7 @@ export interface DeploymentConfig {
   privyClientId?: string
   assetDecimals: number
   assetSymbol: string
+  testnetFaucet?: boolean
 }
 
 export interface ActionReceipt {
@@ -413,15 +414,9 @@ export interface WalletAdapter {
   readonly accountId?: string
   readonly networkId?: NetworkId
   readonly error?: string
-  /**
-   * Local sandbox-only credential import. Implementations must keep the
-   * secret in memory and must never persist or transmit the credential file.
-   */
-  readonly credentialImport?: { label: string; accept: string }
   connect(): Promise<void>
   disconnect(): Promise<void>
   subscribe(listener: () => void): () => void
-  importCredentialFile?(file: File): Promise<void>
 }
 
 export interface CryptoProviderStatus {
@@ -431,6 +426,7 @@ export interface CryptoProviderStatus {
   wasmVersion?: string
   /** Counts are readiness metadata; private material remains in the worker. */
   walletKeyCount?: number
+  authorizationKeyCount?: number
   draftCount?: number
   message: string
 }
@@ -439,6 +435,8 @@ export interface CryptoProvider {
   getStatus(): Promise<CryptoProviderStatus>
   exportWalletMaterial(): Promise<Record<string, unknown>>
   importWalletMaterial(material: Record<string, unknown>): Promise<void>
+  /** Clear decrypted keys and drafts while keeping the connected NEAR account. */
+  lockWallet?(): Promise<void>
   createKeyRegistration(): Promise<KeyRegistration>
   createAuthorizationKeyRegistration(): Promise<AuthorizationKeyRegistration>
   prepareAgreement(input: {
@@ -497,6 +495,9 @@ export interface ProtocolClient {
   getAssetProfile(): Promise<AssetProfile>
   storageBalanceOf(accountId: string): Promise<string>
   storageDeposit(input: { accountId: string; deposit: string }): Promise<ActionReceipt>
+  testTokenStatus?(accountId: string): Promise<{ balance: string; storageBalance: string; claimed: boolean }>
+  registerTestTokenStorage?(): Promise<ActionReceipt>
+  claimTestTokens?(): Promise<ActionReceipt>
   getDashboard(accountId: string): Promise<DashboardSnapshot>
   getPrivateAccount(accountId: string): Promise<PrivateAccountView>
   getHolderEncryptionKey(accountId: string): Promise<HolderKeyView>

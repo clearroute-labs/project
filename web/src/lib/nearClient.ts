@@ -28,6 +28,7 @@ import { ContractClient, NearRpc, type FinalizedBlock, type FinalOutcome, type W
  * only maps typed product actions to the Core API and never manufactures data.
  */
 export interface NearContractTransport {
+  tokenView?<T>(method: string, args?: Record<string, unknown>): Promise<T>
   view<T>(method: string, args?: Record<string, unknown>, signal?: AbortSignal): Promise<T>
   /** Optional pinned view support used for multi-read consistency checks. */
   finalizedBlock?(signal?: AbortSignal): Promise<FinalizedBlock>
@@ -542,6 +543,32 @@ export class NearProtocolClient implements ProtocolClient {
     return this.callWithOptions('storage_deposit', { account_id: input.accountId }, { deposit: input.deposit, gas: '30000000000000' })
   }
 
+  async testTokenStatus(accountId: string): Promise<{ balance: string; storageBalance: string; claimed: boolean }> {
+    this.requireTestnetFaucet()
+    if (!this.transport.tokenView) throw new Error('Test-token reads are unavailable.')
+    const [balance, storage, claimed] = await Promise.all([
+      this.transport.tokenView<string>('ft_balance_of', { account_id: accountId }),
+      this.transport.tokenView<{ total: string } | null>('storage_balance_of', { account_id: accountId }),
+      this.transport.tokenView<boolean>('faucet_has_claimed', { account_id: accountId }),
+    ])
+    if (typeof claimed !== 'boolean') throw new Error('The faucet returned an invalid claim status.')
+    return { balance: decimal(balance), storageBalance: storage ? decimal(storage.total) : '0', claimed }
+  }
+
+  registerTestTokenStorage(): Promise<ActionReceipt> {
+    this.requireTestnetFaucet()
+    return this.callWithOptions('storage_deposit', { registration_only: true }, { receiverId: this.config.tokenAccountId, deposit: '10000000000000000000000', gas: '30000000000000' })
+  }
+
+  claimTestTokens(): Promise<ActionReceipt> {
+    this.requireTestnetFaucet()
+    return this.callWithOptions('faucet_claim', {}, { receiverId: this.config.tokenAccountId, deposit: '0', gas: '30000000000000' })
+  }
+
+  private requireTestnetFaucet(): void {
+    if (this.config.networkId !== 'testnet' || !this.config.testnetFaucet) throw new Error('The test-token faucet is unavailable for this deployment.')
+  }
+
   async getDashboard(accountId: string): Promise<DashboardSnapshot> {
     const [asset, counters] = await Promise.all([this.getAssetProfile(), readCounters(this.transport)])
     const [rawVaults, rawBrokers, rawClaims, rawPayouts] = await Promise.all([
@@ -960,6 +987,7 @@ export function createRpcProtocolClient(config: DeploymentConfig, session: NearW
     assetSymbol: config.assetSymbol,
   })
   const transport: NearContractTransport = {
+    tokenView: (method, args) => rpc.view(config.tokenAccountId, method, args as never),
     view: (method, args, signal) => contract.view(method, args as never, signal),
     finalizedBlock: (signal) => rpc.finalizedBlock(signal),
     viewAt: (block, method, args, signal) => rpc.viewAt(block, config.coreAccountId, method, args as never, signal),

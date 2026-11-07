@@ -7,9 +7,11 @@ import { clearEncryptedWalletBackup, markEncryptedWalletBackupSaved, useEncrypte
 import type { AuthorizationKeyRegistration, EncryptedWalletBackup, KeyRegistration } from '../lib/types'
 import { parseNearAmount } from '../lib/money'
 import { PageHeader } from './shared'
+import { DeviceKeysCard } from '../components/DeviceKeysCard'
+import { TestnetFundsCard } from '../components/TestnetFundsCard'
 
 export function SecurityPage() {
-  const { adapters, accountId, cryptoStatus, snapshot } = useAppContext()
+  const { adapters, accountId, cryptoStatus, snapshot, deviceKeys } = useAppContext()
   const backupScope = walletBackupScope(adapters.protocol.config, accountId)
   const backupSaved = useEncryptedWalletBackup(backupScope)
   const [registration, setRegistration] = useState<KeyRegistration | null>(null)
@@ -33,6 +35,7 @@ export function SecurityPage() {
   const [storageDeposit, setStorageDeposit] = useState('0.1')
   const [disconnectError, setDisconnectError] = useState('')
   const fileInput = useRef<HTMLInputElement>(null)
+  const backupMaterialVersion = useRef<number>()
   const keyAction = useAction()
   const authorizationAction = useAction()
   const storageAction = useAction()
@@ -94,15 +97,23 @@ export function SecurityPage() {
     event.preventDefault(); setBackupError(''); setBackupMessage('')
     if (exportPassphrase !== exportConfirm) return setBackupError('Passphrases do not match.')
     try {
+      const materialVersion = deviceKeys.getSnapshot().materialVersion
       const material = await adapters.crypto.exportWalletMaterial()
       const backup = await encryptWalletBackup(material, exportPassphrase)
+      if (deviceKeys.getSnapshot().materialVersion !== materialVersion) throw new Error('Your keys changed while the recovery file was being encrypted. Export the current keys again.')
       downloadWalletBackup(backup)
+      backupMaterialVersion.current = materialVersion
       setBackupConfirmationPending(true)
       setBackupMessage('Encrypted backup downloaded. Confirm that you saved it before registering any newly generated key.')
       setExportPassphrase(''); setExportConfirm('')
     } catch (caught) { setBackupError(caught instanceof Error ? caught.message : 'Backup export failed.') }
   }
   const confirmBackupSaved = () => {
+    if (backupMaterialVersion.current !== deviceKeys.getSnapshot().materialVersion) {
+      setBackupConfirmationPending(false)
+      setBackupError('Your private keys or agreement drafts changed. Export a new recovery file before confirming it.')
+      return
+    }
     markEncryptedWalletBackupSaved(backupScope)
     setBackupConfirmationPending(false)
     setBackupMessage('Backup saved confirmation recorded for this account and deployment. Newly generated keys may now be registered.')
@@ -113,6 +124,7 @@ export function SecurityPage() {
     try {
       const material = await decryptWalletBackup(selectedBackup, importPassphrase)
       await adapters.crypto.importWalletMaterial(material)
+      backupMaterialVersion.current = deviceKeys.getSnapshot().materialVersion
       setBackupConfirmationPending(true)
       setBackupMessage('Wallet material restored into the browser crypto worker. Confirm that this encrypted backup is saved before registering keys or funding a broker proposal.')
       setImportPassphrase(''); setSelectedBackup(null)
@@ -154,10 +166,11 @@ export function SecurityPage() {
   useEffect(() => { void refreshStorage() }, [accountId])
   useEffect(() => () => { setExportPassphrase(''); setExportConfirm(''); setImportPassphrase('') }, [])
   return <>
-    <PageHeader eyebrow="Wallet & security" title="Keep the keys close" description="NEAR wallet authorization and browser-local encryption are separate. Backups are encrypted files, never plaintext local storage." action={accountId ? <Button variant="secondary" onClick={() => { void adapters.wallet.disconnect().catch(() => setDisconnectError('The wallet could not be fully signed out. Close its session before reconnecting.')) }}>Disconnect wallet</Button> : undefined} />
+    <PageHeader eyebrow="Wallet & security" title="Keep the keys close" description="Connect your NEAR wallet for transactions. Use a passkey for everyday access to confidential keys, and keep an encrypted recovery file." action={accountId ? <Button variant="secondary" onClick={() => { void adapters.wallet.disconnect().catch(() => setDisconnectError('The wallet could not be fully signed out. Close its session before reconnecting.')) }}>Disconnect wallet</Button> : undefined} />
     {accountId ? <p>Connected account: <Mono>{accountId}</Mono></p> : null}
     {disconnectError || adapters.wallet.error ? <Notice tone="danger">{disconnectError || adapters.wallet.error}</Notice> : null}
-    <Notice tone="warning" title="This is not a recovery service">If you lose every encrypted backup and local key, an administrator cannot manufacture a private balance or decrypt an agreement. Verify a restore before relying on it.</Notice>
+    <DeviceKeysCard />
+    <TestnetFundsCard />
     <div className="security-grid"><Card><SectionHeading eyebrow="Wallet security" title="Private session" action={<StatusBadge tone={cryptoStatus?.available ? 'success' : 'warning'}>{cryptoStatus?.available ? 'Ready' : 'Unavailable'}</StatusBadge>} /><div className="security-detail"><span>Status</span><strong>{cryptoStatus?.message || 'Security status will appear after a connected read.'}</strong></div><div className="security-detail"><span>Security profile</span><Mono>{cryptoStatus?.profileHash || adapters.protocol.config.cryptoProfileHash || 'Not configured'}</Mono></div><div className="security-detail"><span>Runtime version</span><Mono>{cryptoStatus?.wasmVersion || 'Not loaded'}</Mono></div><div className="security-detail"><span>Encrypted backup</span><StatusBadge tone={backupSaved ? 'success' : 'warning'}>{backupSaved ? 'Saved confirmation' : 'Required before registration'}</StatusBadge></div><p className="field-hint">Private actions stay locked until the security profile is ready and the current wallet has an encrypted backup.</p></Card><Card><SectionHeading eyebrow="On-chain registration" title="Encryption key" action={<StatusBadge tone={holderRegistered ? 'success' : registration ? 'warning' : 'neutral'}>{holderRegistered ? 'Registered' : registration ? 'Backup required' : 'No new key'}</StatusBadge>} /><p className="muted">Generate a nonzero encryption key, export and confirm its encrypted backup, then register the proof of possession. Private key material never enters RPC.</p>{registration ? <div className="digest-panel"><span>Key ID</span><Mono>{registration.encryptionKeyId}</Mono><span>Public key</span><Mono>{registration.encryptionPublicKey}</Mono></div> : null}<div className="review-actions"><Button variant="secondary" onClick={() => void generateKey()} disabled={!accountId || !cryptoStatus?.available} busy={keyGenerating}>Generate key</Button>{registration ? <Button onClick={() => void registerKey()} disabled={!backupSaved || holderRegistered} busy={['preparing', 'awaiting_wallet'].includes(keyAction.state.phase)}>Register key</Button> : null}</div><ActionFeedback state={keyAction.state} /></Card><Card><SectionHeading eyebrow="Proposal authorization" title="Register account key" action={<StatusBadge tone={authorizationRegistered ? 'success' : authorizationRegistration ? 'warning' : 'neutral'}>{authorizationRegistered ? 'Registered' : authorizationRegistration ? 'Backup required' : 'No new key'}</StatusBadge>} /><p className="muted">Generate the proposal authorization key, export and confirm its encrypted backup, then register it. This key is separate from encryption and never accepts a pasted signature.</p>{authorizationRegistration ? <div className="digest-panel"><span>Key ID</span><Mono>{authorizationRegistration.keyId}</Mono><span>Public key</span><Mono>{authorizationRegistration.publicKey}</Mono></div> : null}<div className="review-actions"><Button variant="secondary" onClick={() => void generateAuthorizationKey()} disabled={!accountId || !cryptoStatus?.available} busy={authorizationGenerating}>Generate auth key</Button>{authorizationRegistration ? <Button onClick={() => void registerAuthorizationKey()} disabled={!backupSaved || authorizationRegistered} busy={['preparing', 'awaiting_wallet'].includes(authorizationAction.state.phase)}>Register auth key</Button> : null}</div><ActionFeedback state={authorizationAction.state} /></Card></div>
     <StorageBudgetCard accountId={accountId} balance={storageBalance} error={storageError} deposit={storageDeposit} onDepositChange={setStorageDeposit} onRefresh={() => void refreshStorage()} action={storageAction} onDeposit={async () => {
       setStorageError('')

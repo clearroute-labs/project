@@ -26,6 +26,9 @@ export default defineConfig({
   server: {
     port: 5174,
     strictPort: false,
+    fs: {
+      deny: ['.env', '.env.*', '*.{crt,pem,key}', '**/.git/**', '**/.local/**', '**/.artifacts/**', '**/.worktrees/**', '**/.aws/**', '**/.ssh/**', '**/.codex/**', '**/.agents/**'],
+    },
   },
   build: {
     target: 'es2022',

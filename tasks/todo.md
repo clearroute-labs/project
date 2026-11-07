@@ -1,5 +1,21 @@
 # Confidential lending on NEAR
 
+## Current task: testnet app and easier key recovery
+
+- [x] Make the product connect to testnet by default, remove sandbox credential controls/signing from the production app, and keep financial sandbox verification in test fixtures.
+- [x] Update launch instructions and browser tests, then run the testnet app at the existing local URL.
+- [x] Deploy testnet Core/token contracts and serve the corresponding pinned public cryptographic artifacts; wire the product to the real deployment.
+- [x] Add passkey-backed same-browser unlock for confidential keys, retaining the encrypted recovery-file requirement and a fallback for unsupported authenticators.
+- [ ] Finish the verified change by updating the feature PR.
+
+### Review
+
+Implemented the real testnet default, self-service TEST faucet, and WebAuthn PRF-encrypted same-browser key storage with recovery files retained. Core `clearroute-core-312a0a7a.testnet` has eight activated verifier families; token `clearroute-token-312a0a7a.testnet` accepts wallet storage registration and a one-time 1,000 TEST claim. Live checks finalized the faucet claim/replay rejection, a real holder-key proof, and a 100 TEST deposit creating public claim `1`. Exact transaction hashes and operator instructions are in [TESTNET.md](../docs/TESTNET.md). Private operator files remain ignored and owner-only; only manifest-allowlisted public artifacts are staged into the web app.
+
+Verification: 183 TypeScript tests, strict workspace typecheck, seven token Rust tests, contract WASM build/host checks, production web build, and the real-token custody regression pass. Chromium verifies PRF enrollment/encrypted autosave/reload/unlock, the app's recovery-file restore/save/lock/reconnect flow, desktop/mobile layout, live finalized testnet reads, pinned WASM and six ecosystem wallet choices. Vite denies access to private deployment directories. Testnet deployment and resumption are checked against the immutable Core configuration and exact archived WASM.
+
+The app is running at http://localhost:5175. Public artifacts are served from this app; no permanent external artifact host was requested or provisioned. Cross-device encrypted backup hosting is outside this change. Physical Touch ID/Face ID and real Privy social login remain untested; Privy still requires public app/client IDs. Development proving keys and operator account access remain explicitly documented testnet limitations.
+
 ## Current task: NEAR Connect and configurable Privy support
 
 User requested a feature branch and PR, then selected NEAR Connect to support Privy alongside ecosystem wallets. No Privy application exists yet; implement configurable support and explicitly document that live social login requires public deployment IDs.

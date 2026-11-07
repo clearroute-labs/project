@@ -220,7 +220,7 @@ async function makeKeyRegistration(current: WorkerState): Promise<KeyRegistratio
   return { encryptionPublicKey: publicKeyValue, encryptionKeyId, possessionProof: await prepared(current, proof), authorizationPublicKey: publicKeyValue, authorizationSignature: '' }
 }
 async function makeAuthorizationRegistration(current: WorkerState): Promise<AuthorizationKeyRegistration> {
-  requireSubject(current); const keyId = randomKeyId(); const pair = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']) as CryptoKeyPair; const exported = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey)); const publicKey = toHex(exported); current.authKeys.set(keyId, { privateKey: pair.privateKey, publicKey })
+  requireSubject(current); const keyId = randomKeyId(); const pair = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']) as CryptoKeyPair; const exported = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey)); const publicKey = toHex(exported); assertCurrentSubject(current); current.authKeys.set(keyId, { privateKey: pair.privateKey, publicKey })
   // Core's authorization-key registration is direct account authority. It
   // deliberately has no proof-of-possession field; never substitute a holder
   // encryption proof for this application-key registration.
@@ -485,34 +485,83 @@ async function restoreBackupMaterial(current: WorkerState, value: BackupMaterial
     if (existing && existing.publicKey !== entry.publicKey) throw new Error('Backup would replace a different authorization key')
     stagedAuthKeys.set(entry.keyId, { privateKey, publicKey: entry.publicKey.toLowerCase() })
   }
+  assertCurrentSubject(current)
   await current.keyring.importMaterial(value)
+  assertCurrentSubject(current)
   current.drafts.clear()
   for (const [id, draft] of value.drafts || []) current.drafts.set(id, draft)
   current.authKeys.clear()
   for (const [id, key] of stagedAuthKeys) current.authKeys.set(id, key)
 }
 
-async function initialize(configuration: WorkerConfiguration): Promise<void> {
-  if (state?.ready) return; if (!configuration.manifestUrl) throw new Error('Crypto manifest URL is not configured'); const manifestUrl = new URL(configuration.manifestUrl, self.location.href); const response = await fetch(manifestUrl.href, { credentials: 'omit', cache: 'no-store', redirect: 'error' }); if (!response.ok) throw new Error(`Crypto manifest returned HTTP ${response.status}`); const manifest = await response.json() as unknown; if (!manifest || typeof manifest !== 'object') throw new Error('Crypto manifest is invalid'); const baseUrl = configuration.baseUrl ? new URL(configuration.baseUrl, manifestUrl.href).href : new URL('.', manifestUrl.href).href; const runtime = new CryptoRuntime({ baseUrl, manifest: manifest as never, expected: { profileHash: configuration.expectedProfileHash, manifestHash: configuration.expectedManifestHash || '', networkId: configuration.networkId, coreAccountId: configuration.coreAccountId, funded: configuration.funded } }); await runtime.initialize(); const executor = { execute: <T>(method: string, params: unknown, options?: { artifactName?: string; signal?: AbortSignal }) => runtime.execute(method, params, options?.artifactName) as Promise<T> }; const keyring = new Keyring({ networkId: configuration.networkId, coreAccountId: configuration.coreAccountId, assetId: configuration.assetId, profileHash: configuration.expectedProfileHash }, executor); const proofs = new ProofBuilder(executor, keyring); const recovery = new HistoryRecovery(executor, keyring); let core: CoreWallet | undefined; let ledger: LedgerWallet | undefined; if (configuration.rpcUrl) { const rpc = new NearRpc(configuration.rpcUrl, { allowInsecureLocalhost: configuration.allowInsecureLocalhost, fetch: globalThis.fetch.bind(globalThis) }); core = CoreWallet.fromNearRpc(rpc, { networkId: configuration.networkId, coreAccountId: configuration.coreAccountId, assetId: configuration.assetId, profileHash: configuration.expectedProfileHash, manifestHash: configuration.expectedManifestHash }, { crypto: executor, keys: keyring, proofs, recovery }); ledger = new LedgerWallet(rpc, keyring, executor, configuration.expectedManifestHash || '') } state = { configuration, runtime, keyring, proofs, recovery, core, ledger, drafts: new Map(), authKeys: new Map(), subjectId: configuration.subjectId, ready: true }
+function subjectState(configuration: WorkerConfiguration, runtime: CryptoRuntime, subjectId?: string): WorkerState {
+  const executor = { execute: <T>(method: string, params: unknown, options?: { artifactName?: string; signal?: AbortSignal }) => runtime.execute(method, params, options?.artifactName) as Promise<T> }
+  const keyring = new Keyring({ networkId: configuration.networkId, coreAccountId: configuration.coreAccountId, assetId: configuration.assetId, profileHash: configuration.expectedProfileHash }, executor)
+  const proofs = new ProofBuilder(executor, keyring)
+  const recovery = new HistoryRecovery(executor, keyring)
+  let core: CoreWallet | undefined
+  let ledger: LedgerWallet | undefined
+  if (configuration.rpcUrl) {
+    const rpc = new NearRpc(configuration.rpcUrl, { allowInsecureLocalhost: configuration.allowInsecureLocalhost, fetch: globalThis.fetch.bind(globalThis) })
+    core = CoreWallet.fromNearRpc(rpc, { networkId: configuration.networkId, coreAccountId: configuration.coreAccountId, assetId: configuration.assetId, profileHash: configuration.expectedProfileHash, manifestHash: configuration.expectedManifestHash }, { crypto: executor, keys: keyring, proofs, recovery })
+    ledger = new LedgerWallet(rpc, keyring, executor, configuration.expectedManifestHash || '')
+  }
+  return { configuration, runtime, keyring, proofs, recovery, core, ledger, drafts: new Map(), authKeys: new Map(), subjectId, ready: true }
 }
+
+function clearSubject(current: WorkerState): void {
+  current.keyring.clear()
+  current.drafts.clear()
+  current.authKeys.clear()
+}
+
+function assertCurrentSubject(current: WorkerState): void {
+  if (state !== current) throw new Error('The confidential account session changed.')
+}
+
+function resetSubject(current: WorkerState, subjectId?: string): void {
+  clearSubject(current)
+  // In-flight work retains the old state object, so it cannot write an old
+  // account's keys or drafts into the new unlocked session.
+  state = subjectState(current.configuration, current.runtime, subjectId)
+}
+
+async function initialize(configuration: WorkerConfiguration): Promise<void> {
+  if (state?.ready) return
+  if (!configuration.manifestUrl) throw new Error('Crypto manifest URL is not configured')
+  const manifestUrl = new URL(configuration.manifestUrl, self.location.href)
+  const response = await fetch(manifestUrl.href, { credentials: 'omit', cache: 'no-store', redirect: 'error' })
+  if (!response.ok) throw new Error(`Crypto manifest returned HTTP ${response.status}`)
+  const manifest = await response.json() as unknown
+  if (!manifest || typeof manifest !== 'object') throw new Error('Crypto manifest is invalid')
+  const baseUrl = configuration.baseUrl ? new URL(configuration.baseUrl, manifestUrl.href).href : new URL('.', manifestUrl.href).href
+  const runtime = new CryptoRuntime({ baseUrl, manifest: manifest as never, expected: { profileHash: configuration.expectedProfileHash, manifestHash: configuration.expectedManifestHash || '', networkId: configuration.networkId, coreAccountId: configuration.coreAccountId, funded: configuration.funded } })
+  await runtime.initialize()
+  state = subjectState(configuration, runtime, configuration.subjectId)
+}
+
 async function handle(request: WorkerRequest): Promise<unknown> {
   if (request.method === 'initialize') { const configuration = request.payload as WorkerConfiguration; initializing ||= initialize(configuration); await initializing; return { available: true, profileHash: configuration.expectedProfileHash, artifactHash: configuration.expectedManifestHash, wasmVersion: 'wasm-bindings-v1', message: 'Secure account protection is ready.' } }
-  if (request.method === 'status') { if (!state?.ready) throw new Error('Secure account protection is not initialized'); return { available: true, profileHash: state.configuration.expectedProfileHash, artifactHash: state.configuration.expectedManifestHash, wasmVersion: 'wasm-bindings-v1', walletKeyCount: state.keyring.exportMaterial().keys.length, draftCount: state.drafts.size, message: 'Secure account protection is ready.' } }
+  if (request.method === 'status') { if (!state?.ready) throw new Error('Secure account protection is not initialized'); return { available: true, profileHash: state.configuration.expectedProfileHash, artifactHash: state.configuration.expectedManifestHash, wasmVersion: 'wasm-bindings-v1', walletKeyCount: state.keyring.exportMaterial().keys.length, draftCount: state.drafts.size, authorizationKeyCount: state.authKeys.size, message: 'Secure account protection is ready.' } }
   if (request.method === 'set_subject') {
     const current = requireState()
     const nextSubject = request.payload === undefined ? undefined : text(request.payload, 'subject account')
-    if (current.subjectId !== nextSubject) {
-      // Account changes must not retain a previous holder/broker key set or
-      // agreement randomness.  The user can export an encrypted backup before
-      // switching; the worker itself never carries secrets across identities.
-      current.keyring.clear()
-      current.drafts.clear()
-      current.authKeys.clear()
-    }
-    current.subjectId = nextSubject
+    if (current.subjectId !== nextSubject) resetSubject(current, nextSubject)
     return undefined
   }
-  const current = requireState(); switch (request.method) {
+  const current = requireState()
+  if (request.method === 'lock_wallet') { resetSubject(current, current.subjectId); return undefined }
+  try {
+    const result = await handleSubject(current, request)
+    assertCurrentSubject(current)
+    return result
+  } finally {
+    if (state !== current) clearSubject(current)
+  }
+}
+
+async function handleSubject(current: WorkerState, request: WorkerRequest): Promise<unknown> {
+  switch (request.method) {
     case 'export_wallet_material': return backupMaterial(current)
     case 'import_wallet_material': await restoreBackupMaterial(current, request.payload as BackupMaterial); return undefined
     case 'create_key_registration': return makeKeyRegistration(current)

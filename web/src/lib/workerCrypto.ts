@@ -94,8 +94,8 @@ export class WorkerCryptoProvider implements CryptoProvider {
   }
 
   /** Keep the worker's key references bound to the selected NEAR account. */
-  setSubject(accountId: string | undefined): void {
-    void this.ensureInitialized().then(() => this.call('set_subject', accountId)).catch(() => undefined)
+  setSubject(accountId: string | undefined): Promise<void> {
+    return this.ensureInitialized().then(() => this.call('set_subject', accountId))
   }
 
   async getStatus(): Promise<CryptoProviderStatus> {
@@ -113,6 +113,7 @@ export class WorkerCryptoProvider implements CryptoProvider {
 
   exportWalletMaterial(): Promise<Record<string, unknown>> { return this.ensureInitialized().then(() => this.call('export_wallet_material')) }
   importWalletMaterial(material: Record<string, unknown>): Promise<void> { return this.ensureInitialized().then(() => this.call('import_wallet_material', material)) }
+  lockWallet(): Promise<void> { return this.ensureInitialized().then(() => this.call('lock_wallet')) }
   createKeyRegistration(): Promise<KeyRegistration> { return this.ensureInitialized().then(() => this.call('create_key_registration')) }
   createAuthorizationKeyRegistration(): Promise<AuthorizationKeyRegistration> { return this.ensureInitialized().then(() => this.call('create_authorization_key_registration')) }
   prepareAgreement(input: { brokerId?: string; borrowerId?: string; publicKeys: { borrower: string; broker: string; issuer: string; tokenAuditor: string; loanAuditor: string }; principal: string; initialOwed: string; periodicPayment: string; paymentCount: number; maxPaymentCount: number }): Promise<AgreementDraft> { return this.ensureInitialized().then(() => this.call('prepare_agreement', input)) }

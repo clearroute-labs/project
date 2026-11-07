@@ -26,12 +26,11 @@ import {
   type WalletAdapter,
 } from './types'
 import { createRpcProtocolClient } from './nearClient'
-import { isSandboxCredentialDeployment, SandboxCredentialWallet } from './nearWallet'
 import { NearConnectWallet } from './nearConnectWallet'
 import { privyConfiguration, privyWalletManifest } from './privyConfig'
 import { createWorkerCryptoProvider } from './workerCrypto'
 
-import { deploymentConfigFromEnv } from './deploymentConfig'
+import { deploymentConfigFromEnv, hasProtocolDeployment } from './deploymentConfig'
 export { deploymentConfigFromEnv } from './deploymentConfig'
 
 function unavailable(message: string): ProtocolError {
@@ -183,14 +182,17 @@ export function createBrowserAdapters(config = deploymentConfigFromEnv()): AppAd
   const fallback = createUnavailableAdapters(config)
   const injected = typeof window !== 'undefined' ? window.__PRIVATE_LEDGER_ADAPTERS__ : undefined
   const manifestUrl = config.cryptoManifestUrl || '/crypto/manifest.json'
-  const configured = Boolean(config.coreAccountId && config.tokenAccountId && config.cryptoProfileHash && /^[a-f\d]{64}$/i.test(config.cryptoProfileHash) && config.cryptoArtifactHash && /^[a-f\d]{64}$/i.test(config.cryptoArtifactHash) && Number.isInteger(config.assetDecimals) && config.assetDecimals >= 0 && config.assetDecimals <= 38)
-  if (!injected?.protocol && !injected?.wallet && configured) {
+  const configured = hasProtocolDeployment(config)
+  let wallet: NearConnectWallet | undefined
+  if (!injected?.wallet && (config.networkId === 'testnet' || config.networkId === 'mainnet')) {
     try {
       const privy = typeof window !== 'undefined' ? privyConfiguration(config, window.location.origin) : undefined
-      const wallet = isSandboxCredentialDeployment(config)
-        ? new SandboxCredentialWallet(config)
-        : new NearConnectWallet(config, { additionalWallets: privy ? [privyWalletManifest(privy)] : [] })
-      const { protocol } = createRpcProtocolClient(config, wallet)
+      wallet = new NearConnectWallet(config, { additionalWallets: privy ? [privyWalletManifest(privy)] : [] })
+    } catch { /* Invalid wallet configuration does not start an authentication flow. */ }
+  }
+  if (!injected?.protocol && !injected?.wallet && configured && wallet) {
+    try {
+      const { protocol } = createRpcProtocolClient({ ...config, allowInsecureLocalhost: false }, wallet)
       let crypto = injected?.crypto
       if (!crypto && config.cryptoArtifactHash && typeof Worker !== 'undefined') {
         crypto = createWorkerCryptoProvider({
@@ -203,7 +205,7 @@ export function createBrowserAdapters(config = deploymentConfigFromEnv()): AppAd
           assetId: config.tokenAccountId,
           funded: config.cryptoFunded === true,
           rpcUrl: config.rpcUrl,
-          allowInsecureLocalhost: config.allowInsecureLocalhost,
+          allowInsecureLocalhost: false,
         })
       }
       return { protocol, wallet, crypto: crypto ?? fallback.crypto }
@@ -213,7 +215,7 @@ export function createBrowserAdapters(config = deploymentConfigFromEnv()): AppAd
   }
   return {
     protocol: injected?.protocol ?? fallback.protocol,
-    wallet: injected?.wallet ?? fallback.wallet,
+    wallet: injected?.wallet ?? wallet ?? fallback.wallet,
     crypto: injected?.crypto ?? fallback.crypto,
   }
 }
