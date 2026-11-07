@@ -347,7 +347,7 @@ impl Core {
             ERR_INVALID_ENCODING
         );
         require!(
-            prepared_key.len() > 0 && prepared_key.len() <= MAX_PREPARED_KEY_BYTES,
+            !prepared_key.is_empty() && prepared_key.len() <= MAX_PREPARED_KEY_BYTES,
             ERR_INVALID_ENCODING
         );
         require!(
@@ -355,9 +355,9 @@ impl Core {
             ERR_REPLAY
         );
         let public_input_count = near_verifier::validate_prepared_key(&prepared_key)
-            .unwrap_or_else(|_| panic!("{ERR_UNSUPPORTED_PROFILE}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_UNSUPPORTED_PROFILE));
         let hash = near_verifier::prepared_key_hash(&prepared_key)
-            .unwrap_or_else(|_| panic!("{ERR_UNSUPPORTED_PROFILE}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_UNSUPPORTED_PROFILE));
         self.verifier_keys.insert(
             &statement_kind,
             &VerifierKeyRecord {
@@ -371,7 +371,7 @@ impl Core {
             .verifier
             .key_count
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         self.emit(
             "VerifierKeyStaged",
             json!({
@@ -459,7 +459,7 @@ impl Core {
         let current = self.storage_deposits.get(&account).unwrap_or(0);
         let updated = current
             .checked_add(deposit)
-            .unwrap_or_else(|| panic!("{ERR_STORAGE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STORAGE));
         self.storage_deposits.insert(&account, &updated);
         U128(updated)
     }
@@ -505,7 +505,7 @@ impl Core {
             registered_at: now_seconds(),
             authorization_epoch: old_epoch
                 .checked_add(1)
-                .unwrap_or_else(|| panic!("{ERR_STALE_STATE}")),
+                .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE)),
         };
         if let Some(existing) = self.holders.get(&owner) {
             require!(args.zero_proofs.len() == 4, ERR_HAS_OBLIGATIONS);
@@ -602,7 +602,7 @@ impl Core {
                     ERR_BAD_PROOF
                 );
             }
-            _ => panic!("{ERR_BAD_PROOF}"),
+            _ => env::panic_str(ERR_BAD_PROOF),
         }
         let key_public = key.public_key.clone();
         let key_id = key.key_id;
@@ -640,7 +640,7 @@ impl Core {
                 spending_version: 0,
                 authorization_epoch: old_epoch
                     .checked_add(1)
-                    .unwrap_or_else(|| panic!("{ERR_STALE_STATE}")),
+                    .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE)),
                 open_loan_count: 0,
                 frozen: false,
             },
@@ -664,7 +664,7 @@ impl Core {
         let epoch = holder
             .authorization_epoch
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         let key = AuthorizationKey {
             owner: owner.clone(),
             key_id: args.key_id,
@@ -692,13 +692,13 @@ impl Core {
         let mut key = self
             .authorization_keys
             .get(&key_id_bytes)
-            .unwrap_or_else(|| panic!("{ERR_NOT_FOUND}"));
+            .unwrap_or_else(|| env::panic_str(ERR_NOT_FOUND));
         require!(key.owner == owner && !key.revoked, ERR_REPLAY);
         let mut holder = self.holder_or_panic(&owner);
         let epoch = holder
             .authorization_epoch
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         key.revoked = true;
         key.epoch = epoch;
         holder.authorization_epoch = epoch;
@@ -728,7 +728,7 @@ impl Core {
             let phases = args
                 .phase_times
                 .as_ref()
-                .unwrap_or_else(|| panic!("{ERR_INVALID_ENCODING}"));
+                .unwrap_or_else(|| env::panic_str(ERR_INVALID_ENCODING));
             require!(
                 phases.subscription_start <= phases.investment_start,
                 ERR_INVALID_ENCODING
@@ -811,7 +811,7 @@ impl Core {
                     ERR_BAD_PROOF
                 );
             }
-            _ => panic!("{ERR_BAD_PROOF}"),
+            _ => env::panic_str(ERR_BAD_PROOF),
         }
         let broker = Broker {
             broker_id: id,
@@ -850,14 +850,14 @@ impl Core {
             ),
             spending_commitment: crypto_adapter::encode(
                 &crypto_adapter::zero_commitment()
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             )
-            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             inbox_commitment: crypto_adapter::encode(
                 &crypto_adapter::zero_commitment()
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             )
-            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             spending_version: 0,
             loan_book_root: Book::<NearSha256>::new(book_domain(self, id))
                 .empty_root()
@@ -877,14 +877,14 @@ impl Core {
             ),
             active_principal_commitment: crypto_adapter::encode(
                 &crypto_adapter::zero_commitment()
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             )
-            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             impaired_principal_commitment: crypto_adapter::encode(
                 &crypto_adapter::zero_commitment()
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             )
-            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             impairment_provision: 0,
             cumulative_draws: 0,
             cumulative_settlements: 0,
@@ -894,6 +894,8 @@ impl Core {
             risk_version: 0,
             reconciled_risk_version: 0,
             accounting_pending: false,
+            accounting_pending_since: 0,
+            reconciliation_checkpoint_id: None,
             delegates: Vec::new(),
             last_settlement_at: 0,
             tombstoned: false,
@@ -1181,16 +1183,16 @@ impl Core {
         let nav = vault
             .assets_total
             .checked_sub(vault.loss_unrealized)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         let minted = if vault.shares_total == 0 {
             require!(vault.assets_total == 0 && nav == 0, ERR_INVALID_AMOUNT);
             let scale = 10u128
                 .checked_pow(u32::from(vault.share_scale))
-                .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+                .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
             args.amount
                 .0
                 .checked_mul(scale)
-                .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"))
+                .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT))
         } else {
             require!(nav > 0, ERR_INVALID_AMOUNT);
             mul_div_floor(args.amount.0, vault.shares_total, nav)
@@ -1200,7 +1202,7 @@ impl Core {
         let new_total = vault
             .assets_total
             .checked_add(args.amount.0)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         if vault.assets_maximum != 0 {
             require!(new_total <= vault.assets_maximum, ERR_DEBT_LIMIT);
         }
@@ -1208,28 +1210,28 @@ impl Core {
         vault.assets_available = vault
             .assets_available
             .checked_add(args.amount.0)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         vault.shares_total = vault
             .shares_total
             .checked_add(minted)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         vault.accounting_version = vault
             .accounting_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         let key = share_key(args.vault_id, &caller);
         let existing = self.shares.get(&key).unwrap_or(0);
         self.shares.insert(
             &key,
             &existing
                 .checked_add(minted)
-                .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}")),
+                .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT)),
         );
         self.claims.remove(&args.claim_id);
         self.public_claim_total = self
             .public_claim_total
             .checked_sub(args.amount.0)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         self.vaults.insert(&args.vault_id, &vault);
         self.emit(
             "SharesMinted",
@@ -1262,7 +1264,7 @@ impl Core {
         let nav = vault
             .assets_total
             .checked_sub(vault.loss_unrealized)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         let assets_out = if nav == 0 {
             require!(args.burn_worthless, ERR_INVALID_AMOUNT);
             require!(args.min_assets_out.0 == 0, ERR_SLIPPAGE);
@@ -1289,17 +1291,21 @@ impl Core {
                 };
                 live_broker_count = live_broker_count
                     .checked_add(1)
-                    .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                    .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
                 require!(broker.debt_total == 0, ERR_HAS_OBLIGATIONS);
                 require!(broker.active_loan_count == 0, ERR_HAS_OBLIGATIONS);
                 require!(broker.impaired_loan_count == 0, ERR_HAS_OBLIGATIONS);
                 require!(broker.impairment_provision == 0, ERR_HAS_OBLIGATIONS);
                 require!(!broker.accounting_pending, ERR_ACCOUNTING_PENDING);
+                require!(
+                    broker.reconciliation_checkpoint_id.is_none(),
+                    ERR_ACCOUNTING_PENDING
+                );
                 let zero_proof = args
                     .broker_zero_proofs
                     .iter()
                     .find(|proof| proof.broker_id == broker_id)
-                    .unwrap_or_else(|| panic!("{ERR_BAD_PROOF}"));
+                    .unwrap_or_else(|| env::panic_str(ERR_BAD_PROOF));
                 if let Some(proof) = zero_proof.combined_proof.as_ref() {
                     let combined = combine_ciphertexts(
                         &combine_ciphertexts(&broker.spending_ciphertext, &broker.inbox_ciphertext),
@@ -1357,10 +1363,10 @@ impl Core {
                         "spending",
                     );
                     self.verify_zero_balance_statement(
-                        &zero_proof
+                        zero_proof
                             .spending_proof
                             .as_ref()
-                            .unwrap_or_else(|| panic!("{ERR_BAD_PROOF}")),
+                            .unwrap_or_else(|| env::panic_str(ERR_BAD_PROOF)),
                         &spending_context,
                         &broker.encryption_key.public_key,
                         &broker.spending_ciphertext,
@@ -1387,10 +1393,10 @@ impl Core {
                         "inbox",
                     );
                     self.verify_zero_balance_statement(
-                        &zero_proof
+                        zero_proof
                             .inbox_proof
                             .as_ref()
-                            .unwrap_or_else(|| panic!("{ERR_BAD_PROOF}")),
+                            .unwrap_or_else(|| env::panic_str(ERR_BAD_PROOF)),
                         &inbox_context,
                         &broker.encryption_key.public_key,
                         &broker.inbox_ciphertext,
@@ -1437,20 +1443,20 @@ impl Core {
                         "impaired-principal",
                     );
                     self.verify_zero_balance_statement(
-                        &zero_proof
+                        zero_proof
                             .active_principal_proof
                             .as_ref()
-                            .unwrap_or_else(|| panic!("{ERR_BAD_PROOF}")),
+                            .unwrap_or_else(|| env::panic_str(ERR_BAD_PROOF)),
                         &active_context,
                         &broker.encryption_key.public_key,
                         &broker.active_principal_ciphertext,
                         broker.spending_version,
                     );
                     self.verify_zero_balance_statement(
-                        &zero_proof
+                        zero_proof
                             .impaired_principal_proof
                             .as_ref()
-                            .unwrap_or_else(|| panic!("{ERR_BAD_PROOF}")),
+                            .unwrap_or_else(|| env::panic_str(ERR_BAD_PROOF)),
                         &impaired_context,
                         &broker.encryption_key.public_key,
                         &broker.impaired_principal_ciphertext,
@@ -1480,24 +1486,24 @@ impl Core {
         vault.assets_total = vault
             .assets_total
             .checked_sub(assets_out)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         vault.assets_available = vault
             .assets_available
             .checked_sub(assets_out)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         vault.shares_total = vault
             .shares_total
             .checked_sub(args.shares.0)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         vault.accounting_version = vault
             .accounting_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         self.shares.insert(
             &key,
             &owned
                 .checked_sub(args.shares.0)
-                .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}")),
+                .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT)),
         );
         let claim_id = if assets_out > 0 {
             let claim_id = self.next_claim_id();
@@ -1514,7 +1520,7 @@ impl Core {
             self.public_claim_total = self
                 .public_claim_total
                 .checked_add(assets_out)
-                .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+                .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
             claim_id
         } else {
             0
@@ -1554,12 +1560,12 @@ impl Core {
             &from_key,
             &from
                 .checked_sub(shares.0)
-                .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}")),
+                .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT)),
         );
         self.shares.insert(
             &to_key,
             &to.checked_add(shares.0)
-                .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}")),
+                .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT)),
         );
         self.emit("SharesTransferred", json!({"vault_id": vault_id.to_string(), "sender": sender, "receiver": receiver, "shares": shares.0.to_string()}));
         self.charge_storage(&sender, storage_before);
@@ -1629,12 +1635,12 @@ impl Core {
         let new_inbox = combine_ciphertexts(
             &holder.inbox_ciphertext,
             &crypto_adapter::encode(&conversion.views[0].ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
         );
         require!(
             conversion.spending_after
                 == crypto_adapter::parse_ciphertext(&new_inbox)
-                    .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
             ERR_BAD_PROOF
         );
         self.record_recovery(
@@ -1651,28 +1657,28 @@ impl Core {
         holder.inbox_ciphertext = new_inbox;
         holder.issuer_balance_ciphertext = crypto_adapter::add_ciphertexts(
             &crypto_adapter::parse_ciphertext(&holder.issuer_balance_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &conversion.views[1].ciphertext,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         holder.auditor_balance_ciphertext = crypto_adapter::add_ciphertexts(
             &crypto_adapter::parse_ciphertext(&holder.auditor_balance_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &conversion.views[2].ciphertext,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         self.holders.insert(&owner, &holder);
         self.claims.remove(&args.claim_id);
         self.public_claim_total = self
             .public_claim_total
             .checked_sub(args.amount.0)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         self.confidential_outstanding = self
             .confidential_outstanding
             .checked_add(args.amount.0)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         self.emit("Shielded", json!({"account_id": owner, "claim_id": args.claim_id.to_string(), "amount": args.amount.0.to_string(), "spending_version": holder.spending_version.to_string()}));
         self.charge_storage(&owner, storage_before);
     }
@@ -1744,21 +1750,21 @@ impl Core {
             &[holder.spending_version],
         );
         holder.spending_ciphertext = crypto_adapter::encode(&conversion.spending_after)
-            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         holder.issuer_balance_ciphertext = crypto_adapter::sub_ciphertexts(
             &crypto_adapter::parse_ciphertext(&holder.issuer_balance_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &conversion.views[1].ciphertext,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         holder.auditor_balance_ciphertext = crypto_adapter::sub_ciphertexts(
             &crypto_adapter::parse_ciphertext(&holder.auditor_balance_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &conversion.views[2].ciphertext,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         self.holders.insert(&owner, &holder);
         let claim_id = self.next_claim_id();
         self.claims.insert(
@@ -1774,11 +1780,11 @@ impl Core {
         self.public_claim_total = self
             .public_claim_total
             .checked_add(args.amount.0)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         self.confidential_outstanding = self
             .confidential_outstanding
             .checked_sub(args.amount.0)
-            .unwrap_or_else(|| panic!("{ERR_INSUFFICIENT_PRIVATE_FUNDS}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INSUFFICIENT_PRIVATE_FUNDS));
         self.emit("Unshielded", json!({"account_id": owner, "amount": args.amount.0.to_string(), "claim_id": claim_id.to_string(), "spending_version": holder.spending_version.to_string()}));
         self.charge_storage(&owner, storage_before);
         U64(claim_id)
@@ -1821,7 +1827,7 @@ impl Core {
         holder.spending_version = holder
             .spending_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         self.holders.insert(&owner, &holder);
         self.emit(
             "InboxMerged",
@@ -1865,11 +1871,7 @@ impl Core {
         );
         if broker.debt_maximum != 0 {
             require!(
-                broker
-                    .debt_total
-                    .checked_add(args.amount.0)
-                    .unwrap_or(u128::MAX)
-                    <= broker.debt_maximum,
+                broker.debt_total.saturating_add(args.amount.0) <= broker.debt_maximum,
                 ERR_DEBT_LIMIT
             );
         }
@@ -1924,12 +1926,12 @@ impl Core {
         let new_inbox = combine_ciphertexts(
             &broker.inbox_ciphertext,
             &crypto_adapter::encode(&conversion.views[0].ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
         );
         require!(
             conversion.spending_after
                 == crypto_adapter::parse_ciphertext(&new_inbox)
-                    .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
             ERR_BAD_PROOF
         );
         self.record_recovery(
@@ -1946,26 +1948,26 @@ impl Core {
         vault.assets_available = vault
             .assets_available
             .checked_sub(args.amount.0)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         vault.accounting_version = vault
             .accounting_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         broker.inbox_ciphertext = new_inbox;
         broker.issuer_balance_ciphertext = crypto_adapter::add_ciphertexts(
             &crypto_adapter::parse_ciphertext(&broker.issuer_balance_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &conversion.views[1].ciphertext,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         broker.auditor_balance_ciphertext = crypto_adapter::add_ciphertexts(
             &crypto_adapter::parse_ciphertext(&broker.auditor_balance_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &conversion.views[2].ciphertext,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         if !args.broker_spending_commitment.is_empty() {
             require!(
                 args.broker_spending_commitment == broker.spending_commitment,
@@ -1981,19 +1983,19 @@ impl Core {
         broker.debt_total = broker
             .debt_total
             .checked_add(args.amount.0)
-            .unwrap_or_else(|| panic!("{ERR_DEBT_LIMIT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_DEBT_LIMIT));
         broker.cumulative_draws = broker
             .cumulative_draws
             .checked_add(args.amount.0)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         broker.accounting_version = broker
             .accounting_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         self.confidential_outstanding = self
             .confidential_outstanding
             .checked_add(args.amount.0)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         self.brokers.insert(&args.broker_id, &broker);
         self.vaults.insert(&broker.vault_id, &vault);
         self.emit("BrokerDrawn", json!({"broker_id": args.broker_id.to_string(), "vault_id": broker.vault_id.to_string(), "amount": args.amount.0.to_string(), "accounting_version": broker.accounting_version.to_string()}));
@@ -2049,7 +2051,7 @@ impl Core {
         broker.spending_version = broker
             .spending_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         self.brokers.insert(&broker_id, &broker);
         self.emit(
             "InboxMerged",
@@ -2181,7 +2183,7 @@ impl Core {
         let expected_loan_id = self
             .loan_sequence
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         let expected_leaf = derive_loan_leaf(
             expected_loan_id,
             proposal.broker_id,
@@ -2218,29 +2220,29 @@ impl Core {
                 0,
             ],
             proposal.expiry,
-            &proposal.borrower.to_string(),
+            proposal.borrower.as_ref(),
         );
         let statement =
             self.verify_typed_statement(&args.proof, StatementKind::Origination, &context);
         let Statement::Origination(statement) = statement else {
-            panic!("{ERR_BAD_PROOF}");
+            env::panic_str(ERR_BAD_PROOF);
         };
         let broker_key = crypto_adapter::parse_public_key(&broker.encryption_key.public_key)
-            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         let borrower_key = crypto_adapter::parse_public_key(&borrower.encryption_key.public_key)
-            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         require!(statement.broker_key == broker_key, ERR_BAD_PROOF);
         require!(statement.borrower_key == borrower_key, ERR_BAD_PROOF);
         require!(
             statement.broker_spending_before
                 == crypto_adapter::parse_ciphertext(&broker.spending_ciphertext)
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             ERR_BAD_PROOF
         );
         require!(
             statement.broker_spending_after
                 != crypto_adapter::parse_ciphertext(&broker.spending_ciphertext)
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             ERR_BAD_PROOF
         );
         require!(
@@ -2248,14 +2250,14 @@ impl Core {
             ERR_BAD_PROOF
         );
         let loan_auditor_key = crypto_adapter::parse_public_key(&proposal.loan_auditor_public_key)
-            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         let transfer_keys = [
             broker_key.clone(),
             borrower_key.clone(),
             crypto_adapter::parse_public_key(&self.asset.issuer_key.public_key)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             crypto_adapter::parse_public_key(&self.asset.token_auditor_key.public_key)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             loan_auditor_key.clone(),
         ];
         require!(
@@ -2267,54 +2269,54 @@ impl Core {
             require!(
                 view.ciphertext
                     == crypto_adapter::parse_ciphertext(&proposal.principal_ciphertexts[index])
-                        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                 ERR_BAD_PROOF
             );
         }
         let expected_borrower_issuer = crypto_adapter::add_ciphertexts(
             &crypto_adapter::parse_ciphertext(&borrower.issuer_balance_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &statement.transfer_views[2].ciphertext,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let expected_borrower_auditor = crypto_adapter::add_ciphertexts(
             &crypto_adapter::parse_ciphertext(&borrower.auditor_balance_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &statement.transfer_views[3].ciphertext,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let expected_broker_issuer = crypto_adapter::sub_ciphertexts(
             &crypto_adapter::parse_ciphertext(&broker.issuer_balance_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &statement.transfer_views[2].ciphertext,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let expected_broker_auditor = crypto_adapter::sub_ciphertexts(
             &crypto_adapter::parse_ciphertext(&broker.auditor_balance_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &statement.transfer_views[3].ciphertext,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let expected_active_principal = crypto_adapter::add_ciphertexts(
             &crypto_adapter::parse_ciphertext(&broker.active_principal_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &statement.transfer_views[0].ciphertext,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let principal_commitment = crypto_adapter::parse_commitment(&proposal.principal_commitment)
-            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         let expected_active_commitment = crypto_adapter::add_commitments(
             &crypto_adapter::parse_commitment(&broker.active_principal_commitment)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &principal_commitment,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         if !args.broker_active_principal_commitment.is_empty() {
             require!(
                 args.broker_active_principal_commitment == expected_active_commitment,
@@ -2333,7 +2335,7 @@ impl Core {
             require!(
                 view.ciphertext
                     == crypto_adapter::parse_ciphertext(&proposal.initial_owed_ciphertexts[index])
-                        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                 ERR_BAD_PROOF
             );
         }
@@ -2344,26 +2346,26 @@ impl Core {
                     == crypto_adapter::parse_ciphertext(
                         &proposal.periodic_payment_ciphertexts[index]
                     )
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                 ERR_BAD_PROOF
             );
         }
         require!(
             statement.principal_commitment
                 == crypto_adapter::parse_commitment(&proposal.principal_commitment)
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             ERR_BAD_PROOF
         );
         require!(
             statement.owed_commitment
                 == crypto_adapter::parse_commitment(&proposal.owed_commitment)
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             ERR_BAD_PROOF
         );
         require!(
             statement.payment_commitment
                 == crypto_adapter::parse_commitment(&proposal.payment_commitment)
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             ERR_BAD_PROOF
         );
         require!(
@@ -2376,9 +2378,9 @@ impl Core {
         );
         require!(statement.loan_version == 0, ERR_BAD_PROOF);
         let broker_spending_after = crypto_adapter::encode(&statement.broker_spending_after)
-            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let borrower_inbox_delta = crypto_adapter::encode(&statement.transfer_views[1].ciphertext)
-            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let next_root = self.update_loan_book(
             broker.broker_id,
             expected_loan_id,
@@ -2406,7 +2408,7 @@ impl Core {
         let start = now_seconds();
         let next_due = start
             .checked_add(proposal.payment_interval)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         let loan_id = self.next_loan_id();
         require!(loan_id == expected_loan_id, ERR_STALE_STATE);
         let principal_ciphertexts = stored_principal_ciphertexts;
@@ -2474,19 +2476,19 @@ impl Core {
         broker.spending_version = broker
             .spending_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         broker.book_version = broker
             .book_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         broker.active_loan_count = broker
             .active_loan_count
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         broker.loan_sequence = broker
             .loan_sequence
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         borrower.inbox_ciphertext =
             combine_ciphertexts(&borrower.inbox_ciphertext, &borrower_inbox_delta);
         borrower.issuer_balance_ciphertext = expected_borrower_issuer;
@@ -2494,7 +2496,7 @@ impl Core {
         borrower.open_loan_count = borrower
             .open_loan_count
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         let mut consumed = proposal;
         consumed.consumed = true;
         self.proposals.insert(&args.proposal_id, &consumed);
@@ -2551,30 +2553,30 @@ impl Core {
             ],
             [from.authorization_epoch, to.authorization_epoch, 0, 0],
             0,
-            &args.destination.to_string(),
+            args.destination.as_ref(),
         );
         let statement =
             self.verify_typed_statement(&args.proof, StatementKind::ConfidentialTransfer, &context);
         let Statement::ConfidentialTransfer(statement) = statement else {
-            panic!("{ERR_BAD_PROOF}");
+            env::panic_str(ERR_BAD_PROOF);
         };
         let sender_key = crypto_adapter::parse_public_key(&from.encryption_key.public_key)
-            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         let recipient_key = crypto_adapter::parse_public_key(&to.encryption_key.public_key)
-            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         require!(statement.sender_key == sender_key, ERR_BAD_PROOF);
         require!(statement.recipient_key == recipient_key, ERR_BAD_PROOF);
         require!(
             statement.sender_spending_before
                 == crypto_adapter::parse_ciphertext(&from.spending_ciphertext)
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             ERR_BAD_PROOF
         );
         if !args.sender_spending_ciphertext.is_empty() {
             require!(
                 statement.sender_spending_after
                     == crypto_adapter::parse_ciphertext(&args.sender_spending_ciphertext)
-                        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                 ERR_BAD_PROOF
             );
         }
@@ -2604,11 +2606,11 @@ impl Core {
         }
         for (index, view) in statement.transfer_views.iter().enumerate() {
             let expected_key = crypto_adapter::parse_public_key(readers[index])
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
             require!(view.reader_key == expected_key, ERR_BAD_PROOF);
             if !args.transfer_views.is_empty() {
                 let expected_delta = crypto_adapter::parse_ciphertext(&args.transfer_views[index])
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
                 require!(view.ciphertext == expected_delta, ERR_BAD_PROOF);
             }
         }
@@ -2616,7 +2618,7 @@ impl Core {
             require!(
                 statement.amount_commitment
                     == crypto_adapter::parse_commitment(&args.commitment)
-                        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                 ERR_BAD_PROOF
             );
         }
@@ -2639,46 +2641,46 @@ impl Core {
         let auditor_delta = &statement.transfer_views[3].ciphertext;
         let sender_issuer = crypto_adapter::sub_ciphertexts(
             &crypto_adapter::parse_ciphertext(&from.issuer_balance_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             issuer_delta,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let sender_auditor = crypto_adapter::sub_ciphertexts(
             &crypto_adapter::parse_ciphertext(&from.auditor_balance_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             auditor_delta,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let destination_issuer = crypto_adapter::add_ciphertexts(
             &crypto_adapter::parse_ciphertext(&to.issuer_balance_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             issuer_delta,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let destination_auditor = crypto_adapter::add_ciphertexts(
             &crypto_adapter::parse_ciphertext(&to.auditor_balance_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             auditor_delta,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         // Every post-state is derived from the authenticated typed statement
         // and the current ledger snapshot.  In particular, destination inbox
         // and mirrors are never caller replacement state; an intervening
         // credit is preserved by adding this delta to the current inbox.
         from.spending_ciphertext = crypto_adapter::encode(&statement.sender_spending_after)
-            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         from.issuer_balance_ciphertext = sender_issuer;
         from.auditor_balance_ciphertext = sender_auditor;
         from.spending_version = from
             .spending_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         let inbox_delta = crypto_adapter::encode(&statement.transfer_views[1].ciphertext)
-            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         to.inbox_ciphertext = combine_ciphertexts(&to.inbox_ciphertext, &inbox_delta);
         to.issuer_balance_ciphertext = destination_issuer;
         to.auditor_balance_ciphertext = destination_auditor;
@@ -2764,31 +2766,31 @@ impl Core {
                 0,
             ],
             0,
-            &borrower.owner.to_string(),
+            borrower.owner.as_ref(),
         );
         let statement =
             self.verify_typed_statement(&args.proof, StatementKind::Repayment, &context);
         let Statement::Repayment(statement) = statement else {
-            panic!("{ERR_BAD_PROOF}");
+            env::panic_str(ERR_BAD_PROOF);
         };
         let borrower_key = crypto_adapter::parse_public_key(&borrower.encryption_key.public_key)
-            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         let broker_key = crypto_adapter::parse_public_key(&broker.encryption_key.public_key)
-            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         let loan_auditor_key = crypto_adapter::parse_public_key(&loan.loan_auditor_public_key)
-            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         require!(statement.borrower_key == borrower_key, ERR_BAD_PROOF);
         require!(statement.broker_key == broker_key, ERR_BAD_PROOF);
         require!(
             statement.borrower_spending_before
                 == crypto_adapter::parse_ciphertext(&borrower.spending_ciphertext)
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             ERR_BAD_PROOF
         );
         require!(
             statement.borrower_spending_after
                 != crypto_adapter::parse_ciphertext(&borrower.spending_ciphertext)
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             ERR_BAD_PROOF
         );
         require!(
@@ -2799,9 +2801,9 @@ impl Core {
             borrower_key.clone(),
             broker_key.clone(),
             crypto_adapter::parse_public_key(&self.asset.issuer_key.public_key)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             crypto_adapter::parse_public_key(&self.asset.token_auditor_key.public_key)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             loan_auditor_key.clone(),
         ];
         for (index, view) in statement.transfer_views.iter().enumerate() {
@@ -2814,39 +2816,39 @@ impl Core {
                 require!(
                     view.ciphertext
                         == crypto_adapter::parse_ciphertext(&args.transfer_views[index])
-                            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                     ERR_BAD_PROOF
                 );
             }
         }
         let broker_issuer = crypto_adapter::add_ciphertexts(
             &crypto_adapter::parse_ciphertext(&broker.issuer_balance_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &statement.transfer_views[2].ciphertext,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let broker_auditor = crypto_adapter::add_ciphertexts(
             &crypto_adapter::parse_ciphertext(&broker.auditor_balance_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &statement.transfer_views[3].ciphertext,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let borrower_issuer = crypto_adapter::sub_ciphertexts(
             &crypto_adapter::parse_ciphertext(&borrower.issuer_balance_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &statement.transfer_views[2].ciphertext,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let borrower_auditor = crypto_adapter::sub_ciphertexts(
             &crypto_adapter::parse_ciphertext(&borrower.auditor_balance_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &statement.transfer_views[3].ciphertext,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         if !args.borrower_issuer_ciphertext.is_empty() {
             require!(
                 args.borrower_issuer_ciphertext == borrower_issuer,
@@ -2872,7 +2874,7 @@ impl Core {
             );
         }
         let borrower_spending_after = crypto_adapter::encode(&statement.borrower_spending_after)
-            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         if !args.borrower_spending_ciphertext.is_empty() {
             require!(
                 args.borrower_spending_ciphertext == borrower_spending_after,
@@ -2882,7 +2884,7 @@ impl Core {
         let broker_inbox_after = combine_ciphertexts(
             &broker.inbox_ciphertext,
             &crypto_adapter::encode(&statement.transfer_views[1].ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
         );
         if !args.broker_inbox_ciphertext.is_empty() {
             require!(
@@ -2891,38 +2893,38 @@ impl Core {
             );
         }
         let loan_keys = [borrower_key, broker_key, loan_auditor_key];
-        for index in 0..3 {
+        for (index, loan_key) in loan_keys.iter().enumerate() {
             require!(
-                statement.owed_before[index].reader_key == loan_keys[index]
-                    && statement.owed_after[index].reader_key == loan_keys[index]
-                    && statement.owed_delta[index].reader_key == loan_keys[index]
-                    && statement.periodic_payment[index].reader_key == loan_keys[index]
-                    && statement.principal_before[index].reader_key == loan_keys[index]
-                    && statement.principal_after[index].reader_key == loan_keys[index]
-                    && statement.principal_delta[index].reader_key == loan_keys[index],
+                statement.owed_before[index].reader_key == *loan_key
+                    && statement.owed_after[index].reader_key == *loan_key
+                    && statement.owed_delta[index].reader_key == *loan_key
+                    && statement.periodic_payment[index].reader_key == *loan_key
+                    && statement.principal_before[index].reader_key == *loan_key
+                    && statement.principal_after[index].reader_key == *loan_key
+                    && statement.principal_delta[index].reader_key == *loan_key,
                 ERR_BAD_PROOF
             );
             require!(
                 statement.owed_before[index].ciphertext
                     == crypto_adapter::parse_ciphertext(&loan.amount_owed_ciphertexts[index])
-                        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"))
+                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING))
                     && statement.periodic_payment[index].ciphertext
                         == crypto_adapter::parse_ciphertext(
                             &loan.periodic_payment_ciphertexts[index]
                         )
-                        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"))
+                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING))
                     && statement.principal_before[index].ciphertext
                         == crypto_adapter::parse_ciphertext(
                             &loan.principal_remaining_ciphertexts[index]
                         )
-                        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                 ERR_BAD_PROOF
             );
             if !args.amount_owed_ciphertexts.is_empty() {
                 require!(
                     statement.owed_after[index].ciphertext
                         == crypto_adapter::parse_ciphertext(&args.amount_owed_ciphertexts[index])
-                            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                     ERR_BAD_PROOF
                 );
             }
@@ -2932,7 +2934,7 @@ impl Core {
                         == crypto_adapter::parse_ciphertext(
                             &args.principal_remaining_ciphertexts[index],
                         )
-                        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                     ERR_BAD_PROOF
                 );
             }
@@ -2954,45 +2956,44 @@ impl Core {
                         loan.payment_remaining.saturating_sub(1)
                     }
                 && statement.loan_version_before == loan.loan_version
-                && statement.loan_version_after
-                    == loan.loan_version.checked_add(1).unwrap_or(u64::MAX),
+                && statement.loan_version_after == loan.loan_version.saturating_add(1),
             ERR_BAD_PROOF
         );
         if !args.commitment.is_empty() {
             require!(
                 statement.principal_delta_commitment
                     == crypto_adapter::parse_commitment(&args.commitment)
-                        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                 ERR_BAD_PROOF
             );
         }
         let principal_delta = &statement.principal_delta[1].ciphertext;
         let expected_active = if loan.impaired {
             crypto_adapter::parse_ciphertext(&broker.active_principal_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"))
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING))
         } else {
             crypto_adapter::sub_ciphertexts(
                 &crypto_adapter::parse_ciphertext(&broker.active_principal_ciphertext)
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                 principal_delta,
             )
-            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"))
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF))
         };
         let expected_impaired = if loan.impaired {
             crypto_adapter::sub_ciphertexts(
                 &crypto_adapter::parse_ciphertext(&broker.impaired_principal_ciphertext)
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                 principal_delta,
             )
-            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"))
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF))
         } else {
             crypto_adapter::parse_ciphertext(&broker.impaired_principal_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"))
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING))
         };
-        let expected_active_ciphertext =
-            crypto_adapter::encode(&expected_active).unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        let expected_active_ciphertext = crypto_adapter::encode(&expected_active)
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let expected_impaired_ciphertext = crypto_adapter::encode(&expected_impaired)
-            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         if !args.broker_active_principal_ciphertext.is_empty() {
             require!(
                 args.broker_active_principal_ciphertext == expected_active_ciphertext,
@@ -3010,13 +3011,13 @@ impl Core {
             .iter()
             .map(|view| crypto_adapter::encode(&view.ciphertext))
             .collect::<Result<Vec<_>, _>>()
-            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let principal_after = statement
             .principal_after
             .iter()
             .map(|view| crypto_adapter::encode(&view.ciphertext))
             .collect::<Result<Vec<_>, _>>()
-            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let cumulative_repaid_after = statement
             .owed_delta
             .iter()
@@ -3024,11 +3025,11 @@ impl Core {
             .map(|(paid, current)| {
                 crypto_adapter::add_ciphertexts(
                     &crypto_adapter::parse_ciphertext(current)
-                        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                     &paid.ciphertext,
                 )
                 .and_then(|value| crypto_adapter::encode(&value))
-                .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"))
+                .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF))
             })
             .collect::<Vec<_>>();
         if !args.cumulative_repaid_ciphertexts.is_empty() {
@@ -3061,27 +3062,27 @@ impl Core {
         let principal_delta_commitment = statement.principal_delta_commitment.clone();
         let expected_loan_commitment = crypto_adapter::sub_commitments(
             &crypto_adapter::parse_commitment(&loan.principal_remaining_commitment)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &principal_delta_commitment,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let old_active_commitment =
             crypto_adapter::parse_commitment(&broker.active_principal_commitment)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         let old_impaired_commitment =
             crypto_adapter::parse_commitment(&broker.impaired_principal_commitment)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         let (expected_active_commitment, expected_impaired_commitment) = if loan.impaired {
             (
                 crypto_adapter::encode(&old_active_commitment)
-                    .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
                 crypto_adapter::sub_commitments(
                     &old_impaired_commitment,
                     &principal_delta_commitment,
                 )
                 .and_then(|value| crypto_adapter::encode(&value))
-                .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
             )
         } else {
             (
@@ -3090,9 +3091,9 @@ impl Core {
                     &principal_delta_commitment,
                 )
                 .and_then(|value| crypto_adapter::encode(&value))
-                .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
                 crypto_adapter::encode(&old_impaired_commitment)
-                    .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
             )
         };
         if !args.broker_active_principal_commitment.is_empty() {
@@ -3136,7 +3137,7 @@ impl Core {
         borrower.spending_version = borrower
             .spending_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         broker.inbox_ciphertext = broker_inbox_after;
         broker.issuer_balance_ciphertext = broker_issuer;
         broker.auditor_balance_ciphertext = broker_auditor;
@@ -3153,7 +3154,7 @@ impl Core {
         broker.book_version = broker
             .book_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         loan.amount_owed_ciphertexts = amount_owed_after;
         loan.principal_remaining_ciphertexts = principal_after;
         loan.principal_remaining_commitment = expected_loan_commitment.clone();
@@ -3161,7 +3162,7 @@ impl Core {
         loan.loan_version = loan
             .loan_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         if matches!(args.mode, RepayMode::Full) {
             loan.status = LoanStatus::Paid;
             loan.payment_remaining = 0;
@@ -3171,26 +3172,26 @@ impl Core {
                 broker.impaired_loan_count = broker
                     .impaired_loan_count
                     .checked_sub(1)
-                    .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                    .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
             }
             broker.active_loan_count = broker
                 .active_loan_count
                 .checked_sub(1)
-                .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
             borrower.open_loan_count = borrower
                 .open_loan_count
                 .checked_sub(1)
-                .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         } else {
             loan.payment_remaining = loan
                 .payment_remaining
                 .checked_sub(1)
-                .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
             loan.previous_due = loan.next_due;
             loan.next_due = loan
                 .next_due
                 .checked_add(loan.payment_interval)
-                .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+                .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         }
         let expected_leaf = derive_loan_leaf(
             loan.loan_id,
@@ -3223,40 +3224,43 @@ impl Core {
         if relayed {
             let key_id = args
                 .authorization_key_id
-                .unwrap_or_else(|| panic!("{ERR_UNAUTHORIZED}"));
+                .unwrap_or_else(|| env::panic_str(ERR_UNAUTHORIZED));
             let mut key = self
                 .authorization_keys
                 .get(&authorization_key(&loan.borrower, key_id))
-                .unwrap_or_else(|| panic!("{ERR_UNAUTHORIZED}"));
+                .unwrap_or_else(|| env::panic_str(ERR_UNAUTHORIZED));
             key.nonce = key
                 .nonce
                 .checked_add(1)
-                .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
             self.authorization_keys
                 .insert(&authorization_key(&loan.borrower, key_id), &key);
         }
         broker.accounting_version = broker
             .accounting_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         if was_impaired || broker.impairment_provision > 0 {
+            if !was_broker_accounting_pending {
+                broker.accounting_pending_since = now_seconds();
+            }
             broker.accounting_pending = true;
             broker.risk_version = broker
                 .risk_version
                 .checked_add(1)
-                .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
             let mut vault = self.vault_or_panic(broker.vault_id);
             if !was_broker_accounting_pending {
                 vault.pending_broker_count = vault
                     .pending_broker_count
                     .checked_add(1)
-                    .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                    .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
             }
             vault.accounting_pending = true;
             vault.risk_version = vault
                 .risk_version
                 .checked_add(1)
-                .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
             self.vaults.insert(&broker.vault_id, &vault);
         }
         self.holders.insert(&borrower.owner, &borrower);
@@ -3316,7 +3320,7 @@ impl Core {
                 broker.impaired_loan_count = broker
                     .impaired_loan_count
                     .checked_add(1)
-                    .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                    .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
             }
             LoanManagementAction::Unimpair => {
                 require!(loan.impaired, ERR_INVALID_AMOUNT);
@@ -3324,19 +3328,19 @@ impl Core {
                 broker.impaired_loan_count = broker
                     .impaired_loan_count
                     .checked_sub(1)
-                    .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                    .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
             }
             LoanManagementAction::Default => {
                 let deadline = loan
                     .next_due
                     .checked_add(loan.grace_period)
-                    .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+                    .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
                 require!(now_seconds() > deadline, ERR_TOO_SOON);
                 if loan.impaired {
                     broker.impaired_loan_count = broker
                         .impaired_loan_count
                         .checked_sub(1)
-                        .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                        .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
                 }
                 loan.impaired = false;
                 loan.status = LoanStatus::Defaulted;
@@ -3345,7 +3349,7 @@ impl Core {
                 broker.active_loan_count = broker
                     .active_loan_count
                     .checked_sub(1)
-                    .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                    .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
             }
         }
         if !args.broker_active_principal_ciphertext.is_empty() {
@@ -3358,44 +3362,44 @@ impl Core {
             validate_digest32(&args.broker_book_root);
         }
         let principal = crypto_adapter::parse_ciphertext(&loan.principal_remaining_ciphertexts[1])
-            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         let active_before = crypto_adapter::parse_ciphertext(&broker.active_principal_ciphertext)
-            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         let impaired_before =
             crypto_adapter::parse_ciphertext(&broker.impaired_principal_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         let (active_expected, impaired_expected) = match args.action {
             LoanManagementAction::Impair => (
                 active_before.clone(),
                 crypto_adapter::add_ciphertexts(&impaired_before, &principal)
-                    .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
             ),
             LoanManagementAction::Unimpair => (
                 active_before.clone(),
                 crypto_adapter::sub_ciphertexts(&impaired_before, &principal)
-                    .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
             ),
             LoanManagementAction::Default => {
                 if was_impaired {
                     (
                         crypto_adapter::sub_ciphertexts(&active_before, &principal)
-                            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
                         crypto_adapter::sub_ciphertexts(&impaired_before, &principal)
-                            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
                     )
                 } else {
                     (
                         crypto_adapter::sub_ciphertexts(&active_before, &principal)
-                            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
                         impaired_before.clone(),
                     )
                 }
             }
         };
-        let active_expected_ciphertext =
-            crypto_adapter::encode(&active_expected).unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        let active_expected_ciphertext = crypto_adapter::encode(&active_expected)
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let impaired_expected_ciphertext = crypto_adapter::encode(&impaired_expected)
-            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         if !args.broker_active_principal_ciphertext.is_empty() {
             require!(
                 args.broker_active_principal_ciphertext == active_expected_ciphertext,
@@ -3437,18 +3441,18 @@ impl Core {
             let statement =
                 self.verify_typed_statement(proof, StatementKind::Reconciliation, &context);
             let Statement::Reconciliation(statement) = statement else {
-                panic!("{ERR_BAD_PROOF}");
+                env::panic_str(ERR_BAD_PROOF);
             };
             require!(
                 statement.broker_key
                     == crypto_adapter::parse_public_key(&broker.encryption_key.public_key)
-                        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                 ERR_BAD_PROOF
             );
             require!(
                 statement.cash
                     == crypto_adapter::parse_ciphertext(&cash)
-                        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                 ERR_BAD_PROOF
             );
             require!(
@@ -3473,51 +3477,51 @@ impl Core {
         }
         let loan_principal_commitment =
             crypto_adapter::parse_commitment(&loan.principal_remaining_commitment)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         let old_active_commitment =
             crypto_adapter::parse_commitment(&broker.active_principal_commitment)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         let old_impaired_commitment =
             crypto_adapter::parse_commitment(&broker.impaired_principal_commitment)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         let (expected_active_commitment, expected_impaired_commitment) = match args.action {
             LoanManagementAction::Impair => (
                 crypto_adapter::encode(&old_active_commitment)
-                    .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
                 crypto_adapter::add_commitments(
                     &old_impaired_commitment,
                     &loan_principal_commitment,
                 )
                 .and_then(|value| crypto_adapter::encode(&value))
-                .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
             ),
             LoanManagementAction::Unimpair => (
                 crypto_adapter::encode(&old_active_commitment)
-                    .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
                 crypto_adapter::sub_commitments(
                     &old_impaired_commitment,
                     &loan_principal_commitment,
                 )
                 .and_then(|value| crypto_adapter::encode(&value))
-                .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
             ),
             LoanManagementAction::Default if was_impaired => (
                 crypto_adapter::sub_commitments(&old_active_commitment, &loan_principal_commitment)
                     .and_then(|value| crypto_adapter::encode(&value))
-                    .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
                 crypto_adapter::sub_commitments(
                     &old_impaired_commitment,
                     &loan_principal_commitment,
                 )
                 .and_then(|value| crypto_adapter::encode(&value))
-                .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
             ),
             LoanManagementAction::Default => (
                 crypto_adapter::sub_commitments(&old_active_commitment, &loan_principal_commitment)
                     .and_then(|value| crypto_adapter::encode(&value))
-                    .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
                 crypto_adapter::encode(&old_impaired_commitment)
-                    .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
             ),
         };
         if !args.broker_active_principal_commitment.is_empty() {
@@ -3570,12 +3574,12 @@ impl Core {
             holder.open_loan_count = holder
                 .open_loan_count
                 .checked_sub(1)
-                .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         }
         loan.loan_version = loan
             .loan_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         let expected_leaf = derive_loan_leaf(
             loan.loan_id,
             loan.broker_id,
@@ -3611,28 +3615,31 @@ impl Core {
         broker.book_version = broker
             .book_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         broker.accounting_version = broker
             .accounting_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
+        if !was_accounting_pending {
+            broker.accounting_pending_since = now_seconds();
+        }
         broker.accounting_pending = true;
         broker.risk_version = broker
             .risk_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         let mut vault = self.vault_or_panic(broker.vault_id);
         if !was_accounting_pending {
             vault.pending_broker_count = vault
                 .pending_broker_count
                 .checked_add(1)
-                .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         }
         vault.accounting_pending = true;
         vault.risk_version = vault
             .risk_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         self.loans.insert(&loan.loan_id, &loan);
         self.brokers.insert(&broker.broker_id, &broker);
         self.vaults.insert(&vault.vault_id, &vault);
@@ -3659,7 +3666,7 @@ impl Core {
         let caller = env::predecessor_account_id();
         let storage_before = env::storage_usage();
         let broker_id = broker_id.0;
-        let broker = self.broker_or_panic(broker_id);
+        let mut broker = self.broker_or_panic(broker_id);
         let vault = self.vault_or_panic(broker.vault_id);
         require!(
             broker.accounting_pending || broker.impairment_provision > 0,
@@ -3669,13 +3676,8 @@ impl Core {
             broker.risk_version > broker.reconciled_risk_version || broker.impairment_provision > 0,
             ERR_ACCOUNTING_PENDING
         );
-        let now = now_seconds();
-        let epoch = vault.checkpoint_policy.epoch_seconds;
-        let scheduled_at = ((now / epoch)
-            .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}")))
-        .checked_mul(epoch)
-        .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+        require!(broker.reconciliation_checkpoint_id.is_none(), ERR_REPLAY);
+        let scheduled_at = self.reconciliation_scheduled_at(&broker, &vault);
         let id = self.next_checkpoint_id();
         self.checkpoints.insert(
             &id,
@@ -3688,6 +3690,8 @@ impl Core {
                 consumed: false,
             },
         );
+        broker.reconciliation_checkpoint_id = Some(id);
+        self.brokers.insert(&broker_id, &broker);
         self.charge_storage(&caller, storage_before);
         U64(id)
     }
@@ -3705,8 +3709,16 @@ impl Core {
         context: &OperationContext,
     ) -> ReconciliationCheck {
         require!(!checkpoint.consumed, ERR_REPLAY);
+        require!(
+            broker.accounting_pending || broker.impairment_provision > 0,
+            ERR_ACCOUNTING_PENDING
+        );
         require!(checkpoint.broker_id == args.broker_id, ERR_WRONG_ASSET);
         require!(broker.broker_id == args.broker_id, ERR_WRONG_ASSET);
+        require!(
+            broker.reconciliation_checkpoint_id == Some(checkpoint.checkpoint_id),
+            ERR_STALE_STATE
+        );
         require!(
             broker.risk_version == args.expected_risk_version,
             ERR_STALE_STATE
@@ -3726,19 +3738,11 @@ impl Core {
         require!(now_seconds() >= checkpoint.scheduled_at, ERR_TOO_SOON);
         require!(args.loss.0 <= broker.debt_total, ERR_INVALID_AMOUNT);
         require!(
-            args.new_broker_debt
-                .0
-                .checked_add(args.loss.0)
-                .unwrap_or(u128::MAX)
-                == broker.debt_total,
+            args.new_broker_debt.0.saturating_add(args.loss.0) == broker.debt_total,
             ERR_BAD_PROOF
         );
         require!(
-            args.new_vault_total
-                .0
-                .checked_add(args.loss.0)
-                .unwrap_or(u128::MAX)
-                == vault.assets_total,
+            args.new_vault_total.0.saturating_add(args.loss.0) == vault.assets_total,
             ERR_BAD_PROOF
         );
         require!(
@@ -3748,31 +3752,31 @@ impl Core {
         let new_vault_provision = vault
             .loss_unrealized
             .checked_sub(broker.impairment_provision)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"))
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT))
             .checked_add(args.new_broker_provision.0)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         let statement =
             self.verify_typed_statement(&args.proof, StatementKind::Reconciliation, context);
         let Statement::Reconciliation(statement) = statement else {
-            panic!("{ERR_BAD_PROOF}");
+            env::panic_str(ERR_BAD_PROOF);
         };
         require!(
             statement.broker_key
                 == crypto_adapter::parse_public_key(&broker.encryption_key.public_key)
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             ERR_BAD_PROOF
         );
         let cash = combine_ciphertexts(&broker.spending_ciphertext, &broker.inbox_ciphertext);
         require!(
             statement.cash
                 == crypto_adapter::parse_ciphertext(&cash)
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"))
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING))
                 && statement.active_principal
                     == crypto_adapter::parse_ciphertext(&broker.active_principal_ciphertext)
-                        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"))
+                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING))
                 && statement.impaired_principal
                     == crypto_adapter::parse_ciphertext(&broker.impaired_principal_ciphertext)
-                        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             ERR_BAD_PROOF
         );
         require!(
@@ -3793,7 +3797,7 @@ impl Core {
             require!(
                 statement.cash_commitment
                     == crypto_adapter::parse_commitment(&args.cash_commitment)
-                        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                 ERR_BAD_PROOF
             );
         }
@@ -3801,7 +3805,7 @@ impl Core {
             require!(
                 statement.active_principal_commitment
                     == crypto_adapter::parse_commitment(&args.active_principal_commitment)
-                        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                 ERR_BAD_PROOF
             );
         }
@@ -3809,7 +3813,7 @@ impl Core {
             require!(
                 statement.impaired_principal_commitment
                     == crypto_adapter::parse_commitment(&args.impaired_principal_commitment)
-                        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                 ERR_BAD_PROOF
             );
         }
@@ -3825,7 +3829,7 @@ impl Core {
         let mut checkpoint = self
             .checkpoints
             .get(&args.checkpoint_id)
-            .unwrap_or_else(|| panic!("{ERR_NOT_FOUND}"));
+            .unwrap_or_else(|| env::panic_str(ERR_NOT_FOUND));
         let mut broker = self.broker_or_panic(args.broker_id);
         let was_accounting_pending = broker.accounting_pending;
         let mut vault = self.vault_or_panic(broker.vault_id);
@@ -3847,7 +3851,7 @@ impl Core {
             ],
             [broker.encryption_key.authorization_epoch, 0, 0, 0],
             checkpoint.scheduled_at,
-            &broker.owner.to_string(),
+            broker.owner.as_ref(),
         );
         let reconciliation =
             self.validate_reconciliation(&args, &checkpoint, &broker, &vault, &context);
@@ -3868,25 +3872,27 @@ impl Core {
         vault.accounting_version = vault
             .accounting_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         broker.debt_total = args.new_broker_debt.0;
         broker.impairment_provision = args.new_broker_provision.0;
         broker.cumulative_realized_losses = broker
             .cumulative_realized_losses
             .checked_add(args.loss.0)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         broker.accounting_pending = false;
+        broker.accounting_pending_since = 0;
+        broker.reconciliation_checkpoint_id = None;
         broker.reconciled_risk_version = broker.risk_version;
         broker.accounting_version = broker
             .accounting_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         checkpoint.consumed = true;
         if was_accounting_pending {
             vault.pending_broker_count = vault
                 .pending_broker_count
                 .checked_sub(1)
-                .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         }
         vault.accounting_pending = vault.pending_broker_count > 0;
         if !vault.accounting_pending {
@@ -3942,7 +3948,7 @@ impl Core {
             let grant = broker
                 .delegates
                 .get_mut(index)
-                .unwrap_or_else(|| panic!("{ERR_UNAUTHORIZED}"));
+                .unwrap_or_else(|| env::panic_str(ERR_UNAUTHORIZED));
             require!(grant.active && now <= grant.expires_at, ERR_EXPIRED);
             if now >= grant.window_started_at.saturating_add(grant.window_seconds) {
                 grant.window_started_at = now;
@@ -3953,17 +3959,14 @@ impl Core {
                 ERR_DEBT_LIMIT
             );
             require!(
-                grant
-                    .window_spent
-                    .checked_add(args.amount.0)
-                    .unwrap_or(u128::MAX)
+                grant.window_spent.saturating_add(args.amount.0)
                     <= grant.allowed_settlement_per_window,
                 ERR_DEBT_LIMIT
             );
             grant.window_spent = grant
                 .window_spent
                 .checked_add(args.amount.0)
-                .unwrap_or_else(|| panic!("{ERR_DEBT_LIMIT}"));
+                .unwrap_or_else(|| env::panic_str(ERR_DEBT_LIMIT));
         }
         require!(
             broker.spending_version == args.expected_spending_version,
@@ -4031,23 +4034,23 @@ impl Core {
             ],
             [broker.encryption_key.authorization_epoch, 0, 0, 0],
             0,
-            &broker.owner.to_string(),
+            broker.owner.as_ref(),
         );
         let statement =
             self.verify_typed_statement(&args.proof, StatementKind::PublicConversion, &context);
         let Statement::PublicConversion(statement) = statement else {
-            panic!("{ERR_BAD_PROOF}");
+            env::panic_str(ERR_BAD_PROOF);
         };
         require!(
             statement.owner_key
                 == crypto_adapter::parse_public_key(&broker.encryption_key.public_key)
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             ERR_BAD_PROOF
         );
         require!(
             statement.spending_before
                 == crypto_adapter::parse_ciphertext(&broker.spending_ciphertext)
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"))
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING))
                 && statement.public_amount == args.amount.0 as u64
                 && statement.mode == ConversionMode::Debit
                 && statement.spending_version == broker.spending_version,
@@ -4057,7 +4060,7 @@ impl Core {
             require!(
                 statement.spending_after
                     == crypto_adapter::parse_ciphertext(&args.broker_spending_ciphertext)
-                        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                 ERR_BAD_PROOF
             );
         }
@@ -4071,32 +4074,32 @@ impl Core {
             require!(
                 statement.views[index].reader_key
                     == crypto_adapter::parse_public_key(settle_keys[index])
-                        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                 ERR_BAD_PROOF
             );
             if !settle_views.is_empty() {
                 require!(
                     statement.views[index].ciphertext
                         == crypto_adapter::parse_ciphertext(&settle_views[index])
-                            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                     ERR_BAD_PROOF
                 );
             }
         }
         let new_issuer = crypto_adapter::sub_ciphertexts(
             &crypto_adapter::parse_ciphertext(&broker.issuer_balance_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &statement.views[1].ciphertext,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let new_auditor = crypto_adapter::sub_ciphertexts(
             &crypto_adapter::parse_ciphertext(&broker.auditor_balance_ciphertext)
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &statement.views[2].ciphertext,
         )
         .and_then(|value| crypto_adapter::encode(&value))
-        .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         if !args.broker_issuer_ciphertext.is_empty() {
             require!(new_issuer == args.broker_issuer_ciphertext, ERR_BAD_PROOF);
         }
@@ -4104,7 +4107,7 @@ impl Core {
             require!(new_auditor == args.broker_auditor_ciphertext, ERR_BAD_PROOF);
         }
         let statement_spending_after = crypto_adapter::encode(&statement.spending_after)
-            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         self.record_recovery(
             "settle",
             &args.proof.statement,
@@ -4121,13 +4124,9 @@ impl Core {
             .amount
             .0
             .checked_sub(principal_return)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         require!(
-            vault
-                .assets_available
-                .checked_add(args.amount.0)
-                .unwrap_or(u128::MAX)
-                <= self.asset.custody_cap,
+            vault.assets_available.saturating_add(args.amount.0) <= self.asset.custody_cap,
             ERR_INVALID_AMOUNT
         );
         // A bundled checkpoint is evaluated against the virtual state after
@@ -4135,47 +4134,78 @@ impl Core {
         // after writes, which would permit a pre-settlement proof to be
         // replayed or make the accounting versions inconsistent.
         let bundled_reconciliation = if let Some(reconciliation) = args.reconciliation.as_ref() {
-            let checkpoint = self
-                .checkpoints
-                .get(&reconciliation.checkpoint_id)
-                .unwrap_or_else(|| panic!("{ERR_NOT_FOUND}"));
+            let checkpoint = if reconciliation.checkpoint_id == 0 {
+                // A scoped keeper cannot call `prepare_reconciliation`.  The
+                // zero sentinel asks Core to derive and consume the next
+                // checkpoint atomically with this settlement.  The client
+                // binds its proof to that derived ID through the
+                // `settle-reconcile` proof-context view.
+                require!(broker.reconciliation_checkpoint_id.is_none(), ERR_REPLAY);
+                require!(
+                    broker.accounting_pending || broker.impairment_provision > 0,
+                    ERR_ACCOUNTING_PENDING
+                );
+                let scheduled_at = self.reconciliation_scheduled_at(&broker, &vault);
+                require!(now_seconds() >= scheduled_at, ERR_TOO_SOON);
+                let checkpoint_id = self
+                    .checkpoint_sequence
+                    .checked_add(1)
+                    .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
+                Checkpoint {
+                    checkpoint_id,
+                    broker_id: broker.broker_id,
+                    risk_version: broker.risk_version,
+                    accounting_version: broker.accounting_version,
+                    scheduled_at,
+                    consumed: false,
+                }
+            } else {
+                require!(
+                    broker.reconciliation_checkpoint_id == Some(reconciliation.checkpoint_id),
+                    ERR_STALE_STATE
+                );
+                self.checkpoints
+                    .get(&reconciliation.checkpoint_id)
+                    .unwrap_or_else(|| env::panic_str(ERR_NOT_FOUND))
+            };
             let mut post_broker = broker.clone();
+            post_broker.reconciliation_checkpoint_id = Some(checkpoint.checkpoint_id);
             post_broker.spending_ciphertext = statement_spending_after.clone();
             post_broker.issuer_balance_ciphertext = new_issuer.clone();
             post_broker.auditor_balance_ciphertext = new_auditor.clone();
             post_broker.spending_version = broker
                 .spending_version
                 .checked_add(1)
-                .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
             post_broker.debt_total = broker
                 .debt_total
                 .checked_sub(principal_return)
-                .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+                .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
             post_broker.cumulative_settlements = broker
                 .cumulative_settlements
                 .checked_add(args.amount.0)
-                .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+                .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
             post_broker.cumulative_yield = broker
                 .cumulative_yield
                 .checked_add(realized_yield)
-                .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+                .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
             post_broker.accounting_version = broker
                 .accounting_version
                 .checked_add(1)
-                .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
             let mut post_vault = vault.clone();
             post_vault.assets_available = vault
                 .assets_available
                 .checked_add(args.amount.0)
-                .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+                .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
             post_vault.assets_total = vault
                 .assets_total
                 .checked_add(realized_yield)
-                .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+                .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
             post_vault.accounting_version = vault
                 .accounting_version
                 .checked_add(1)
-                .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
             require!(
                 reconciliation.expected_risk_version == post_broker.risk_version
                     && reconciliation.expected_accounting_version == post_broker.accounting_version,
@@ -4199,7 +4229,7 @@ impl Core {
                 ],
                 [post_broker.encryption_key.authorization_epoch, 0, 0, 0],
                 checkpoint.scheduled_at,
-                &post_broker.owner.to_string(),
+                post_broker.owner.as_ref(),
             );
             let checked = self.validate_reconciliation(
                 reconciliation,
@@ -4230,46 +4260,47 @@ impl Core {
         broker.spending_version = broker
             .spending_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         broker.debt_total = broker
             .debt_total
             .checked_sub(principal_return)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         broker.cumulative_settlements = broker
             .cumulative_settlements
             .checked_add(args.amount.0)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         broker.cumulative_yield = broker
             .cumulative_yield
             .checked_add(realized_yield)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         broker.last_settlement_at = now_seconds();
         broker.accounting_version = broker
             .accounting_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         vault.assets_available = vault
             .assets_available
             .checked_add(args.amount.0)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         vault.assets_total = vault
             .assets_total
             .checked_add(realized_yield)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         vault.accounting_version = vault
             .accounting_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         self.confidential_outstanding = self
             .confidential_outstanding
             .checked_sub(args.amount.0)
-            .unwrap_or_else(|| panic!("{ERR_INSUFFICIENT_PRIVATE_FUNDS}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INSUFFICIENT_PRIVATE_FUNDS));
         if broker.impairment_provision > 0 {
             if !was_broker_accounting_pending {
+                broker.accounting_pending_since = now_seconds();
                 vault.pending_broker_count = vault
                     .pending_broker_count
                     .checked_add(1)
-                    .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                    .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
             }
             broker.accounting_pending = true;
             vault.accounting_pending = true;
@@ -4291,43 +4322,48 @@ impl Core {
             // applying the post-settlement checkpoint; unrelated brokers stay
             // represented by the bounded counter.
             if !broker.accounting_pending && was_broker_accounting_pending {
-                panic!("{ERR_STALE_STATE}");
+                env::panic_str(ERR_STALE_STATE);
             }
             if broker.accounting_pending {
                 vault.pending_broker_count = vault
                     .pending_broker_count
                     .checked_sub(1)
-                    .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                    .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
             }
             vault.assets_total = reconcile.new_vault_total.0;
             vault.loss_unrealized = checked.new_vault_provision;
             vault.accounting_version = vault
                 .accounting_version
                 .checked_add(1)
-                .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
             broker.debt_total = reconcile.new_broker_debt.0;
             broker.impairment_provision = reconcile.new_broker_provision.0;
             broker.cumulative_realized_losses = broker
                 .cumulative_realized_losses
                 .checked_add(reconcile.loss.0)
-                .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+                .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
             broker.accounting_pending = false;
+            broker.accounting_pending_since = 0;
+            broker.reconciliation_checkpoint_id = None;
             broker.reconciled_risk_version = broker.risk_version;
             broker.accounting_version = broker
                 .accounting_version
                 .checked_add(1)
-                .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
             checkpoint.consumed = true;
             vault.accounting_pending = vault.pending_broker_count > 0;
             if !vault.accounting_pending {
                 vault.reconciled_risk_version = vault.risk_version;
             }
+            if reconcile.checkpoint_id == 0 {
+                self.checkpoint_sequence = checkpoint.checkpoint_id;
+            }
             self.checkpoints
-                .insert(&reconcile.checkpoint_id, &checkpoint);
+                .insert(&checkpoint.checkpoint_id, &checkpoint);
             self.emit(
                 "CreditReconciled",
                 json!({
-                    "checkpoint_id": reconcile.checkpoint_id.to_string(),
+                    "checkpoint_id": checkpoint.checkpoint_id.to_string(),
                     "broker_id": reconcile.broker_id.to_string(),
                     "loss": reconcile.loss.0.to_string(),
                     "new_broker_debt": reconcile.new_broker_debt.0.to_string(),
@@ -4360,6 +4396,7 @@ impl Core {
         let storage_before = env::storage_usage();
         let mut broker = self.broker_or_panic(args.broker_id);
         require!(caller == broker.owner, ERR_UNAUTHORIZED);
+        let now = now_seconds();
         require!(
             args.allowed_settlement_per_operation.0 > 0,
             ERR_INVALID_AMOUNT
@@ -4369,7 +4406,9 @@ impl Core {
             ERR_INVALID_AMOUNT
         );
         require!(
-            args.window_seconds > 0 && args.expires_at > now_seconds(),
+            args.window_seconds > 0
+                && args.expires_at > now
+                && now.checked_add(args.window_seconds).is_some(),
             ERR_INVALID_AMOUNT
         );
         require!(
@@ -4398,47 +4437,81 @@ impl Core {
                 &args.delegate_account,
                 args.delegate_key_id,
             ))
-            .unwrap_or_else(|| panic!("{ERR_UNAUTHORIZED}"));
+            .unwrap_or_else(|| env::panic_str(ERR_UNAUTHORIZED));
         require!(
             delegate_key.owner == args.delegate_account
                 && !delegate_key.revoked
                 && delegate_key.epoch == args.delegate_epoch,
             ERR_UNAUTHORIZED
         );
-        require!(broker.delegates.len() < MAX_DELEGATES, ERR_INVALID_AMOUNT);
+        // Delegate slots are a bounded live capability set, not an append-only
+        // grant log.  Expired/revoked entries can never authorize a call and
+        // must not make a broker permanently unable to renew a keeper.  A
+        // replacement is done in place so there is at most one effective grant
+        // for each delegate account.
+        broker
+            .delegates
+            .retain(|grant| grant.active && now <= grant.expires_at);
+        let existing_index = broker
+            .delegates
+            .iter()
+            .position(|grant| grant.delegate_account == args.delegate_account);
+        require!(
+            existing_index.is_some() || broker.delegates.len() < MAX_DELEGATES,
+            ERR_INVALID_AMOUNT
+        );
         let epoch = broker
             .authorization_epoch
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         broker.authorization_epoch = epoch;
         for grant in &mut broker.delegates {
             if grant.active {
                 grant.revocation_epoch = epoch;
             }
         }
-        let delegate_account = args.delegate_account.clone();
-        broker.delegates.push(KeeperGrant {
-            delegate_account,
+        // A live grant replacement is not a rate-limit reset.  Carry the
+        // current window's spend into the replacement (and start that window
+        // at `now`) so a broker owner cannot repeatedly redelegate the same
+        // keeper to bypass the per-window cap.  Expired grants were pruned
+        // above and therefore start with a fresh window.
+        let carried_window_spent = existing_index
+            .and_then(|index| broker.delegates.get(index))
+            .filter(|grant| now < grant.window_started_at.saturating_add(grant.window_seconds))
+            .map(|grant| grant.window_spent)
+            .unwrap_or(0);
+        let replacement = KeeperGrant {
+            delegate_account: args.delegate_account.clone(),
             delegate_key_id: args.delegate_key_id,
             allowed_settlement_per_operation: args.allowed_settlement_per_operation.0,
             allowed_settlement_per_window: args.allowed_settlement_per_window.0,
             window_seconds: args.window_seconds,
-            window_started_at: now_seconds(),
-            window_spent: 0,
+            window_started_at: now,
+            window_spent: carried_window_spent,
             expires_at: args.expires_at,
             revocation_epoch: epoch,
             delegate_epoch: args.delegate_epoch,
             active: true,
             allowed_operations: args.allowed_operations,
-        });
+        };
+        if let Some(index) = existing_index {
+            broker.delegates[index] = replacement;
+        } else {
+            broker.delegates.push(replacement);
+        }
         broker.accounting_version = broker
             .accounting_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         self.brokers.insert(&args.broker_id, &broker);
         self.emit(
             "KeeperGranted",
-            json!({"broker_id": args.broker_id.to_string(), "delegate": args.delegate_account, "epoch": epoch.to_string()}),
+            json!({
+                "broker_id": args.broker_id.to_string(),
+                "delegate": args.delegate_account,
+                "epoch": epoch.to_string(),
+                "replaced": existing_index.is_some()
+            }),
         );
         self.charge_storage(&caller, storage_before);
     }
@@ -4452,7 +4525,7 @@ impl Core {
         let epoch = broker
             .authorization_epoch
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         broker.authorization_epoch = epoch;
         for grant in &mut broker.delegates {
             if grant.delegate_account == delegate_account {
@@ -4465,7 +4538,7 @@ impl Core {
         broker.accounting_version = broker
             .accounting_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         self.brokers.insert(&broker_id, &broker);
         self.emit(
             "KeeperRevoked",
@@ -4537,7 +4610,7 @@ impl Core {
         broker.book_version = broker
             .book_version
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         self.brokers.insert(&broker.broker_id, &broker);
         self.emit("LoanDeleted", json!({"loan_id": loan_id.to_string(), "broker_id": loan.broker_id.to_string(), "final_version": loan.loan_version.to_string()}));
         self.charge_storage(&caller, storage_before);
@@ -4557,6 +4630,10 @@ impl Core {
         );
         require!(zero_proof.broker_id == broker_id, ERR_BAD_PROOF);
         require!(!broker.accounting_pending, ERR_ACCOUNTING_PENDING);
+        require!(
+            broker.reconciliation_checkpoint_id.is_none(),
+            ERR_ACCOUNTING_PENDING
+        );
         if let Some(proof) = zero_proof.combined_proof.as_ref() {
             let combined = combine_ciphertexts(
                 &combine_ciphertexts(&broker.spending_ciphertext, &broker.inbox_ciphertext),
@@ -4614,10 +4691,10 @@ impl Core {
                 "spending",
             );
             self.verify_zero_balance_statement(
-                &zero_proof
+                zero_proof
                     .spending_proof
                     .as_ref()
-                    .unwrap_or_else(|| panic!("{ERR_BAD_PROOF}")),
+                    .unwrap_or_else(|| env::panic_str(ERR_BAD_PROOF)),
                 &spending_context,
                 &broker.encryption_key.public_key,
                 &broker.spending_ciphertext,
@@ -4644,10 +4721,10 @@ impl Core {
                 "inbox",
             );
             self.verify_zero_balance_statement(
-                &zero_proof
+                zero_proof
                     .inbox_proof
                     .as_ref()
-                    .unwrap_or_else(|| panic!("{ERR_BAD_PROOF}")),
+                    .unwrap_or_else(|| env::panic_str(ERR_BAD_PROOF)),
                 &inbox_context,
                 &broker.encryption_key.public_key,
                 &broker.inbox_ciphertext,
@@ -4674,10 +4751,10 @@ impl Core {
                 "active-principal",
             );
             self.verify_zero_balance_statement(
-                &zero_proof
+                zero_proof
                     .active_principal_proof
                     .as_ref()
-                    .unwrap_or_else(|| panic!("{ERR_BAD_PROOF}")),
+                    .unwrap_or_else(|| env::panic_str(ERR_BAD_PROOF)),
                 &active_context,
                 &broker.encryption_key.public_key,
                 &broker.active_principal_ciphertext,
@@ -4704,10 +4781,10 @@ impl Core {
                 "impaired-principal",
             );
             self.verify_zero_balance_statement(
-                &zero_proof
+                zero_proof
                     .impaired_principal_proof
                     .as_ref()
-                    .unwrap_or_else(|| panic!("{ERR_BAD_PROOF}")),
+                    .unwrap_or_else(|| env::panic_str(ERR_BAD_PROOF)),
                 &impaired_context,
                 &broker.encryption_key.public_key,
                 &broker.impaired_principal_ciphertext,
@@ -4803,11 +4880,11 @@ impl Core {
         self.public_claim_total = self
             .public_claim_total
             .checked_add(amount.0)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         self.custody_total = self
             .custody_total
             .checked_add(amount.0)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         self.emit("DepositReceived", json!({"sender": sender_id, "deposit_id": message.deposit_id, "claim_id": claim_id.to_string(), "amount": amount.0.to_string()}));
         self.charge_storage(&sender_id, storage_before);
         PromiseOrValue::Value(U128(0))
@@ -4856,13 +4933,13 @@ impl Core {
         self.payout_sequence = self
             .payout_sequence
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         self.payout_index
             .insert(&self.payout_sequence, &args.operation_id);
         self.payout_reserved_total = self
             .payout_reserved_total
             .checked_add(claim.amount)
-            .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         self.emit("PayoutRequested", json!({"operation_id": args.operation_id.to_string(), "claim_id": args.claim_id.to_string(), "owner": caller, "recipient": args.recipient, "amount": claim.amount.to_string()}));
         self.charge_storage(&caller, storage_before);
         ext_ft::ext(self.asset.token_account.clone())
@@ -4917,7 +4994,7 @@ impl Core {
         };
         let result_hash: [u8; 32] = result_hash
             .try_into()
-            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         operation.result_hash = result_hash;
         operation.result_tag = if success { 1 } else { 2 };
         operation.status = if success {
@@ -4950,15 +5027,15 @@ impl Core {
                 self.public_claim_total = self
                     .public_claim_total
                     .checked_sub(operation.amount)
-                    .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+                    .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
                 self.payout_reserved_total = self
                     .payout_reserved_total
                     .checked_sub(operation.amount)
-                    .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+                    .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
                 self.custody_total = self
                     .custody_total
                     .checked_sub(operation.amount)
-                    .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+                    .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
                 operation.status = PayoutStatus::Succeeded;
             }
             PayoutStatus::ResultRecordedFailure => {
@@ -4967,10 +5044,10 @@ impl Core {
                 self.payout_reserved_total = self
                     .payout_reserved_total
                     .checked_sub(operation.amount)
-                    .unwrap_or_else(|| panic!("{ERR_INVALID_AMOUNT}"));
+                    .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
                 operation.status = PayoutStatus::Failed;
             }
-            PayoutStatus::InFlight => panic!("{ERR_OPERATION_PENDING}"),
+            PayoutStatus::InFlight => env::panic_str(ERR_OPERATION_PENDING),
             PayoutStatus::Succeeded | PayoutStatus::Failed => return,
         }
         self.payouts.insert(&operation_id, &operation);
@@ -5022,6 +5099,8 @@ impl Core {
             risk_version: broker.risk_version,
             reconciled_risk_version: broker.reconciled_risk_version,
             accounting_pending: broker.accounting_pending,
+            accounting_pending_since: broker.accounting_pending_since,
+            reconciliation_checkpoint_id: broker.reconciliation_checkpoint_id,
             delegates: broker.delegates.iter().map(keeper_grant_view).collect(),
             last_settlement_at: broker.last_settlement_at,
         })
@@ -5226,7 +5305,7 @@ impl Core {
                 loan_book_root: broker.loan_book_root,
                 encryption_key_id: broker.encryption_key.key_id,
                 encryption_public_key: broker.encryption_key.public_key,
-                authorization_epoch: broker.encryption_key.authorization_epoch,
+                authorization_epoch: broker.authorization_epoch,
                 spending_ciphertext: broker.spending_ciphertext,
                 inbox_ciphertext: broker.inbox_ciphertext,
                 issuer_balance_ciphertext: broker.issuer_balance_ciphertext,
@@ -5242,6 +5321,8 @@ impl Core {
                 risk_version: broker.risk_version,
                 reconciled_risk_version: broker.reconciled_risk_version,
                 accounting_pending: broker.accounting_pending,
+                accounting_pending_since: broker.accounting_pending_since,
+                reconciliation_checkpoint_id: broker.reconciliation_checkpoint_id,
                 delegates: broker.delegates.iter().map(keeper_grant_view).collect(),
                 last_settlement_at: broker.last_settlement_at,
             })
@@ -5442,7 +5523,7 @@ impl Core {
                     [key_id, 0, 0, 0, 0, 0, 0, 0],
                     [authorization_epoch, 0, 0, 0],
                     0,
-                    &owner.to_string(),
+                    owner.as_ref(),
                 )
             }
             "create-broker" => {
@@ -5470,7 +5551,7 @@ impl Core {
                     [key_id, 0, 0, 0, 0, 0, 0, 0],
                     [0, 0, 0, 0],
                     0,
-                    &owner.to_string(),
+                    owner.as_ref(),
                 )
             }
             "shield" => {
@@ -5499,7 +5580,7 @@ impl Core {
                     [holder.spending_version, claim_id, 0, 0, 0, 0, 0, 0],
                     [holder.authorization_epoch, 0, 0, 0],
                     0,
-                    &owner.to_string(),
+                    owner.as_ref(),
                 )
             }
             "unshield" => {
@@ -5527,7 +5608,7 @@ impl Core {
                     [holder.spending_version, 0, 0, 0, 0, 0, 0, 0],
                     [holder.authorization_epoch, 0, 0, 0],
                     0,
-                    &owner.to_string(),
+                    owner.as_ref(),
                 )
             }
             "confidential-send" => {
@@ -5571,7 +5652,7 @@ impl Core {
                     ],
                     [from.authorization_epoch, to.authorization_epoch, 0, 0],
                     0,
-                    &destination.to_string(),
+                    destination.as_ref(),
                 )
             }
             "draw" => {
@@ -5612,7 +5693,7 @@ impl Core {
                     ],
                     [broker.encryption_key.authorization_epoch, 0, 0, 0],
                     0,
-                    &broker.owner.to_string(),
+                    broker.owner.as_ref(),
                 )
             }
             "originate" => {
@@ -5659,7 +5740,7 @@ impl Core {
                         0,
                     ],
                     proposal.expiry,
-                    &proposal.borrower.to_string(),
+                    proposal.borrower.as_ref(),
                 )
             }
             "repay" => {
@@ -5709,7 +5790,7 @@ impl Core {
                         0,
                     ],
                     0,
-                    &borrower.owner.to_string(),
+                    borrower.owner.as_ref(),
                 )
             }
             "manage-loan" => {
@@ -5760,7 +5841,7 @@ impl Core {
                     ],
                     [broker.encryption_key.authorization_epoch, 0, 0, 0],
                     0,
-                    &broker.owner.to_string(),
+                    broker.owner.as_ref(),
                 )
             }
             "broker-zero-total" => {
@@ -5846,7 +5927,75 @@ impl Core {
                     ],
                     [broker.encryption_key.authorization_epoch, 0, 0, 0],
                     0,
-                    &broker.owner.to_string(),
+                    broker.owner.as_ref(),
+                )
+            }
+            "settle-reconcile" => {
+                // Inline reconciliation is the keeper-safe path: a scoped
+                // function-call key may invoke `settle`, but cannot first
+                // create a checkpoint with a separate transaction.  The
+                // checkpoint ID and cadence are derived from immutable Core
+                // counters/state and are therefore included in the proof
+                // context without trusting caller-supplied IDs/timestamps.
+                let broker_id = args.broker_id.or(args.primary_id)?;
+                let amount = args.amount?.0;
+                require!(amount > 0 && amount <= u64::MAX as u128, ERR_INVALID_AMOUNT);
+                let broker = self.brokers.get(&broker_id)?;
+                let vault = self.vaults.get(&broker.vault_id)?;
+                require!(
+                    broker.reconciliation_checkpoint_id.is_none()
+                        && (broker.accounting_pending || broker.impairment_provision > 0),
+                    ERR_ACCOUNTING_PENDING
+                );
+                let scheduled_at = self.reconciliation_scheduled_at(&broker, &vault);
+                require!(now_seconds() >= scheduled_at, ERR_TOO_SOON);
+                let checkpoint_id = self
+                    .checkpoint_sequence
+                    .checked_add(1)
+                    .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
+                let post_accounting_version = broker
+                    .accounting_version
+                    .checked_add(1)
+                    .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
+                view = self.prepare_context(
+                    args.operation.clone(),
+                    vec![broker_id, checkpoint_id],
+                    vec![broker.owner.clone()],
+                    vec![broker.risk_version, post_accounting_version],
+                    to_vec(&(broker.clone(), vault.clone(), checkpoint_id, amount))
+                        .unwrap_or_default(),
+                );
+                view.ciphertexts = vec![
+                    broker.spending_ciphertext.clone(),
+                    broker.inbox_ciphertext.clone(),
+                    broker.active_principal_ciphertext.clone(),
+                    broker.impaired_principal_ciphertext.clone(),
+                ];
+                view.commitments = vec![
+                    broker.spending_commitment.clone(),
+                    broker.inbox_commitment.clone(),
+                    broker.active_principal_commitment.clone(),
+                    broker.impaired_principal_commitment.clone(),
+                ];
+                self.crypto_context_with_subject(
+                    "reconcile-credit",
+                    broker.vault_id,
+                    broker.broker_id,
+                    0,
+                    0,
+                    [
+                        broker.risk_version,
+                        post_accounting_version,
+                        broker.book_version,
+                        checkpoint_id,
+                        broker.accounting_version,
+                        0,
+                        0,
+                        0,
+                    ],
+                    [broker.encryption_key.authorization_epoch, 0, 0, 0],
+                    scheduled_at,
+                    broker.owner.as_ref(),
                 )
             }
             "reconcile-credit" => {
@@ -5854,6 +6003,10 @@ impl Core {
                 let checkpoint_id = args.checkpoint_id.or(args.primary_id)?;
                 let broker = self.brokers.get(&broker_id)?;
                 let checkpoint = self.checkpoints.get(&checkpoint_id)?;
+                require!(
+                    broker.reconciliation_checkpoint_id == Some(checkpoint_id),
+                    ERR_STALE_STATE
+                );
                 view = self.prepare_context(
                     args.operation.clone(),
                     vec![broker_id, checkpoint_id],
@@ -5885,13 +6038,13 @@ impl Core {
                     ],
                     [broker.encryption_key.authorization_epoch, 0, 0, 0],
                     checkpoint.scheduled_at,
-                    &broker.owner.to_string(),
+                    broker.owner.as_ref(),
                 )
             }
             _ => return None,
         };
         view.operation_context =
-            serde_json::to_vec(&context).unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+            serde_json::to_vec(&context).unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         view.statement_kind = statement_kind_for_operation(operation);
         view.verifying_key_hash = view
             .statement_kind
@@ -6069,19 +6222,19 @@ impl Core {
             ERR_INVALID_ENCODING
         );
         let statement = crypto_adapter::parse_statement(&args.statement)
-            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let expected_kind = statement_kind_for_operation(&args.operation)
-            .unwrap_or_else(|| panic!("{ERR_UNSUPPORTED_PROFILE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_UNSUPPORTED_PROFILE));
         require!(statement.kind().as_u8() == expected_kind, ERR_BAD_PROOF);
         let mut context =
             self.get_statement_context(args.operation.clone(), U64(args.primary_id))?;
         let canonical_statement =
-            crypto_adapter::encode(&statement).unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+            crypto_adapter::encode(&statement).unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let inputs = crypto_adapter::statement_inputs(&statement)
-            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         context.statement = canonical_statement.clone();
-        context.operation_context =
-            serde_json::to_vec(statement.context()).unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+        context.operation_context = serde_json::to_vec(statement.context())
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         context.public_inputs = inputs.into_iter().map(|input| input.to_vec()).collect();
         context.statement_kind = Some(statement.kind().as_u8());
         context.state_digest = hash_bytes(&(
@@ -6130,11 +6283,11 @@ impl Core {
                 let event_id = self
                     .recovery_subject_index
                     .get(&key)
-                    .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                    .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
                 let record = self
                     .recovery_records
                     .get(&event_id)
-                    .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                    .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
                 records.push(recovery_record_view(record, Some((&subject_key, sequence))));
             }
         }
@@ -6161,7 +6314,7 @@ impl Core {
                 let record = self
                     .recovery_records
                     .get(&event_id)
-                    .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                    .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
                 records.push(recovery_record_view(record, None));
             }
         }
@@ -6178,7 +6331,7 @@ impl Core {
         self.recovery_sequence = self
             .recovery_sequence
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         self.recovery_sequence
     }
 
@@ -6198,9 +6351,9 @@ impl Core {
             ERR_BAD_PROOF
         );
         let parsed = crypto_adapter::parse_statement(statement)
-            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let canonical =
-            crypto_adapter::encode(&parsed).unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+            crypto_adapter::encode(&parsed).unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         self.record_recovery_event_inner(
             operation,
             subjects,
@@ -6263,7 +6416,7 @@ impl Core {
                 .get(subject)
                 .unwrap_or(0)
                 .checked_add(1)
-                .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+                .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
             self.recovery_subject_counts.insert(subject, &sequence);
             self.recovery_subject_index
                 .insert(&recovery_subject_index_key(subject, sequence), &event_id);
@@ -6291,7 +6444,7 @@ impl Core {
         self.vault_sequence = self
             .vault_sequence
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         self.vault_sequence
     }
 
@@ -6299,7 +6452,7 @@ impl Core {
         self.broker_sequence = self
             .broker_sequence
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         self.broker_sequence
     }
 
@@ -6307,7 +6460,7 @@ impl Core {
         self.loan_sequence = self
             .loan_sequence
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         self.loan_sequence
     }
 
@@ -6315,7 +6468,7 @@ impl Core {
         self.proposal_sequence = self
             .proposal_sequence
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         self.proposal_sequence
     }
 
@@ -6323,7 +6476,7 @@ impl Core {
         self.claim_sequence = self
             .claim_sequence
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         self.claim_sequence
     }
 
@@ -6331,50 +6484,50 @@ impl Core {
         self.checkpoint_sequence = self
             .checkpoint_sequence
             .checked_add(1)
-            .unwrap_or_else(|| panic!("{ERR_STALE_STATE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         self.checkpoint_sequence
     }
 
     fn vault_or_panic(&self, id: u64) -> Vault {
         self.vaults
             .get(&id)
-            .unwrap_or_else(|| panic!("{ERR_NOT_FOUND}"))
+            .unwrap_or_else(|| env::panic_str(ERR_NOT_FOUND))
     }
 
     fn broker_or_panic(&self, id: u64) -> Broker {
         self.brokers
             .get(&id)
-            .unwrap_or_else(|| panic!("{ERR_NOT_FOUND}"))
+            .unwrap_or_else(|| env::panic_str(ERR_NOT_FOUND))
     }
 
     fn loan_or_panic(&self, id: u64) -> Loan {
         self.loans
             .get(&id)
-            .unwrap_or_else(|| panic!("{ERR_NOT_FOUND}"))
+            .unwrap_or_else(|| env::panic_str(ERR_NOT_FOUND))
     }
 
     fn proposal_or_panic(&self, id: u64) -> Proposal {
         self.proposals
             .get(&id)
-            .unwrap_or_else(|| panic!("{ERR_NOT_FOUND}"))
+            .unwrap_or_else(|| env::panic_str(ERR_NOT_FOUND))
     }
 
     fn claim_or_panic(&self, id: u64) -> PublicClaim {
         self.claims
             .get(&id)
-            .unwrap_or_else(|| panic!("{ERR_NOT_FOUND}"))
+            .unwrap_or_else(|| env::panic_str(ERR_NOT_FOUND))
     }
 
     fn payout_or_panic(&self, id: u64) -> PayoutOperation {
         self.payouts
             .get(&id)
-            .unwrap_or_else(|| panic!("{ERR_NOT_FOUND}"))
+            .unwrap_or_else(|| env::panic_str(ERR_NOT_FOUND))
     }
 
     fn holder_or_panic(&self, account: &AccountId) -> HolderBalance {
         self.holders
             .get(account)
-            .unwrap_or_else(|| panic!("{ERR_NOT_REGISTERED}"))
+            .unwrap_or_else(|| env::panic_str(ERR_NOT_REGISTERED))
     }
 
     fn ensure_vault_phase(&self, vault: &Vault, redemption: bool, deposit: bool) {
@@ -6393,7 +6546,7 @@ impl Core {
                     );
                 }
             }
-            _ => panic!("{ERR_INVALID_ENCODING}"),
+            _ => env::panic_str(ERR_INVALID_ENCODING),
         }
     }
 
@@ -6413,7 +6566,7 @@ impl Core {
         }
         let required = additional
             .checked_mul(env::storage_byte_cost().as_yoctonear())
-            .unwrap_or_else(|| panic!("{ERR_STORAGE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_STORAGE));
         let available = self.storage_deposits.get(account).unwrap_or(0);
         require!(available >= required, ERR_STORAGE);
         self.storage_deposits
@@ -6432,7 +6585,7 @@ impl Core {
         authorization_epoch: u64,
     ) -> Vec<u8> {
         let key = crypto_adapter::parse_public_key(public_key)
-            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         let domain = to_vec(&(
             b"near-confidential-lending/canonical-zero/v2".to_vec(),
             self.asset.network_id.clone(),
@@ -6443,11 +6596,11 @@ impl Core {
             key_id,
             authorization_epoch,
         ))
-        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         let domain = env::sha256(&domain);
         let ciphertext = crypto_adapter::zero_ciphertext(&key, &domain)
-            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
-        crypto_adapter::encode(&ciphertext).unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"))
+            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
+        crypto_adapter::encode(&ciphertext).unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING))
     }
 
     fn is_canonical_zero_for(
@@ -6489,7 +6642,7 @@ impl Core {
             broker_id,
         };
         book.update(&mut store, loan_id, old_leaf, next_leaf, &old_root)
-            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"))
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF))
             .to_vec()
     }
 
@@ -6514,10 +6667,34 @@ impl Core {
         })
     }
 
+    /// Compute the first checkpoint boundary after the risk transition that
+    /// made this broker pending.  Both the permissionless checkpoint method
+    /// and the inline keeper settlement path use this exact value, so a
+    /// settlement cannot bypass the vault cadence by choosing a timestamp.
+    fn reconciliation_scheduled_at(&self, broker: &Broker, vault: &Vault) -> u64 {
+        let since = if broker.accounting_pending_since == 0 {
+            // A zero value is only possible for state created before this
+            // field existed or a synthetic unit-test context.  Use the
+            // current block as a conservative migration fallback.
+            now_seconds()
+        } else {
+            broker.accounting_pending_since
+        };
+        let epoch = vault.checkpoint_policy.epoch_seconds;
+        ((since / epoch)
+            .checked_add(1)
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT)))
+        .checked_mul(epoch)
+        .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT))
+    }
+
     /// Build the exact operation context used by the crypto profile.  The
     /// operation identifier is deterministic from the method and affected
     /// public IDs; expected versions make a proof one-shot even when a caller
     /// retries the same payload.
+    // These explicit fields mirror the protocol transcript and are kept
+    // separate to make every binding visible at each call site.
+    #[allow(clippy::too_many_arguments)]
     fn crypto_context(
         &self,
         domain: &str,
@@ -6538,10 +6715,11 @@ impl Core {
             expected_versions,
             authorization_epochs,
             expiry,
-            &env::predecessor_account_id().to_string(),
+            env::predecessor_account_id().as_ref(),
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn crypto_context_with_subject(
         &self,
         domain: &str,
@@ -6560,8 +6738,8 @@ impl Core {
         );
         crypto_adapter::context(
             &self.asset.network_id,
-            &env::current_account_id().to_string(),
-            &self.asset.token_account.to_string(),
+            env::current_account_id().as_ref(),
+            self.asset.token_account.as_ref(),
             &operation_id,
             vault_id,
             broker_id,
@@ -6585,7 +6763,7 @@ impl Core {
     ) -> Statement {
         require!(!args.statement.is_empty(), ERR_BAD_PROOF);
         let statement = crypto_adapter::parse_statement(&args.statement)
-            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         require!(statement.kind() == expected_kind, ERR_BAD_PROOF);
         if let Some(kind) = args.statement_kind {
             require!(kind == expected_kind.as_u8(), ERR_BAD_PROOF);
@@ -6597,21 +6775,13 @@ impl Core {
             );
         }
         require!(statement.context() == expected_context, ERR_BAD_PROOF);
-        // `statement_inputs` returns the digest as its first fixed input.  Use
-        // that already-computed value for the optional transport consistency
-        // check; recomputing `Statement::context_digest()` would evaluate the
-        // Poseidon transcript a second time on the NEAR host.
-        let inputs = crypto_adapter::statement_inputs(&statement)
-            .unwrap_or_else(|_| panic!("{ERR_BAD_PROOF}"));
-        if !args.context.is_empty() {
-            require!(
-                inputs
-                    .first()
-                    .map(|digest| digest.as_slice() == args.context.as_slice())
-                    .unwrap_or(false),
-                ERR_BAD_PROOF
-            );
-        }
+        // The proof envelope carries the transcript digest.  The typed
+        // statement supplies every remaining slot, and the pinned circuit
+        // constrains the digest to that slot vector.  Core intentionally does
+        // not recompute host Poseidon here.
+        require!(args.context.len() == 32, ERR_BAD_PROOF);
+        let inputs = crypto_adapter::statement_inputs_with_digest(&statement, &args.context)
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         if !args.public_inputs.is_empty() {
             require!(
                 args.public_inputs.len() == inputs.len()
@@ -6626,7 +6796,7 @@ impl Core {
         let key = self
             .verifier_keys
             .get(&expected_kind.as_u8())
-            .unwrap_or_else(|| panic!("{ERR_UNSUPPORTED_PROFILE}"));
+            .unwrap_or_else(|| env::panic_str(ERR_UNSUPPORTED_PROFILE));
         require!(
             args.verifying_key_hash == key.verifying_key_hash,
             ERR_UNSUPPORTED_PROFILE
@@ -6645,6 +6815,10 @@ impl Core {
         statement
     }
 
+    // Conversion verification has three fixed reader keys and three fixed
+    // output views; collapsing them into untyped slices would weaken the
+    // statement-to-ledger binding.
+    #[allow(clippy::too_many_arguments)]
     fn verify_public_conversion_statement(
         &self,
         args: &ProofArgs,
@@ -6661,19 +6835,19 @@ impl Core {
         require!(amount <= u64::MAX as u128, ERR_INVALID_AMOUNT);
         let statement = self.verify_typed_statement(args, StatementKind::PublicConversion, context);
         let Statement::PublicConversion(statement) = statement else {
-            panic!("{ERR_BAD_PROOF}");
+            env::panic_str(ERR_BAD_PROOF);
         };
         let owner = crypto_adapter::parse_public_key(owner_key)
-            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         let before = crypto_adapter::parse_ciphertext(before)
-            .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         require!(statement.owner_key == owner, ERR_BAD_PROOF);
         require!(statement.spending_before == before, ERR_BAD_PROOF);
         if let Some(after) = after {
             require!(
                 statement.spending_after
                     == crypto_adapter::parse_ciphertext(after)
-                        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                 ERR_BAD_PROOF
             );
         }
@@ -6694,11 +6868,11 @@ impl Core {
         require!(statement.views.len() == reader_keys.len(), ERR_BAD_PROOF);
         for (index, view) in statement.views.iter().enumerate() {
             let expected_key = crypto_adapter::parse_public_key(reader_keys[index])
-                .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
             require!(view.reader_key == expected_key, ERR_BAD_PROOF);
             if let Some(output) = output_views[index] {
                 let expected_ciphertext = crypto_adapter::parse_ciphertext(output)
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
                 require!(view.ciphertext == expected_ciphertext, ERR_BAD_PROOF);
             }
         }
@@ -6715,18 +6889,18 @@ impl Core {
     ) {
         let statement = self.verify_typed_statement(args, StatementKind::ZeroBalance, context);
         let Statement::ZeroBalance(statement) = statement else {
-            panic!("{ERR_BAD_PROOF}");
+            env::panic_str(ERR_BAD_PROOF);
         };
         require!(
             statement.owner_key
                 == crypto_adapter::parse_public_key(owner_key)
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             ERR_BAD_PROOF
         );
         require!(
             statement.ciphertext
                 == crypto_adapter::parse_ciphertext(ciphertext)
-                    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}")),
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             ERR_BAD_PROOF
         );
         require!(statement.expected_amount == 0, ERR_BAD_PROOF);
@@ -6737,10 +6911,7 @@ impl Core {
     }
 
     fn vault_view(&self, vault: Vault) -> VaultView {
-        let nav = vault
-            .assets_total
-            .checked_sub(vault.loss_unrealized)
-            .unwrap_or(0);
+        let nav = vault.assets_total.saturating_sub(vault.loss_unrealized);
         VaultView {
             vault_id: vault.vault_id,
             owner: vault.owner,
@@ -6822,7 +6993,7 @@ impl Core {
             "data": payload,
         });
         let encoded =
-            serde_json::to_string(&event).unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+            serde_json::to_string(&event).unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         require!(encoded.len() <= MAX_EVENT_BYTES, ERR_INVALID_ENCODING);
         env::log_str(&format!("EVENT_JSON:{encoded}"));
     }
@@ -6852,12 +7023,14 @@ fn digest32(bytes: &[u8]) -> [u8; 32] {
 
 fn validate_public_key(bytes: &[u8]) {
     require!(bytes.len() <= MAX_CIPHERTEXT_BYTES, ERR_INVALID_ENCODING);
-    crypto_adapter::parse_public_key(bytes).unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+    crypto_adapter::parse_public_key(bytes)
+        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
 }
 
 fn validate_commitment(bytes: &[u8]) {
     require!(bytes.len() <= MAX_CIPHERTEXT_BYTES, ERR_INVALID_ENCODING);
-    crypto_adapter::parse_commitment(bytes).unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+    crypto_adapter::parse_commitment(bytes)
+        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
 }
 
 fn validate_ciphertext_set(values: &[Vec<u8>], minimum: usize) {
@@ -6879,12 +7052,12 @@ fn bounded_limit(limit: u32) {
 /// current ciphertext and this function is the only inbox-credit path.
 fn combine_ciphertexts(current: &[u8], delta: &[u8]) -> Vec<u8> {
     let current = crypto_adapter::parse_ciphertext(current)
-        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
     let delta = crypto_adapter::parse_ciphertext(delta)
-        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
     let combined = crypto_adapter::add_ciphertexts(&current, &delta)
-        .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
-    crypto_adapter::encode(&combined).unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"))
+        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
+    crypto_adapter::encode(&combined).unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING))
 }
 
 fn share_key(vault_id: u64, owner: &AccountId) -> Vec<u8> {
@@ -6935,7 +7108,7 @@ fn validate_authorization_nonce(
         let key = core
             .authorization_keys
             .get(&authorization_key(owner, key_id))
-            .unwrap_or_else(|| panic!("{ERR_UNAUTHORIZED}"));
+            .unwrap_or_else(|| env::panic_str(ERR_UNAUTHORIZED));
         require!(
             key.owner == *owner && !key.revoked && key.epoch == epoch && key.nonce == nonce,
             ERR_UNAUTHORIZED
@@ -6952,7 +7125,7 @@ fn statement_kind_for_operation(operation: &str) -> Option<u8> {
         "confidential-send" => Some(3),
         "originate" => Some(4),
         "repay" => Some(5),
-        "reconcile-credit" | "manage-loan" => Some(6),
+        "reconcile-credit" | "settle-reconcile" | "manage-loan" => Some(6),
         "broker-zero" | "broker-zero-total" | "loan-zero" => Some(7),
         "holder" => Some(8),
         _ => None,
@@ -6964,7 +7137,7 @@ fn deposit_key(token: &AccountId, sender: &AccountId, deposit_id: &str) -> Strin
 }
 
 fn hash_bytes<T: BorshSerialize>(value: &T) -> Vec<u8> {
-    let encoded = to_vec(value).unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+    let encoded = to_vec(value).unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
     Sha256::digest(encoded).to_vec()
 }
 
@@ -6994,7 +7167,7 @@ fn book_domain(core: &Core, broker_id: u64) -> [u8; 32] {
         core.asset.crypto_profile_hash.clone(),
         broker_id,
     ))
-    .unwrap_or_else(|_| panic!("{ERR_INVALID_ENCODING}"));
+    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
     env::sha256_array(&bytes)
 }
 
@@ -7037,6 +7210,10 @@ fn keeper_grant_view(grant: &KeeperGrant) -> KeeperGrantView {
     }
 }
 
+// The authenticated leaf includes the complete canonical loan record.  The
+// explicit arguments document the exact hash preimage and are deliberately
+// not replaced by a caller-provided digest.
+#[allow(clippy::too_many_arguments)]
 fn derive_loan_leaf(
     loan_id: u64,
     broker_id: u64,
@@ -7093,66 +7270,26 @@ fn derive_tombstone_leaf(
     ))
 }
 
-fn mul_u128(left: u128, right: u128) -> [u64; 4] {
-    let a = [left as u64, (left >> 64) as u64];
-    let b = [right as u64, (right >> 64) as u64];
-    let mut out = [0u64; 4];
-    for i in 0..2 {
-        let mut carry = 0u128;
-        for j in 0..2 {
-            let index = i + j;
-            let value = u128::from(a[i]) * u128::from(b[j]) + u128::from(out[index]) + carry;
-            out[index] = value as u64;
-            carry = value >> 64;
-        }
-        let mut index = i + 2;
-        while carry != 0 && index < 4 {
-            let value = u128::from(out[index]) + carry;
-            out[index] = value as u64;
-            carry = value >> 64;
-            index += 1;
-        }
-    }
-    out
-}
-
-fn div_u256_u128(numerator: [u64; 4], denominator: u128) -> (u128, u128) {
-    require!(denominator > 0, ERR_INVALID_AMOUNT);
-    let mut quotient = [0u64; 4];
-    let mut remainder = 0u128;
-    for limb_index in (0..4).rev() {
-        for bit_index in (0..64).rev() {
-            let bit = (numerator[limb_index] >> bit_index) & 1;
-            let high = remainder >> 127;
-            let shifted = remainder.wrapping_shl(1).wrapping_add(u128::from(bit));
-            if high != 0 || shifted >= denominator {
-                remainder = shifted.wrapping_sub(denominator);
-                quotient[limb_index] |= 1u64 << bit_index;
-            } else {
-                remainder = shifted;
-            }
-        }
-    }
-    require!(quotient[2] == 0 && quotient[3] == 0, ERR_INVALID_AMOUNT);
-    (
-        (u128::from(quotient[1]) << 64) | u128::from(quotient[0]),
-        remainder,
-    )
-}
-
 fn mul_div_floor(left: u128, right: u128, denominator: u128) -> u128 {
-    let (quotient, _) = div_u256_u128(mul_u128(left, right), denominator);
-    quotient
+    lending_math::mul_div_floor(left, right, denominator)
+        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_AMOUNT))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use near_sdk::test_utils::VMContextBuilder;
-    use near_sdk::{NearToken, testing_env};
+    #[allow(deprecated)]
+    use near_sdk::test_utils::{VMContextBuilder, testing_env_with_promise_results};
+    use near_sdk::{NearToken, PromiseResult, testing_env};
+    use std::sync::{Mutex, MutexGuard, OnceLock};
 
     fn account(value: &str) -> AccountId {
         value.parse().unwrap()
+    }
+
+    fn test_guard() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
     }
 
     fn test_public_key(seed: u64) -> Vec<u8> {
@@ -7164,6 +7301,8 @@ mod tests {
     }
 
     fn init() -> Core {
+        let issuer_public_key = test_public_key(3);
+        let auditor_public_key = test_public_key(5);
         testing_env!(
             VMContextBuilder::new()
                 .predecessor_account_id(account("owner.testnet"))
@@ -7174,9 +7313,9 @@ mod tests {
             decimals: 6,
             controller_account: account("issuer.testnet"),
             issuer_key_id: 1,
-            issuer_public_key: test_public_key(3),
+            issuer_public_key,
             token_auditor_key_id: 2,
-            token_auditor_public_key: test_public_key(5),
+            token_auditor_public_key: auditor_public_key,
             crypto_profile_hash: confidential_crypto::PROFILE_HASH.to_vec(),
             network_id: "local".to_string(),
             token_trust_policy: "local-test".to_string(),
@@ -7212,6 +7351,7 @@ mod tests {
 
     #[test]
     fn first_deposit_uses_share_scale_and_public_claim() {
+        let _guard = test_guard();
         let mut core = init();
         let vault_id = core.create_vault(CreateVaultArgs {
             assets_maximum: U128(0),
@@ -7263,6 +7403,7 @@ mod tests {
 
     #[test]
     fn deposit_receipt_is_sender_scoped_and_idempotent() {
+        let _guard = test_guard();
         let mut core = init();
         let sender = account("sender.testnet");
         testing_env!(
@@ -7280,14 +7421,21 @@ mod tests {
         let duplicate = core.ft_on_transfer(
             sender,
             U128(25),
-            r#"{"version":1,"deposit_id":"d1"}"#.into(),
+            r#"{"deposit_id":"d1","version":1}"#.into(),
         );
         assert!(matches!(duplicate, PromiseOrValue::Value(U128(25))));
+        let unknown = core.ft_on_transfer(
+            account("sender.testnet"),
+            U128(25),
+            r#"{"version":1,"deposit_id":"d2","extra":true}"#.into(),
+        );
+        assert!(matches!(unknown, PromiseOrValue::Value(U128(25))));
         assert_eq!(core.public_claim_total, 25);
     }
 
     #[test]
     fn payout_requires_runtime_result_before_finalize() {
+        let _guard = test_guard();
         let mut core = init();
         let owner = account("lender.testnet");
         core.claims.insert(
@@ -7322,5 +7470,254 @@ mod tests {
         }));
         assert!(result.is_err());
         assert_eq!(core.get_claim(U64(9)).unwrap().reserved_by, Some(42));
+    }
+
+    #[test]
+    fn authorization_epoch_and_nonce_reject_stale_relays() {
+        let _guard = test_guard();
+        let mut core = init();
+        let owner = account("alice.testnet");
+        core.authorization_keys.insert(
+            &authorization_key(&owner, 7),
+            &AuthorizationKey {
+                owner: owner.clone(),
+                key_id: 7,
+                public_key: vec![9; 32],
+                epoch: 3,
+                nonce: 2,
+                revoked: false,
+            },
+        );
+        validate_authorization_nonce(&core, &owner, Some(7), 3, 2);
+        assert!(!verify_authorization_signature(
+            &core,
+            &owner,
+            Some(7),
+            3,
+            1,
+            b"repay",
+            &[0; 64],
+        ));
+        let stale = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            validate_authorization_nonce(&core, &owner, Some(7), 3, 1)
+        }));
+        assert!(stale.is_err());
+        let revoked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            validate_authorization_nonce(&core, &owner, Some(8), 3, 2)
+        }));
+        assert!(revoked.is_err());
+    }
+
+    #[test]
+    fn zero_nav_redemption_requires_explicit_worthless_burn() {
+        let _guard = test_guard();
+        let mut core = init();
+        let owner = account("lender.testnet");
+        let vault_id = core.create_vault(CreateVaultArgs {
+            assets_maximum: U128(0),
+            kind: VaultKind::OpenEnded,
+            phase_times: None,
+            share_scale: 6,
+            shares_transferable: true,
+            checkpoint_policy: CheckpointPolicy {
+                epoch_seconds: 60,
+                disclosure_policy: "aggregate".into(),
+            },
+        });
+        let mut vault = core.vaults.get(&vault_id.0).unwrap();
+        vault.shares_total = 10;
+        core.vaults.insert(&vault_id.0, &vault);
+        core.shares.insert(&share_key(vault_id.0, &owner), &10);
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(owner.clone())
+                .block_timestamp(1_000_000_000)
+                .build()
+        );
+        let no_burn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.redeem_shares(RedeemSharesArgs {
+                vault_id: vault_id.0,
+                shares: U128(10),
+                min_assets_out: U128(0),
+                expiry: 100,
+                sole_shareholder_waiver: false,
+                burn_worthless: false,
+                broker_zero_proofs: Vec::new(),
+            });
+        }));
+        assert!(no_burn.is_err());
+        let claim_id = core.redeem_shares(RedeemSharesArgs {
+            vault_id: vault_id.0,
+            shares: U128(10),
+            min_assets_out: U128(0),
+            expiry: 100,
+            sole_shareholder_waiver: false,
+            burn_worthless: true,
+            broker_zero_proofs: Vec::new(),
+        });
+        assert_eq!(claim_id, U64(0));
+        assert_eq!(core.get_share_balance(vault_id, owner), U128(0));
+    }
+
+    #[test]
+    fn keeper_grants_replace_and_prune_bounded_live_slots() {
+        let _guard = test_guard();
+        let mut core = init();
+        let owner = account("owner.testnet");
+        let delegate_a = account("keeper-a.testnet");
+        let delegate_b = account("keeper-b.testnet");
+        let delegate_c = account("keeper-c.testnet");
+        for (delegate, key_id) in [
+            (delegate_a.clone(), 1_u64),
+            (delegate_b.clone(), 2_u64),
+            (delegate_c.clone(), 3_u64),
+        ] {
+            core.authorization_keys.insert(
+                &authorization_key(&delegate, key_id),
+                &AuthorizationKey {
+                    owner: delegate,
+                    key_id,
+                    public_key: Vec::new(),
+                    epoch: 1,
+                    nonce: 0,
+                    revoked: false,
+                },
+            );
+        }
+        core.brokers.insert(
+            &7,
+            &Broker {
+                broker_id: 7,
+                owner: owner.clone(),
+                vault_id: 1,
+                encryption_key: EncryptionKey {
+                    key_id: 1,
+                    public_key: Vec::new(),
+                    registered_at: 0,
+                    authorization_epoch: 0,
+                },
+                authorization_epoch: 0,
+                debt_total: 0,
+                debt_maximum: 0,
+                loan_sequence: 0,
+                active_loan_count: 0,
+                impaired_loan_count: 0,
+                spending_ciphertext: Vec::new(),
+                inbox_ciphertext: Vec::new(),
+                issuer_balance_ciphertext: Vec::new(),
+                auditor_balance_ciphertext: Vec::new(),
+                spending_commitment: Vec::new(),
+                inbox_commitment: Vec::new(),
+                spending_version: 0,
+                loan_book_root: Vec::new(),
+                book_version: 0,
+                active_principal_ciphertext: Vec::new(),
+                impaired_principal_ciphertext: Vec::new(),
+                active_principal_commitment: Vec::new(),
+                impaired_principal_commitment: Vec::new(),
+                impairment_provision: 0,
+                cumulative_draws: 0,
+                cumulative_settlements: 0,
+                cumulative_yield: 0,
+                cumulative_realized_losses: 0,
+                accounting_version: 0,
+                risk_version: 0,
+                reconciled_risk_version: 0,
+                accounting_pending: false,
+                accounting_pending_since: 0,
+                reconciliation_checkpoint_id: None,
+                delegates: Vec::new(),
+                last_settlement_at: 0,
+                tombstoned: false,
+            },
+        );
+        let grant =
+            |delegate_account: AccountId, delegate_key_id: u64, expires_at: u64| GrantKeeperArgs {
+                broker_id: 7,
+                delegate_account,
+                delegate_key_id,
+                allowed_settlement_per_operation: U128(10),
+                allowed_settlement_per_window: U128(100),
+                window_seconds: 60,
+                expires_at,
+                delegate_epoch: 1,
+                allowed_operations: vec![KeeperOperation::Settle],
+            };
+
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(owner.clone())
+                .block_timestamp(1_000_000_000)
+                .build()
+        );
+        core.grant_keeper(grant(delegate_a.clone(), 1, 6));
+        core.grant_keeper(grant(delegate_a.clone(), 1, 15));
+        assert_eq!(core.brokers.get(&7).unwrap().delegates.len(), 1);
+        assert_eq!(core.brokers.get(&7).unwrap().delegates[0].expires_at, 15);
+
+        core.grant_keeper(grant(delegate_b, 2, 6));
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(owner)
+                .block_timestamp(20_000_000_000)
+                .build()
+        );
+        core.grant_keeper(grant(delegate_c, 3, 100));
+        let broker = core.brokers.get(&7).unwrap();
+        assert_eq!(broker.delegates.len(), 1);
+        assert_eq!(broker.delegates[0].delegate_key_id, 3);
+        assert_eq!(broker.authorization_epoch, 4);
+    }
+
+    #[allow(deprecated)]
+    #[test]
+    fn payout_success_is_terminal_and_permissionless_finalize_is_idempotent() {
+        let _guard = test_guard();
+        let mut core = init();
+        let owner = account("lender.testnet");
+        core.claims.insert(
+            &9,
+            &PublicClaim {
+                claim_id: 9,
+                owner: owner.clone(),
+                amount: 10,
+                created_at: 0,
+                reserved_by: None,
+            },
+        );
+        core.public_claim_total = 10;
+        core.custody_total = 10;
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(owner.clone())
+                .attached_deposit(NearToken::from_yoctonear(1))
+                .build()
+        );
+        let _promise = core.request_payout(RequestPayoutArgs {
+            claim_id: 9,
+            recipient: account("recipient.testnet"),
+            operation_id: 42,
+        });
+        let call_hash = core.payouts.get(&42).unwrap().call_hash;
+        testing_env_with_promise_results(
+            VMContextBuilder::new()
+                .current_account_id(account("test.testnet"))
+                .predecessor_account_id(account("test.testnet"))
+                .build(),
+            PromiseResult::Successful(Vec::new()),
+        );
+        assert!(core.on_payout_result(U64(42), 1, call_hash));
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(account("finalizer.testnet"))
+                .build()
+        );
+        core.finalize_payout(U64(42));
+        core.finalize_payout(U64(42));
+        assert_eq!(core.get_claim(U64(9)), None);
+        assert!(matches!(
+            core.get_payout(U64(42)).unwrap().status,
+            PayoutStatus::Succeeded
+        ));
     }
 }

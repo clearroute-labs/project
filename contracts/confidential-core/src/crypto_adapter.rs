@@ -9,7 +9,9 @@
 //! verifier artifacts are pinned by deployment configuration; this adapter is
 //! not an independent cryptographic review claim.
 
-use confidential_crypto::{Ciphertext, Commitment, OperationContext, PublicKey, Statement};
+use confidential_crypto::{
+    Ciphertext, Commitment, FieldHex, OperationContext, PublicKey, Statement,
+};
 
 pub type WireError = ();
 
@@ -43,10 +45,37 @@ pub fn parse_commitment(bytes: &[u8]) -> Result<Commitment, WireError> {
     parse(bytes)
 }
 
+/// Build the complete public-input vector for read-only context views.  A view
+/// is not on the proof hot path, so it may evaluate the transcript digest.
 pub fn statement_inputs(statement: &Statement) -> Result<Vec<[u8; 32]>, WireError> {
     statement.public_input_bytes().map_err(|_| ())
 }
 
+pub fn statement_inputs_with_digest(
+    statement: &Statement,
+    context_digest: &[u8],
+) -> Result<Vec<[u8; 32]>, WireError> {
+    // The first public input is supplied by the proof envelope.  The pinned
+    // circuit constrains that digest to the exact slot vector below, while
+    // Core has already compared `statement.context()` with its authoritative
+    // operation context.  This avoids evaluating the expensive host Poseidon
+    // transcript merely to reconstruct a value the proof itself constrains.
+    let digest: [u8; 32] = context_digest.try_into().map_err(|_| ())?;
+    let slots = statement.public_slots_without_hash().map_err(|_| ())?;
+    let mut inputs = Vec::with_capacity(slots.len() + 1);
+    inputs.push(digest);
+    for slot in slots {
+        let wire = FieldHex::from(slot);
+        let bytes = hex::decode(wire.0).map_err(|_| ())?;
+        inputs.push(bytes.try_into().map_err(|_| ())?);
+    }
+    Ok(inputs)
+}
+
+// The typed context is the canonical wire transcript.  Keeping each field
+// explicit makes call sites auditable and avoids accepting an opaque caller
+// hash, so this fixed-ABI helper intentionally has more than seven arguments.
+#[allow(clippy::too_many_arguments)]
 pub fn context(
     network_id: &str,
     core_account: &str,

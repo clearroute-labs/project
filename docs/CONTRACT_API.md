@@ -30,7 +30,7 @@ view with `custody_cap: U128`; the native storage record is not exposed.
 | --- | --- | --- | --- |
 | 'storage_deposit' | optional self account | account | Records NEAR storage budget |
 | 'register_holder' | key ID, public key, possession proof; four zero proofs when rotating | holder | Registers an encryption/authorization epoch |
-| 'register_authorization_key' / 'revoke_authorization_key' | application key and proof, or key ID | account | Advances public auth epoch and revokes a key without touching encrypted balances |
+| 'register_authorization_key' / 'revoke_authorization_key' | application key, or key ID | direct account | Advances public auth epoch and revokes a key without touching encrypted balances |
 | 'create_vault' | asset phase/share/checkpoint policy | caller | Vault ID |
 | 'create_broker' | vault, broker key, debt cap, PoP | vault owner | Broker ID |
 | 'create_proposal' | parties, schedule, encrypted P/O/Q, agreement digest/signatures | broker owner or borrower | Proposal ID |
@@ -86,6 +86,16 @@ immutable per-operation/per-window grant. Grants explicitly list
 `MergeInbox` and/or `Settle`, bind a registered delegate authorization key and
 epoch, and are visible through `delegates` and `get_keeper_grants`; the broker
 view also exposes `authorization_epoch` and `last_settlement_at`.
+For a positive-U settlement, a scoped keeper may not call
+`prepare_reconciliation`. Instead it requests
+`get_proof_context({ operation: "settle-reconcile", broker_id, amount })` after
+the broker's checkpoint cadence boundary, proves the virtual post-settlement
+aggregate, and submits the same `settle` call with
+`reconciliation.checkpoint_id: "0"`. Core derives the next checkpoint ID,
+binds it into the reconciliation statement context, and consumes the checkpoint
+atomically with settlement. A nonzero checkpoint ID is reserved for a
+permissionless checkpoint created by `prepare_reconciliation`; only the
+broker's current `reconciliation_checkpoint_id` is accepted.
 `ReconcileArgs` contains the checkpoint and broker IDs, expected risk/accounting
 versions, public `new_broker_debt`, `new_broker_provision`, `loss`, and
 `new_vault_total`, plus the reconciliation proof. Those public outputs are
@@ -94,6 +104,15 @@ are not accepted as an operator-selected write. `manage_loan` similarly derives
 principal aggregates and the authenticated sparse-book leaf from stored state;
 its optional proof is an additional typed consistency check, not a replacement
 for broker-owner authorization.
+
+Keeper grants are a bounded live capability set (at most 32 entries). Granting
+the same delegate account replaces its existing entry in place, while expired
+or revoked entries are pruned before a new slot is allocated. Core advances the
+broker authorization epoch and rebinds every surviving active grant on each
+grant/revoke operation, so a pre-revocation proof cannot be replayed; grant
+events retain the replacement and epoch audit trail. A live replacement carries
+the current window's spent amount forward, so redelegation cannot reset the
+per-window settlement cap.
 
 ## External NEP-141 boundary
 
@@ -141,7 +160,8 @@ unbounded collection. 'get_freeze_status(account_id?)' reports asset and
 holder freeze state separately and does not grant an override. 'get_keeper_grants'
 returns bounded delegate views with U128 limits, operation scopes, delegate and
 revocation epochs, expiry and window counters; broker views include the same
-grants, the broker authorization epoch and last settlement timestamp.
+grants, the broker authorization epoch, accounting-pending timestamp,
+current reconciliation checkpoint ID, and last settlement timestamp.
 'prepare_context' and 'get_operation_context' return the
 immutable asset/profile/network identity, current IDs and versions, and a
 canonical state digest for prover statement construction. 'get_statement_context'
@@ -157,6 +177,11 @@ authoritative context, derives public inputs from that statement, and returns
 the same statement/context for local proving. It does not hash arbitrary
 caller-selected outputs. A wallet must
 refresh these views after a merge or any stale-state error.
+
+`get_proof_context` operation `settle-reconcile` returns the post-settlement
+accounting version and the derived checkpoint ID. It is the only context a
+keeper needs for the bundled path; no keeper authority is granted for
+`prepare_reconciliation` or arbitrary reconciliation.
 
 For wallet registration flows, `get_proof_context` uses operation
 `register-holder` with `{ account_id, key_id }` and `create-broker` with
@@ -184,15 +209,17 @@ Every proof argument contains a typed statement:
     { "statement": "<canonical Statement JSON>",
       "verifying_key_hash": "<immutable prepared-key hash>",
       "proof": "<profile proof bytes>",
-      "context": "<optional consistency bytes>",
+      "context": "<32-byte transcript digest>",
       "public_inputs": "<optional consistency inputs>" }
 
 The method selects the statement kind and recomputes the expected context from
 the operation domain, immutable profile/manifest hashes, exact current
 pre-state, affected IDs/keys/epochs, expected versions, and method-specific
-post ciphertexts. A statement kind, public-input vector, or context hash
-supplied by a caller is only a consistency check; authoritative public inputs
-come from the parsed typed statement itself and are verified against the
+post ciphertexts. The required context digest is the first proof public input;
+the pinned circuit constrains it to the exact typed-statement slot vector, so
+Core does not spend gas recomputing the host Poseidon transcript. An optional
+public-input vector is only a consistency check; all remaining authoritative
+inputs come from the parsed typed statement and are verified against the
 immutable prepared key for that kind. Proof validity never grants
 authorization: direct predecessor/keeper/party checks and proposal
 epochs/nonces are also enforced.

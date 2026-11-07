@@ -80,7 +80,7 @@ pub mod option_u64_string {
 pub mod u64_vec_string {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    pub fn serialize<S>(values: &Vec<u64>, serializer: S) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(values: &[u64], serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
@@ -367,6 +367,10 @@ pub struct Broker {
     #[serde(with = "u64_string")]
     pub reconciled_risk_version: u64,
     pub accounting_pending: bool,
+    #[serde(with = "u64_string")]
+    pub accounting_pending_since: u64,
+    #[serde(default, with = "option_u64_string")]
+    pub reconciliation_checkpoint_id: Option<u64>,
     pub delegates: Vec<KeeperGrant>,
     #[serde(with = "u64_string")]
     pub last_settlement_at: u64,
@@ -748,7 +752,11 @@ pub struct RegisterAuthorizationKeyArgs {
     #[serde(with = "u64_string")]
     pub key_id: u64,
     pub public_key: Vec<u8>,
-    pub proof: ProofArgs,
+    /// Optional legacy field retained for wire compatibility.  Registration
+    /// is authenticated by the direct predecessor account; no fake proof is
+    /// accepted or required for this application authorization key.
+    #[serde(default)]
+    pub proof: Option<ProofArgs>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1268,6 +1276,10 @@ pub struct BrokerView {
     #[serde(with = "u64_string")]
     pub reconciled_risk_version: u64,
     pub accounting_pending: bool,
+    #[serde(with = "u64_string")]
+    pub accounting_pending_since: u64,
+    #[serde(default, with = "option_u64_string")]
+    pub reconciliation_checkpoint_id: Option<u64>,
     pub delegates: Vec<KeeperGrantView>,
     #[serde(with = "u64_string")]
     pub last_settlement_at: u64,
