@@ -249,20 +249,21 @@ function recoveryPage(value: unknown): RecoveryHistoryPage {
       subject_key: text(record.subject_key, `records[${index}].subject_key`),
       subject_sequence: decimal(record.subject_sequence, `records[${index}].subject_sequence`),
       block_timestamp: decimal(record.block_timestamp, `records[${index}].block_timestamp`),
-      statement: record.statement === undefined ? undefined : bytes(record.statement, `records[${index}].statement`),
       key_ids: decimalList(record.key_ids, `records[${index}].key_ids`),
       versions: decimalList(record.versions, `records[${index}].versions`),
       metadata: record.metadata,
     };
+    if (record.statement !== undefined) result.statement = bytes(record.statement, `records[${index}].statement`);
     if (record.origin_subject_key !== undefined) result.origin_subject_key = text(record.origin_subject_key, `records[${index}].origin_subject_key`);
     if (record.origin_subject_sequence !== undefined) result.origin_subject_sequence = decimal(record.origin_subject_sequence, `records[${index}].origin_subject_sequence`);
     return result;
   });
-  return {
+  const result: RecoveryHistoryPage = {
     records,
-    next_cursor: page.next_cursor === null || page.next_cursor === undefined ? undefined : decimal(page.next_cursor, 'next_cursor'),
     end_cursor: decimal(page.end_cursor, 'end_cursor'),
   };
+  if (page.next_cursor !== null && page.next_cursor !== undefined) result.next_cursor = decimal(page.next_cursor, 'next_cursor');
+  return result;
 }
 
 /**
@@ -272,7 +273,7 @@ function recoveryPage(value: unknown): RecoveryHistoryPage {
  * witnesses out of network arguments by construction.
  */
 export class CoreWallet {
-  readonly recovery?: HistoryRecovery;
+  readonly recovery: HistoryRecovery | undefined;
 
   constructor(
     readonly rpc: CoreReadRpc,
@@ -316,13 +317,13 @@ export class CoreWallet {
       commitments: bytesList(raw.commitments, 'commitments'),
       publicValues: decimalList(raw.public_values, 'public_values'),
       stateDigest: hex(raw.state_digest, 'state_digest'),
-      statementKind: raw.statement_kind === null || raw.statement_kind === undefined ? undefined : safeKind(raw.statement_kind, 'statement_kind'),
       statement: new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bytes(raw.statement, 'statement'))),
       publicInputs: bytesList(raw.public_inputs, 'public_inputs'),
       verifyingKeyHash: hex(raw.verifying_key_hash, 'verifying_key_hash'),
       operationContext: operationContext(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bytes(raw.operation_context, 'operation_context'))))),
       block,
     };
+    if (raw.statement_kind !== null && raw.statement_kind !== undefined) result.statementKind = safeKind(raw.statement_kind, 'statement_kind');
     if (result.profileHash !== this.configuration.profileHash) throw new Error('Core proof context profile does not match the deployment');
     if (this.configuration.manifestHash && result.manifestHash !== this.configuration.manifestHash) throw new Error('Core proof context manifest does not match the deployment');
     return result;

@@ -6,6 +6,7 @@ import {
   type AppAdapters,
   type AuditCiphertextBundle,
   type BrokerKeyPreparation,
+  type BrokerKeyView,
   type BrokerSummary,
   type CryptoProvider,
   type CryptoProviderStatus,
@@ -63,6 +64,7 @@ class UnavailableProtocolClient implements ProtocolClient {
   getDashboard(_accountId: string): Promise<DashboardSnapshot> { return Promise.reject(this.fail()) }
   getPrivateAccount(_accountId: string): Promise<PrivateAccountView> { return Promise.reject(this.fail()) }
   getHolderEncryptionKey(_accountId: string): Promise<HolderKeyView> { return Promise.reject(this.fail()) }
+  getBrokerEncryptionKey(_brokerId: string): Promise<BrokerKeyView> { return Promise.reject(this.fail()) }
   getBrokerPrivateAccount(_brokerId: string): Promise<PrivateAccountView> { return Promise.reject(this.fail()) }
   getProposal(_proposalId: string): Promise<ProposalSummary> { return Promise.reject(this.fail()) }
   getAuditBundle(_input: { scope: 'loan' | 'token'; subjectId: string }): Promise<AuditCiphertextBundle> { return Promise.reject(this.fail()) }
@@ -73,12 +75,17 @@ class UnavailableProtocolClient implements ProtocolClient {
   createBroker(_input: { vaultId: string; brokerEncryptionKeyId: string; brokerEncryptionKey: string; brokerDebtCeiling: string; possessionProof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   depositExternal(_input: { amount: string; depositId: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   depositToVault(_input: { claimId: string; vaultId: string; amount: string; minShares: string; expiresAt: number }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
-  redeemShares(_input: { vaultId: string; shares: string; minAmount: string; expiresAt: number }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  redeemShares(_input: { vaultId: string; shares: string; minAmount: string; expiresAt: number; soleShareholderWaiver?: boolean; burnWorthless?: boolean }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  transferShares(_input: { vaultId: string; receiverId: string; shares: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   requestPayout(_input: { claimId: string; operationId: string; recipientId: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  shield(_input: { claimId: string; amount: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  unshield(_input: { amount: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  deleteLoan(_input: { loanId: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  deleteBroker(_input: { brokerId: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   mergeInbox(_input: { accountId: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   mergeBrokerInbox(_input: { brokerId: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   draw(_input: { brokerId: string; amount: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
-  createProposal(_input: { brokerId: string; borrowerId: string; vaultId: string; borrowerKeyId: string; brokerKeyId: string; borrowerAuthorizationKeyId?: string; brokerAuthorizationKeyId?: string; auditorKeyId: string; auditorPublicKey: string; paymentCount: number; paymentIntervalSeconds: number; gracePeriodSeconds: number; encryptedPrincipal: string[]; encryptedOwed: string[]; encryptedPayment: string[]; principalCommitment: string; owedCommitment: string; paymentCommitment: string; encryptedAgreement: string; termsDigest: string; brokerSignature: string; borrowerSignature: string; brokerAuthorizationEpoch: string; borrowerAuthorizationEpoch: string; brokerAuthorizationNonce?: string; borrowerAuthorizationNonce?: string; expiresAt: number }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  createProposal(_input: { brokerId: string; borrowerId: string; vaultId: string; borrowerKeyId: string; brokerKeyId: string; borrowerAuthorizationKeyId?: string; brokerAuthorizationKeyId?: string; auditorKeyId: string; auditorPublicKey: string; paymentCount: number; paymentIntervalSeconds: number; gracePeriodSeconds: number; encryptedPrincipal: string[]; encryptedOwed: string[]; encryptedPayment: string[]; principalCommitment: string; owedCommitment: string; paymentCommitment: string; encryptedAgreement: string; termsDigest: string; brokerSignature: string; borrowerSignature: string; brokerAuthorizationEpoch?: string; borrowerAuthorizationEpoch?: string; brokerAuthorizationNonce?: string; borrowerAuthorizationNonce?: string; expiresAt: number }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   authorizeProposal(_input: { proposalId: string; authorizationSignature: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   revokeProposal(_input: { proposalId: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   originate(_input: { proposalId: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
@@ -139,6 +146,9 @@ class UnavailableCryptoProvider implements CryptoProvider {
   createAuthorizationKeyRegistration(): Promise<never> { return Promise.reject(this.fail()) }
   prepareAgreement(_input: { brokerId?: string; borrowerId?: string; publicKeys: { borrower: string; broker: string; issuer: string; tokenAuditor: string; loanAuditor: string }; principal: string; initialOwed: string; periodicPayment: string; paymentCount: number; maxPaymentCount: number }): Promise<AgreementDraft> { return Promise.reject(this.fail()) }
   prepareBrokerKeyRegistration(_input: { ownerId: string; vaultId: string; encryptionKeyId: string; debtMaximum: string }): Promise<BrokerKeyPreparation> { return Promise.reject(this.fail()) }
+  prepareShield(_input: { account: PrivateAccountView; claimId: string }): Promise<never> { return Promise.reject(this.fail()) }
+  prepareUnshield(_input: { account: PrivateAccountView; amount: string }): Promise<never> { return Promise.reject(this.fail()) }
+  prepareBrokerClosure(_input: { brokerId: string }): Promise<never> { return Promise.reject(this.fail()) }
   prepareConfidentialTransfer(_input: { sender: PrivateAccountView; destinationAccountId: string; amount: string; destinationEncryptionKeyId: string }): Promise<never> { return Promise.reject(this.fail()) }
   prepareMerge(_input: { account: PrivateAccountView; scope: 'holder' | 'broker'; brokerId?: string }): Promise<never> { return Promise.reject(this.fail()) }
   prepareDraw(_input: { broker: BrokerSummary; amount: string; expectedSpendingVersion: string }): Promise<never> { return Promise.reject(this.fail()) }

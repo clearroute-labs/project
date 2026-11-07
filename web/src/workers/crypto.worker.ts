@@ -74,9 +74,14 @@ interface WorkerState {
   ledger?: LedgerWallet
   core?: CoreWallet
   drafts: Map<string, PrivateAgreementDraft>
-  authKeys: Map<string, CryptoKey>
+  authKeys: Map<string, { privateKey: CryptoKey; publicKey: string }>
   subjectId?: string
   ready: boolean
+}
+
+type BackupMaterial = WalletMaterial & {
+  drafts?: Array<[string, PrivateAgreementDraft]>
+  authKeys?: Array<{ keyId: string; privateKey: string; publicKey: string }>
 }
 
 let state: WorkerState | undefined
@@ -151,6 +156,11 @@ function wirePublicValue(value: unknown, name: string): unknown {
     for (const [key, childValue] of Object.entries(child)) result[key] = key === 'proof' ? wireProofEnvelope(childValue) : wirePublicValue(childValue, key)
     return result
   }
+  if (name === 'zero_proof' && value && typeof value === 'object' && !Array.isArray(value)) {
+    const child = value as Record<string, unknown>; const result: Record<string, unknown> = {}
+    for (const [key, childValue] of Object.entries(child)) result[key] = key.endsWith('_proof') ? wireProofEnvelope(childValue) : childValue
+    return result
+  }
   return value
 }
 function wireProofEnvelope(value: unknown): unknown {
@@ -164,7 +174,7 @@ function wireProofEnvelope(value: unknown): unknown {
 function ledgerOperationArgs(call: PreparedCall): Record<string, unknown> {
   const outer = call.args as Record<string, unknown>; const raw = outer.args && typeof outer.args === 'object' && !Array.isArray(outer.args) ? outer.args as Record<string, unknown> : outer
   const result: Record<string, unknown> = {}
-  const allowed = new Set(['new_spending_ciphertext', 'issuer_ciphertext', 'auditor_ciphertext', 'broker_ciphertext', 'broker_spending_commitment', 'broker_inbox_commitment', 'borrower_spending_ciphertext', 'borrower_issuer_ciphertext', 'borrower_auditor_ciphertext', 'broker_spending_ciphertext', 'broker_issuer_ciphertext', 'broker_auditor_ciphertext', 'loan_principal_ciphertexts', 'loan_initial_owed_ciphertexts', 'loan_periodic_payment_ciphertexts', 'principal_commitment', 'owed_commitment', 'payment_commitment', 'broker_active_principal_ciphertext', 'broker_impaired_principal_ciphertext', 'broker_book_root', 'accounting_leaf', 'broker_active_principal_commitment', 'broker_impaired_principal_commitment', 'sender_spending_ciphertext', 'sender_issuer_ciphertext', 'sender_auditor_ciphertext', 'destination_inbox_ciphertext', 'destination_issuer_ciphertext', 'destination_auditor_ciphertext', 'transfer_views', 'commitment', 'broker_inbox_ciphertext', 'amount_owed_ciphertexts', 'principal_remaining_ciphertexts', 'cumulative_repaid_ciphertexts', 'broker_inbox_commitment', 'settlement_views', 'expected_spending_version', 'expected_loan_version', 'expected_borrower_spending_version', 'expected_book_version', 'expected_accounting_version', 'checkpoint_id', 'broker_id', 'loan_id', 'proposal_id', 'expected_risk_version', 'new_broker_debt', 'new_broker_provision', 'loss', 'new_vault_total', 'reconciliation'])
+  const allowed = new Set(['new_spending_ciphertext', 'issuer_ciphertext', 'auditor_ciphertext', 'broker_ciphertext', 'broker_spending_commitment', 'broker_inbox_commitment', 'borrower_spending_ciphertext', 'borrower_issuer_ciphertext', 'borrower_auditor_ciphertext', 'broker_spending_ciphertext', 'broker_issuer_ciphertext', 'broker_auditor_ciphertext', 'loan_principal_ciphertexts', 'loan_initial_owed_ciphertexts', 'loan_periodic_payment_ciphertexts', 'principal_commitment', 'owed_commitment', 'payment_commitment', 'broker_active_principal_ciphertext', 'broker_impaired_principal_ciphertext', 'broker_book_root', 'accounting_leaf', 'broker_active_principal_commitment', 'broker_impaired_principal_commitment', 'sender_spending_ciphertext', 'sender_issuer_ciphertext', 'sender_auditor_ciphertext', 'destination_inbox_ciphertext', 'destination_issuer_ciphertext', 'destination_auditor_ciphertext', 'transfer_views', 'commitment', 'broker_inbox_ciphertext', 'amount_owed_ciphertexts', 'principal_remaining_ciphertexts', 'cumulative_repaid_ciphertexts', 'broker_inbox_commitment', 'settlement_views', 'expected_spending_version', 'expected_loan_version', 'expected_borrower_spending_version', 'expected_book_version', 'expected_accounting_version', 'checkpoint_id', 'broker_id', 'loan_id', 'proposal_id', 'expected_risk_version', 'new_broker_debt', 'new_broker_provision', 'loss', 'new_vault_total', 'reconciliation', 'zero_proof'])
   for (const [key, value] of Object.entries(raw)) if (key !== 'proof' && allowed.has(key)) result[key] = wirePublicValue(value, key)
   return result
 }
@@ -200,9 +210,26 @@ async function makeKeyRegistration(current: WorkerState): Promise<KeyRegistratio
   return { encryptionPublicKey: publicKeyValue, encryptionKeyId, possessionProof: await prepared(current, proof), authorizationPublicKey: publicKeyValue, authorizationSignature: '' }
 }
 async function makeAuthorizationRegistration(current: WorkerState): Promise<AuthorizationKeyRegistration> {
-  const subject = requireSubject(current); const keyId = randomKeyId(); const pair = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']) as CryptoKeyPair; const exported = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey)); current.authKeys.set(keyId, pair.privateKey)
-  const holder = await readHolder(current, subject); const reference = resolveKey(current, 'holder', subject, decimal(holder.key_id, 'holder key ID')); const registrationContext = await context(current, { operation: 'register-holder', accountId: subject, primaryId: decimal(holder.key_id, 'holder key ID') }); const proof = await current.proofs.possession(registrationContext.operationContext, reference)
-  return { keyId, publicKey: toHex(exported), proof: await prepared(current, proof) }
+  requireSubject(current); const keyId = randomKeyId(); const pair = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']) as CryptoKeyPair; const exported = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey)); const publicKey = toHex(exported); current.authKeys.set(keyId, { privateKey: pair.privateKey, publicKey })
+  // Core's authorization-key registration is direct account authority. It
+  // deliberately has no proof-of-possession field; never substitute a holder
+  // encryption proof for this application-key registration.
+  return { keyId, publicKey }
+}
+
+async function shield(current: WorkerState, input: { account: PrivateAccountView; claimId: string }): Promise<PreparedProof> {
+  if (!current.ledger) throw new Error('Shielding requires the configured finalized Core wallet')
+  return preparedLedger(current, await current.ledger.prepareShield(requireSubject(current), decimal(input.claimId, 'claim ID')))
+}
+
+async function unshield(current: WorkerState, input: { account: PrivateAccountView; amount: string }): Promise<PreparedProof> {
+  if (!current.ledger) throw new Error('Unshielding requires the configured finalized Core wallet')
+  return preparedLedger(current, await current.ledger.prepareUnshield(requireSubject(current), decimal(input.amount, 'amount')))
+}
+
+async function brokerClosure(current: WorkerState, input: { brokerId: string }): Promise<PreparedProof> {
+  if (!current.ledger) throw new Error('Broker closure requires the configured finalized Core wallet')
+  return preparedLedger(current, await current.ledger.prepareBrokerClosure(decimal(input.brokerId, 'broker ID')))
 }
 async function brokerKeyRegistration(current: WorkerState, input: { ownerId: string; vaultId: string; encryptionKeyId: string; debtMaximum: string }): Promise<BrokerKeyPreparation> {
   if (!current.ledger) throw new Error('Broker creation requires the configured finalized Core wallet')
@@ -273,18 +300,59 @@ async function reconciliation(current: WorkerState, input: { broker: BrokerSumma
 }
 async function decryptAgreement(current: WorkerState, proposal: ProposalSummary): Promise<{ fields: Array<{ label: string; value: string; unit: string }>; digest: string }> { const subject = requireSubject(current); if (proposal.borrowerId !== subject) throw new Error('Only the registered borrower key can decrypt this agreement'); const reference = resolveKey(current, 'holder', subject, proposal.borrowerKeyId || proposal.encryptionKeyId); const principal = proposal.encryptedPrincipal || []; const owed = proposal.encryptedOwed || []; const payment = proposal.encryptedPayment || []; if (principal.length !== 5 || owed.length !== 3 || payment.length !== 3) throw new Error('Proposal does not contain the complete encrypted agreement'); const value = (hex: string) => decryptCiphertext(current, reference, ciphertextFromHex(hex)); return { fields: [{ label: 'Principal', value: await value(principal[1]!), unit: 'base units' }, { label: 'Initial amount owed', value: await value(owed[0]!), unit: 'base units' }, { label: 'Periodic payment', value: await value(payment[0]!), unit: 'base units' }], digest: proposal.termsDigest } }
 async function decryptBalance(current: WorkerState, view: PrivateAccountView): Promise<string> { const subject = requireSubject(current); if (subject !== view.accountId) throw new Error('The connected account does not own this encrypted balance'); const reference = resolveKey(current, 'holder', subject, view.encryptionKeyId); return decryptCiphertext(current, reference, ciphertextFromHex(view.balanceCiphertext, 'private balance')) }
-async function decryptAudit(current: WorkerState, bundle: AuditCiphertextBundle): Promise<DecryptedAuditView> { const reference = resolveKey(current, 'loan_auditor', bundle.subjectId, bundle.auditorKeyId); const fields: Array<{ label: string; value: string; unit: string }> = []; for (const [label, value] of Object.entries(bundle.ciphertexts)) fields.push({ label, value: await decryptCiphertext(current, reference, ciphertextFromHex(value, label)), unit: 'base units' }); return { scope: bundle.scope, subjectId: bundle.subjectId, fields, sourceDigest: await digestHex(JSON.stringify(bundle)), decryptedAt: Date.now() } }
+async function decryptAudit(current: WorkerState, bundle: AuditCiphertextBundle): Promise<DecryptedAuditView> { if (bundle.scope === 'loan' && current.ledger) { const reference = resolveKey(current, 'loan_auditor', bundle.subjectId, bundle.auditorKeyId); const recovered = await current.ledger.loan(bundle.subjectId, reference); const fields = [{ label: 'Principal', value: recovered.amounts.principal, unit: 'base units' }, { label: 'Initial amount owed', value: recovered.amounts.initialOwed, unit: 'base units' }, { label: 'Amount owed', value: recovered.amounts.owed, unit: 'base units' }, { label: 'Periodic payment', value: recovered.amounts.periodic, unit: 'base units' }, { label: 'Principal remaining', value: recovered.amounts.principalRemaining, unit: 'base units' }, { label: 'Cumulative repaid', value: recovered.amounts.cumulativePaid, unit: 'base units' }]; return { scope: bundle.scope, subjectId: bundle.subjectId, fields, sourceDigest: await digestHex(JSON.stringify(bundle)), decryptedAt: Date.now() } } const reference = resolveKey(current, 'loan_auditor', bundle.subjectId, bundle.auditorKeyId); const fields: Array<{ label: string; value: string; unit: string }> = []; for (const [label, value] of Object.entries(bundle.ciphertexts)) fields.push({ label, value: await decryptCiphertext(current, reference, ciphertextFromHex(value, label)), unit: 'base units' }); return { scope: bundle.scope, subjectId: bundle.subjectId, fields, sourceDigest: await digestHex(JSON.stringify(bundle)), decryptedAt: Date.now() } }
+
+function backupDraft(value: unknown): value is PrivateAgreementDraft {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const draft = value as Record<string, unknown>
+  const terms = draft.terms
+  const amount = (entry: unknown): boolean => Boolean(entry && typeof entry === 'object' && Array.isArray((entry as Record<string, unknown>).views) && Array.isArray((entry as Record<string, unknown>).recovery) && Array.isArray((entry as Record<string, unknown>).randomness) && Array.isArray((entry as Record<string, unknown>).recovery_randomness))
+  return Boolean(terms && typeof terms === 'object' && amount(draft.principal) && amount(draft.owed) && amount(draft.payment) && draft.principalCommitment && draft.owedCommitment && draft.paymentCommitment)
+}
+
+async function backupMaterial(current: WorkerState): Promise<BackupMaterial> {
+  const authKeys = await Promise.all(Array.from(current.authKeys.entries(), async ([keyId, value]) => ({ keyId, privateKey: toHex(new Uint8Array(await crypto.subtle.exportKey('pkcs8', value.privateKey))), publicKey: value.publicKey })))
+  return {
+    ...current.keyring.exportMaterial(),
+    drafts: Array.from(current.drafts.entries()),
+    authKeys,
+  }
+}
+
+async function restoreBackupMaterial(current: WorkerState, value: BackupMaterial): Promise<void> {
+  if (value.drafts !== undefined) {
+    if (!Array.isArray(value.drafts) || value.drafts.length > 1024 || value.drafts.some((entry) => !Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string' || !backupDraft(entry[1]))) throw new Error('Invalid encrypted agreement draft backup')
+  }
+  const authKeys = value.authKeys || []
+  if (!Array.isArray(authKeys) || authKeys.length > 1024 || authKeys.some((entry) => !entry || typeof entry !== 'object' || !/^(0|[1-9]\d*)$/.test(entry.keyId) || !/^[a-f\d]+$/i.test(entry.privateKey) || entry.privateKey.length % 2 !== 0 || !/^[a-f\d]{64}$/i.test(entry.publicKey))) throw new Error('Invalid authorization-key backup')
+  const stagedAuthKeys = new Map(current.authKeys)
+  for (const entry of authKeys) {
+    const privateKey = await crypto.subtle.importKey('pkcs8', Uint8Array.from(hexBytes(entry.privateKey)), { name: 'Ed25519' }, true, ['sign'])
+    const publicKey = await crypto.subtle.importKey('raw', Uint8Array.from(hexBytes(entry.publicKey)), { name: 'Ed25519' }, false, ['verify'])
+    const probe = new TextEncoder().encode(`confidential-lending-auth:${entry.keyId}`)
+    const signature = await crypto.subtle.sign({ name: 'Ed25519' }, privateKey, probe)
+    if (!await crypto.subtle.verify({ name: 'Ed25519' }, publicKey, signature, probe)) throw new Error('Authorization-key backup does not match its public key')
+    const existing = stagedAuthKeys.get(entry.keyId)
+    if (existing && existing.publicKey !== entry.publicKey) throw new Error('Backup would replace a different authorization key')
+    stagedAuthKeys.set(entry.keyId, { privateKey, publicKey: entry.publicKey.toLowerCase() })
+  }
+  await current.keyring.importMaterial(value)
+  current.drafts.clear()
+  for (const [id, draft] of value.drafts || []) current.drafts.set(id, draft)
+  current.authKeys.clear()
+  for (const [id, key] of stagedAuthKeys) current.authKeys.set(id, key)
+}
 
 async function initialize(configuration: WorkerConfiguration): Promise<void> {
   if (state?.ready) return; if (!configuration.manifestUrl) throw new Error('Crypto manifest URL is not configured'); const manifestUrl = new URL(configuration.manifestUrl, self.location.href); const response = await fetch(manifestUrl.href, { credentials: 'omit', cache: 'no-store', redirect: 'error' }); if (!response.ok) throw new Error(`Crypto manifest returned HTTP ${response.status}`); const manifest = await response.json() as unknown; if (!manifest || typeof manifest !== 'object') throw new Error('Crypto manifest is invalid'); const baseUrl = configuration.baseUrl ? new URL(configuration.baseUrl, manifestUrl.href).href : new URL('.', manifestUrl.href).href; const runtime = new CryptoRuntime({ baseUrl, manifest: manifest as never, expected: { profileHash: configuration.expectedProfileHash, manifestHash: configuration.expectedManifestHash || '', networkId: configuration.networkId, coreAccountId: configuration.coreAccountId, funded: configuration.funded } }); await runtime.initialize(); const executor = { execute: <T>(method: string, params: unknown, options?: { artifactName?: string; signal?: AbortSignal }) => runtime.execute(method, params, options?.artifactName) as Promise<T> }; const keyring = new Keyring({ networkId: configuration.networkId, coreAccountId: configuration.coreAccountId, assetId: configuration.assetId, profileHash: configuration.expectedProfileHash }, executor); const proofs = new ProofBuilder(executor, keyring); const recovery = new HistoryRecovery(executor, keyring); let core: CoreWallet | undefined; let ledger: LedgerWallet | undefined; if (configuration.rpcUrl) { const rpc = new NearRpc(configuration.rpcUrl, { allowInsecureLocalhost: configuration.allowInsecureLocalhost }); core = CoreWallet.fromNearRpc(rpc, { networkId: configuration.networkId, coreAccountId: configuration.coreAccountId, assetId: configuration.assetId, profileHash: configuration.expectedProfileHash, manifestHash: configuration.expectedManifestHash }, { crypto: executor, keys: keyring, proofs, recovery }); ledger = new LedgerWallet(rpc, keyring, executor, configuration.expectedManifestHash || '') } state = { configuration, runtime, keyring, proofs, recovery, core, ledger, drafts: new Map(), authKeys: new Map(), subjectId: configuration.subjectId, ready: true }
 }
 async function handle(request: WorkerRequest): Promise<unknown> {
   if (request.method === 'initialize') { const configuration = request.payload as WorkerConfiguration; initializing ||= initialize(configuration); await initializing; return { available: true, profileHash: configuration.expectedProfileHash, artifactHash: configuration.expectedManifestHash, wasmVersion: 'wasm-bindings-v1', message: 'Pinned browser crypto runtime is ready.' } }
-  if (request.method === 'status') { if (!state?.ready) throw new Error('The pinned browser crypto runtime is not initialized'); return { available: true, profileHash: state.configuration.expectedProfileHash, artifactHash: state.configuration.expectedManifestHash, wasmVersion: 'wasm-bindings-v1', message: 'Pinned browser crypto runtime is ready.' } }
+  if (request.method === 'status') { if (!state?.ready) throw new Error('The pinned browser crypto runtime is not initialized'); return { available: true, profileHash: state.configuration.expectedProfileHash, artifactHash: state.configuration.expectedManifestHash, wasmVersion: 'wasm-bindings-v1', walletKeyCount: state.keyring.exportMaterial().keys.length, draftCount: state.drafts.size, message: 'Pinned browser crypto runtime is ready.' } }
   if (request.method === 'set_subject') { requireState().subjectId = text(request.payload, 'subject account'); return undefined }
   const current = requireState(); switch (request.method) {
-    case 'export_wallet_material': return current.keyring.exportMaterial()
-    case 'import_wallet_material': await current.keyring.importMaterial(request.payload as WalletMaterial); return undefined
+    case 'export_wallet_material': return backupMaterial(current)
+    case 'import_wallet_material': await restoreBackupMaterial(current, request.payload as BackupMaterial); return undefined
     case 'create_key_registration': return makeKeyRegistration(current)
     case 'create_authorization_key_registration': return makeAuthorizationRegistration(current)
     case 'prepare_agreement': return agreement(current, request.payload as Parameters<typeof agreement>[1])
@@ -292,6 +360,9 @@ async function handle(request: WorkerRequest): Promise<unknown> {
     case 'prepare_merge': return merge(current, request.payload as Parameters<typeof merge>[1])
     case 'prepare_draw': return draw(current, request.payload as Parameters<typeof draw>[1])
     case 'prepare_broker_origination': return brokerOrigination(current, request.payload as Parameters<typeof brokerOrigination>[1])
+    case 'prepare_shield': return shield(current, request.payload as Parameters<typeof shield>[1])
+    case 'prepare_unshield': return unshield(current, request.payload as Parameters<typeof unshield>[1])
+    case 'prepare_broker_closure': return brokerClosure(current, request.payload as Parameters<typeof brokerClosure>[1])
     case 'prepare_repayment': return repayment(current, request.payload as Parameters<typeof repayment>[1])
     case 'prepare_settlement': return settlement(current, request.payload as Parameters<typeof settlement>[1])
     case 'authorize_agreement': return { authorizationSignature: '' }

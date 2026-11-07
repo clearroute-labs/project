@@ -6,8 +6,8 @@ This directory contains the React/Vite wallet application for the NEAR confident
 
 ```sh
 cp .env.example .env.local
-npm install --cache /tmp/near-lending-npm
-npm run dev
+pnpm install
+pnpm --filter confidential-lending-web dev
 ```
 
 With a complete `mainnet` or `testnet` deployment configuration, the app creates a real Wallet Selector session (MyNearWallet and Meteor) and a finalized JSON-RPC `ProtocolClient`. For the local demo, set `VITE_NETWORK_ID=sandbox`, use an explicitly enabled localhost RPC, and import one of the demo credential JSON files from the wallet button. The file must contain `account_id` and an `ed25519:` `private_key` (an optional matching `public_key` is checked); it is held in memory only and is cleared on disconnect. This path signs real NEAR transactions and is never enabled for public networks. Without the required Core/token/profile values it starts in an intentionally disconnected, empty state. It does not invent balances, claims, proof results or transaction success.

@@ -99,7 +99,48 @@ function PrivateBalancePage() {
   const [balance, setBalance] = useState<string | null>(null)
   const [error, setError] = useState('')
   if (!snapshot || !accountId) return null
-  return <><PageHeader eyebrow="Borrower workspace / private rail" title="Balance & transfers" description="Ciphertexts and versions are public metadata. Amounts are decrypted only on explicit request and remain in browser memory." action={<Button variant="quiet" onClick={() => navigate('/')}>← Home</Button>} /><Notice tone="warning" title="Inbox merges change spending versions">When an incoming transfer is needed, merge first, wait for finalized state, then rebuild the spending proof. An old proof is expected to fail after a merge.</Notice><BalanceCard view={view} balance={balance} onLoad={async () => { setError(''); try { setView(await adapters.protocol.getPrivateAccount(accountId)); setBalance(null) } catch (caught) { setError(caught instanceof Error ? caught.message : 'Private account could not be read.') } }} onDecrypt={async () => { if (!view) return; try { setBalance(await adapters.crypto.decryptPrivateBalance(view)) } catch (caught) { setError(caught instanceof Error ? caught.message : 'Balance could not be decrypted.') } }} error={error} /><div className="two-column-grid"><TransferCard view={view} /><RepaymentCard loans={snapshot.loans} view={view} /></div></>
+  return <><PageHeader eyebrow="Borrower workspace / private rail" title="Balance & transfers" description="Ciphertexts and versions are public metadata. Amounts are decrypted only on explicit request and remain in browser memory." action={<Button variant="quiet" onClick={() => navigate('/')}>← Home</Button>} /><Notice tone="warning" title="Inbox merges change spending versions">When an incoming transfer is needed, merge first, wait for finalized state, then rebuild the spending proof. An old proof is expected to fail after a merge.</Notice><BalanceCard view={view} balance={balance} onLoad={async () => { setError(''); try { setView(await adapters.protocol.getPrivateAccount(accountId)); setBalance(null) } catch (caught) { setError(caught instanceof Error ? caught.message : 'Private account could not be read.') } }} onDecrypt={async () => { if (!view) return; try { setBalance(await adapters.crypto.decryptPrivateBalance(view)) } catch (caught) { setError(caught instanceof Error ? caught.message : 'Balance could not be decrypted.') } }} error={error} /><div className="two-column-grid"><ShieldCard view={view} /><UnshieldCard view={view} /></div><div className="two-column-grid"><TransferCard view={view} /><RepaymentCard loans={snapshot.loans} view={view} /></div></>
+}
+
+function ShieldCard({ view }: { view: PrivateAccountView | null }) {
+  const { adapters, accountId, snapshot, refresh } = useAppContext()
+  const [claimId, setClaimId] = useState('')
+  const [error, setError] = useState('')
+  const action = useAction()
+  if (!snapshot || !accountId) return null
+  const claims = snapshot.claims.filter((claim) => claim.ownerId === accountId && ['available', 'restored'].includes(claim.status))
+  const claim = claims.find((item) => item.claimId === claimId)
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault(); setError('')
+    try {
+      if (!view) throw new Error('Load your encrypted account first.')
+      if (!claim) throw new Error('Choose an available public claim.')
+      const proof = await adapters.crypto.prepareShield({ account: view, claimId: claim.claimId })
+      const receipt = await action.run('Shield public claim', async () => requireFinalized(await adapters.protocol.shield({ claimId: claim.claimId, amount: claim.amount, proof }), 'Shield'))
+      if (receipt) { setClaimId(''); await refresh() }
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Shield preparation failed.') }
+  }
+  return <Card className="form-card"><SectionHeading eyebrow="Public → private" title="Shield a public claim" description="The claim amount is read from finalized Core state. The local worker proves the conversion and Core consumes the claim atomically." /><form onSubmit={submit} className="form-stack"><Field label="Public claim" htmlFor="shield-claim"><SelectInput id="shield-claim" value={claimId} onChange={(event) => setClaimId(event.target.value)}><option value="">Select available claim</option>{claims.map((item) => <option key={item.claimId} value={item.claimId}>{item.claimId} · {item.amount} base units</option>)}</SelectInput></Field>{claim ? <div className="readonly-field"><span>Authoritative amount</span><Mono>{claim.amount}</Mono><span>Status</span><StatusBadge tone="success">{claim.status}</StatusBadge></div> : null}{error ? <p className="field-error" role="alert">{error}</p> : null}<Button type="submit" disabled={!view || !claim} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Shield claim</Button><ActionFeedback state={action.state} /></form></Card>
+}
+
+function UnshieldCard({ view }: { view: PrivateAccountView | null }) {
+  const { adapters, snapshot, refresh } = useAppContext()
+  const [amount, setAmount] = useState('')
+  const [error, setError] = useState('')
+  const action = useAction()
+  if (!snapshot) return null
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault(); setError('')
+    try {
+      if (!view) throw new Error('Load your encrypted account first.')
+      const amountUnits = parseAmount(amount, snapshot.asset.decimals)
+      const proof = await adapters.crypto.prepareUnshield({ account: view, amount: amountUnits })
+      const expected = typeof proof.operationArgs?.expected_spending_version === 'string' ? proof.operationArgs.expected_spending_version : view.spendingVersion
+      const receipt = await action.run('Unshield private balance', async () => requireFinalized(await adapters.protocol.unshield({ amount: amountUnits, expectedSpendingVersion: expected, proof }), 'Unshield'))
+      if (receipt) { setAmount(''); await refresh() }
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unshield preparation failed.') }
+  }
+  return <Card className="form-card"><SectionHeading eyebrow="Private → public" title="Unshield a private amount" description="The clear amount is used only inside the browser worker. Core verifies sufficient spendable funds and creates a new public claim; it does not call the token contract." /><form onSubmit={submit} className="form-stack"><Field label={`Amount (${snapshot.asset.decimals} decimals)`} htmlFor="unshield-amount"><TextInput id="unshield-amount" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" /></Field>{view ? <div className="readonly-field"><span>Spending version</span><Mono>{view.spendingVersion}</Mono><span>Claim destination</span><span>New public claim in your account</span></div> : null}{error ? <p className="field-error" role="alert">{error}</p> : null}<Button type="submit" disabled={!view} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Unshield amount</Button><ActionFeedback state={action.state} /></form></Card>
 }
 
 function BalanceCard({ view, balance, onLoad, onDecrypt, error }: { view: PrivateAccountView | null; balance: string | null; onLoad: () => Promise<void>; onDecrypt: () => Promise<void>; error: string }) {

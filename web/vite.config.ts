@@ -9,6 +9,14 @@ export default defineConfig({
     alias: { buffer: 'buffer/' },
   },
   define: { global: 'globalThis' },
+  // Wallet Selector's optimized Meteor dependency evaluates safe-buffer's
+  // Node-style global before Vite's module graph reaches the app entrypoint.
+  // Keep the same browser global in the esbuild pre-bundle as in production.
+  optimizeDeps: {
+    esbuildOptions: {
+      define: { global: 'globalThis' },
+    },
+  },
   server: {
     port: 5174,
     strictPort: false,

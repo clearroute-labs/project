@@ -107,6 +107,22 @@ describe('real Core client mapping', () => {
     expect(captured).toEqual({ method: 'create_proposal', args: expect.objectContaining({ broker_authorization_key_id: '9', borrower_authorization_key_id: '8', loan_auditor_public_key: Array(32).fill(170), payment_interval: '60', grace_period: '30', expiry: '9999999999', principal_commitment: [102], owed_commitment: [119], payment_commitment: [136], principal_ciphertexts: [[170], [187], [204], [221], [238]], initial_owed_ciphertexts: [[255], [17], [34]], periodic_payment_ciphertexts: [[51], [68], [85]] }) })
   })
 
+  it('reads finalized authorization epochs when the proposal caller omits them', async () => {
+    let captured: { method: string; args: Record<string, unknown> } | undefined
+    const transport: NearContractTransport = {
+      view: async <T>(method: string) => {
+        if (method === 'get_broker') return { authorization_epoch: '11' } as T
+        if (method === 'get_holder') return { authorization_epoch: '12' } as T
+        throw new Error(`unexpected view ${method}`)
+      },
+      call: async (method, args) => { captured = { method, args }; return { transactionHash: 'tx', status: 'succeeded', finalized: true } },
+    }
+    await new NearProtocolClient(transport, config).createProposal({ brokerId: '2', borrowerId: 'borrower.testnet', vaultId: '1', borrowerKeyId: '3', brokerKeyId: '4', auditorKeyId: '5', auditorPublicKey: 'aa'.repeat(32), paymentCount: 4, paymentIntervalSeconds: 60, gracePeriodSeconds: 30, encryptedPrincipal: ['aa', 'bb', 'cc', 'dd', 'ee'], encryptedOwed: ['ff', '11', '22'], encryptedPayment: ['33', '44', '55'], principalCommitment: '66', owedCommitment: '77', paymentCommitment: '88', encryptedAgreement: '99', termsDigest: '', brokerSignature: '', borrowerSignature: '', expiresAt: 9999999999 })
+    expect(captured).toEqual({ method: 'create_proposal', args: expect.objectContaining({ broker_authorization_epoch: '11', borrower_authorization_epoch: '12', broker_authorization_nonce: '0', borrower_authorization_nonce: '0' }) })
+    expect(captured?.args).not.toHaveProperty('broker_authorization_key_id')
+    expect(captured?.args).not.toHaveProperty('borrower_authorization_key_id')
+  })
+
   it('maps direct loan management without fabricating a proof', async () => {
     let captured: { method: string; args: Record<string, unknown> } | undefined
     const transport: NearContractTransport = {
@@ -116,6 +132,20 @@ describe('real Core client mapping', () => {
     const client = new NearProtocolClient(transport, config)
     await client.manageLoan({ loanId: '7', operation: 'impair', expectedLoanVersion: '4', preparation: { loanId: '7', operation: 'impair', expectedLoanVersion: '4' } })
     expect(captured).toEqual({ method: 'manage_loan', args: { loan_id: '7', action: 'Impair', expected_loan_version: '4' } })
+  })
+
+  it('maps shield and unshield proofs without sending clear private balances', async () => {
+    const calls: Array<{ method: string; args: Record<string, unknown> }> = []
+    const transport: NearContractTransport = {
+      view: async () => { throw new Error('not used') },
+      call: async (method, args) => { calls.push({ method, args }); return { transactionHash: 'tx', status: 'succeeded', finalized: true } },
+    }
+    const client = new NearProtocolClient(transport, config)
+    await client.shield({ claimId: '7', amount: '1000', proof: { ...proof, operationArgs: {} } })
+    await client.unshield({ amount: '250', expectedSpendingVersion: '4', proof: { ...proof, operationArgs: {} } })
+    expect(calls[0]).toMatchObject({ method: 'shield', args: { claim_id: '7', amount: '1000', proof: expect.any(Object) } })
+    expect(calls[1]).toMatchObject({ method: 'unshield', args: { amount: '250', expected_spending_version: '4', proof: expect.any(Object) } })
+    expect(JSON.stringify(calls)).not.toContain('plaintext')
   })
 
   it('maps nested reconciliation proof fields without recursively rewriting Statement JSON', async () => {
@@ -151,7 +181,7 @@ describe('real Core client mapping', () => {
     expect(captured).toEqual({ method: 'grant_keeper', args: { broker_id: '2', delegate_account: 'keeper.testnet', delegate_key_id: '9', allowed_settlement_per_operation: '100', allowed_settlement_per_window: '1000', window_seconds: '3600', expires_at: '9999999999', delegate_epoch: '3', allowed_operations: ['Settle'] } })
   })
 
-  it('uses nested Core ProofArgs for holder, authorization-key and broker PoP', async () => {
+  it('uses nested Core ProofArgs for holder and broker PoP, with direct authorization-key registration', async () => {
     const calls: Array<{ method: string; args: Record<string, unknown> }> = []
     const transport: NearContractTransport = {
       view: async () => { throw new Error('not used') },
@@ -160,11 +190,11 @@ describe('real Core client mapping', () => {
     const client = new NearProtocolClient(transport, config)
     const pop = { ...proof, operationArgs: {} }
     await client.registerHolder({ encryptionPublicKey: 'aa', encryptionKeyId: '3', possessionProof: pop, authorizationPublicKey: 'bb', authorizationSignature: 'cc' })
-    await client.registerAuthorizationKey({ keyId: '4', publicKey: 'dd', proof: pop })
+    await client.registerAuthorizationKey({ keyId: '4', publicKey: 'dd' })
     await client.createBroker({ vaultId: '1', brokerEncryptionKeyId: '5', brokerEncryptionKey: 'ee', brokerDebtCeiling: '100', possessionProof: pop })
     expect(calls.map(({ method }) => method)).toEqual(['register_holder', 'register_authorization_key', 'create_broker'])
     expect(calls[0].args).toMatchObject({ encryption_public_key: [170], public_key: [187], proof_of_possession: { context: [170], proof: [187], profile_hash: expect.any(Array) } })
-    expect(calls[1].args).toMatchObject({ proof: { context: [170], proof: [187], profile_hash: expect.any(Array) } })
+    expect(calls[1].args).toEqual({ key_id: '4', public_key: [221] })
     expect(calls[2].args).toMatchObject({ proof_of_possession: { context: [170], proof: [187], profile_hash: expect.any(Array) } })
   })
 

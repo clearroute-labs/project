@@ -331,7 +331,12 @@ export interface LoanManagementPreparation {
 export interface AuthorizationKeyRegistration {
   keyId: string
   publicKey: string
-  proof: PreparedProof
+}
+
+export interface BrokerKeyView {
+  brokerId: string
+  encryptionKeyId: string
+  publicKey: string
 }
 
 export type RecoveryPair = readonly [string, string]
@@ -385,6 +390,9 @@ export interface CryptoProviderStatus {
   profileHash?: string
   artifactHash?: string
   wasmVersion?: string
+  /** Counts are readiness metadata; private material remains in the worker. */
+  walletKeyCount?: number
+  draftCount?: number
   message: string
 }
 
@@ -411,6 +419,9 @@ export interface CryptoProvider {
     maxPaymentCount: number
   }): Promise<AgreementDraft>
   prepareBrokerKeyRegistration(input: { ownerId: string; vaultId: string; encryptionKeyId: string; debtMaximum: string }): Promise<BrokerKeyPreparation>
+  prepareShield(input: { account: PrivateAccountView; claimId: string }): Promise<PreparedProof>
+  prepareUnshield(input: { account: PrivateAccountView; amount: string }): Promise<PreparedProof>
+  prepareBrokerClosure(input: { brokerId: string }): Promise<PreparedProof>
   prepareConfidentialTransfer(input: {
     sender: PrivateAccountView
     destinationAccountId: string
@@ -445,6 +456,7 @@ export interface ProtocolClient {
   getDashboard(accountId: string): Promise<DashboardSnapshot>
   getPrivateAccount(accountId: string): Promise<PrivateAccountView>
   getHolderEncryptionKey(accountId: string): Promise<HolderKeyView>
+  getBrokerEncryptionKey(brokerId: string): Promise<BrokerKeyView>
   getBrokerPrivateAccount(brokerId: string): Promise<PrivateAccountView>
   getProposal(proposalId: string): Promise<ProposalSummary>
   getAuditBundle(input: { scope: 'loan' | 'token'; subjectId: string }): Promise<AuditCiphertextBundle>
@@ -463,8 +475,13 @@ export interface ProtocolClient {
   createBroker(input: { vaultId: string; brokerEncryptionKeyId: string; brokerEncryptionKey: string; brokerDebtCeiling: string; possessionProof: PreparedProof }): Promise<ActionReceipt>
   depositExternal(input: { amount: string; depositId: string }): Promise<ActionReceipt>
   depositToVault(input: { claimId: string; vaultId: string; amount: string; minShares: string; expiresAt: number }): Promise<ActionReceipt>
-  redeemShares(input: { vaultId: string; shares: string; minAmount: string; expiresAt: number }): Promise<ActionReceipt>
+  redeemShares(input: { vaultId: string; shares: string; minAmount: string; expiresAt: number; soleShareholderWaiver?: boolean; burnWorthless?: boolean }): Promise<ActionReceipt>
+  transferShares(input: { vaultId: string; receiverId: string; shares: string }): Promise<ActionReceipt>
   requestPayout(input: { claimId: string; operationId: string; recipientId: string }): Promise<ActionReceipt>
+  shield(input: { claimId: string; amount: string; proof: PreparedProof }): Promise<ActionReceipt>
+  unshield(input: { amount: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt>
+  deleteLoan(input: { loanId: string }): Promise<ActionReceipt>
+  deleteBroker(input: { brokerId: string; proof: PreparedProof }): Promise<ActionReceipt>
   mergeInbox(input: { accountId: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt>
   mergeBrokerInbox(input: { brokerId: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt>
   draw(input: { brokerId: string; amount: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt>
@@ -491,8 +508,8 @@ export interface ProtocolClient {
     termsDigest: string
     brokerSignature: string
     borrowerSignature: string
-    brokerAuthorizationEpoch: string
-    borrowerAuthorizationEpoch: string
+    brokerAuthorizationEpoch?: string
+    borrowerAuthorizationEpoch?: string
     brokerAuthorizationNonce?: string
     borrowerAuthorizationNonce?: string
     expiresAt: number

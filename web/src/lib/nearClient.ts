@@ -8,6 +8,7 @@ import type {
   DashboardSnapshot,
   DeploymentConfig,
   HolderKeyView,
+  BrokerKeyView,
   KeeperGrant,
   KeyRegistration,
   LoanManagementPreparation,
@@ -119,7 +120,7 @@ const CORE_OPERATION_KEYS = new Set([
   'borrower_spending_ciphertext', 'borrower_issuer_ciphertext', 'borrower_auditor_ciphertext', 'broker_spending_ciphertext', 'broker_issuer_ciphertext', 'broker_auditor_ciphertext',
   'loan_principal_ciphertexts', 'loan_initial_owed_ciphertexts', 'loan_periodic_payment_ciphertexts', 'principal_commitment', 'owed_commitment', 'payment_commitment', 'broker_active_principal_ciphertext', 'broker_impaired_principal_ciphertext', 'broker_book_root', 'accounting_leaf', 'broker_active_principal_commitment', 'broker_impaired_principal_commitment',
   'sender_spending_ciphertext', 'sender_issuer_ciphertext', 'sender_auditor_ciphertext', 'destination_inbox_ciphertext', 'destination_issuer_ciphertext', 'destination_auditor_ciphertext', 'transfer_views', 'commitment',
-  'broker_inbox_ciphertext', 'amount_owed_ciphertexts', 'principal_remaining_ciphertexts', 'cumulative_repaid_ciphertexts', 'broker_inbox_commitment',
+  'broker_inbox_ciphertext', 'amount_owed_ciphertexts', 'principal_remaining_ciphertexts', 'cumulative_repaid_ciphertexts', 'broker_inbox_commitment', 'zero_proof',
   'settlement_views', 'expected_spending_version', 'expected_loan_version', 'expected_borrower_spending_version', 'expected_book_version', 'expected_accounting_version', 'checkpoint_id', 'broker_id', 'loan_id', 'proposal_id', 'expected_risk_version', 'new_broker_debt', 'new_broker_provision', 'loss', 'new_vault_total', 'reconciliation',
 ])
 const CORE_BYTE_KEYS = new Set([
@@ -164,6 +165,21 @@ function encodeReconciliation(value: unknown): unknown {
   }
 }
 
+function encodeBrokerZeroProof(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ProtocolError({ category: 'INVALID_ENCODING', message: 'Broker closure requires a Core zero-proof object.' })
+  const candidate = value as Record<string, unknown>
+  const allowed = new Set(['broker_id', 'combined_proof', 'spending_proof', 'inbox_proof', 'active_principal_proof', 'impaired_principal_proof'])
+  for (const key of Object.keys(candidate)) if (!allowed.has(key)) throw new ProtocolError({ category: 'INVALID_ENCODING', message: `Unsupported broker closure field ${key}.` })
+  if (typeof candidate.broker_id !== 'string' && typeof candidate.broker_id !== 'number') throw new ProtocolError({ category: 'INVALID_ENCODING', message: 'Broker closure requires a broker ID.' })
+  const result: Record<string, unknown> = { broker_id: decimal(candidate.broker_id) }
+  for (const key of ['combined_proof', 'spending_proof', 'inbox_proof', 'active_principal_proof', 'impaired_principal_proof']) {
+    if (candidate[key] !== undefined && candidate[key] !== null) result[key] = encodeProofEnvelope(candidate[key])
+  }
+  const legacyProofs = ['spending_proof', 'inbox_proof', 'active_principal_proof', 'impaired_principal_proof']
+  if (!result.combined_proof && !legacyProofs.every((key) => result[key] !== undefined)) throw new ProtocolError({ category: 'INVALID_ENCODING', message: 'Broker closure requires a combined proof or all four legacy zero proofs.' })
+  return result
+}
+
 function encodeCoreOperationValue(key: string, value: unknown): unknown {
   if (value === undefined || value === null) return value
   if (CORE_BYTE_KEYS.has(key) || CORE_PROOF_BYTE_KEYS.has(key)) {
@@ -172,6 +188,7 @@ function encodeCoreOperationValue(key: string, value: unknown): unknown {
     return value
   }
   if (key === 'reconciliation') return encodeReconciliation(value)
+  if (key === 'zero_proof') return encodeBrokerZeroProof(value)
   return value
 }
 
@@ -215,8 +232,8 @@ function decodeMethodReturn(encoded: string | undefined): string | undefined {
 }
 
 type RawAssetProfile = { token_account: string; decimals: number; controller_account: string; issuer_key: { key_id: string | number; public_key: unknown }; token_auditor_key: { key_id: string | number; public_key: unknown }; crypto_profile_hash: unknown; token_trust_policy: string }
-type RawHolder = { owner: string; asset_id: string; key_id: string | number; public_key?: unknown; encryption_public_key?: unknown; encryption_key?: { public_key?: unknown }; spending_ciphertext: unknown; inbox_ciphertext: unknown; issuer_balance_ciphertext?: unknown; auditor_balance_ciphertext?: unknown; spending_commitment?: unknown; inbox_commitment?: unknown; spending_version: string | number }
-type RawBroker = { broker_id: string | number; owner: string; vault_id: string | number; debt_total: unknown; debt_maximum: unknown; spending_version: string | number; book_version: string | number; loan_book_root?: unknown; encryption_key_id: string | number; spending_ciphertext: unknown; inbox_ciphertext: unknown; issuer_balance_ciphertext?: unknown; auditor_balance_ciphertext?: unknown; spending_commitment?: unknown; inbox_commitment?: unknown; active_principal_ciphertext?: unknown; impaired_principal_ciphertext?: unknown; active_principal_commitment?: unknown; impaired_principal_commitment?: unknown; impairment_provision?: unknown; accounting_pending: boolean; accounting_version: string | number; risk_version?: string | number; delegates?: RawKeeper[] }
+type RawHolder = { owner: string; asset_id: string; key_id: string | number; authorization_epoch?: string | number; public_key?: unknown; encryption_public_key?: unknown; encryption_key?: { public_key?: unknown }; spending_ciphertext: unknown; inbox_ciphertext: unknown; issuer_balance_ciphertext?: unknown; auditor_balance_ciphertext?: unknown; spending_commitment?: unknown; inbox_commitment?: unknown; spending_version: string | number }
+type RawBroker = { broker_id: string | number; owner: string; vault_id: string | number; debt_total: unknown; debt_maximum: unknown; spending_version: string | number; book_version: string | number; loan_book_root?: unknown; encryption_key_id: string | number; authorization_epoch?: string | number; encryption_public_key?: unknown; spending_ciphertext: unknown; inbox_ciphertext: unknown; issuer_balance_ciphertext?: unknown; auditor_balance_ciphertext?: unknown; spending_commitment?: unknown; inbox_commitment?: unknown; active_principal_ciphertext?: unknown; impaired_principal_ciphertext?: unknown; active_principal_commitment?: unknown; impaired_principal_commitment?: unknown; impairment_provision?: unknown; accounting_pending: boolean; accounting_version: string | number; risk_version?: string | number; delegates?: RawKeeper[] }
 type RawVault = { vault_id: string | number; owner: string; asset_id: string; assets_total: unknown; assets_available: unknown; shares_total: unknown; share_scale?: number; accounting_pending: boolean; accounting_version: string | number; phase?: string | null; kind?: string }
 type RawLoan = { loan_id: string | number; broker_id: string | number; borrower: string; proposal_id: string | number; payment_interval: string | number; grace_period: string | number; next_due?: string | number | null; payment_total: number; payment_remaining: number; status: string; impaired?: boolean; loan_version: string | number; borrower_key_id?: string | number; broker_key_id?: string | number; loan_auditor_key_id?: string | number; loan_auditor_public_key?: unknown; principal_ciphertexts?: unknown[]; initial_owed_ciphertexts?: unknown[]; amount_owed_ciphertexts?: unknown[]; periodic_payment_ciphertexts?: unknown[]; principal_remaining_ciphertexts?: unknown[]; cumulative_repaid_ciphertexts?: unknown[]; accounting_leaf?: unknown }
 type RawProposal = { proposal_id: string | number; borrower: string; broker_id: string | number; vault_id: string | number; borrower_key_id?: string | number; broker_key_id?: string | number; expiry: string | number; agreement_digest: unknown; principal_ciphertexts?: unknown[]; initial_owed_ciphertexts?: unknown[]; periodic_payment_ciphertexts?: unknown[]; principal_commitment?: unknown; owed_commitment?: unknown; payment_commitment?: unknown; loan_auditor_public_key?: unknown; consumed: boolean; revoked: boolean; broker_signature?: unknown; borrower_signature?: unknown; broker_authorization_epoch?: string | number; borrower_authorization_epoch?: string | number; broker_authorization_key_id?: string | number | null; borrower_authorization_key_id?: string | number | null; broker_direct_authorized?: boolean; borrower_direct_authorized?: boolean; loan_auditor_key_id: string | number }
@@ -408,6 +425,19 @@ export class NearProtocolClient implements ProtocolClient {
     throw new ProtocolError({ category: 'UNSUPPORTED_PROFILE', message: 'This Core deployment does not expose registered holder encryption public keys for recipient lookup.' })
   }
 
+  async getBrokerEncryptionKey(brokerId: string): Promise<BrokerKeyView> {
+    try {
+      const key = await this.transport.view<{ key_id: string | number; public_key: unknown } | null>('get_broker_key', { broker_id: wireId(brokerId), key_id: null })
+      if (key) return { brokerId, encryptionKeyId: decimal(key.key_id), publicKey: bytesToHex(key.public_key) }
+    } catch {
+      // Fall through to the broker's registered public view for older Core deployments.
+    }
+    const broker = await this.transport.view<RawBroker | null>('get_broker', { broker_id: wireId(brokerId) })
+    const publicKey = broker?.encryption_public_key
+    if (broker && publicKey !== undefined) return { brokerId, encryptionKeyId: decimal(broker.encryption_key_id), publicKey: bytesToHex(publicKey) }
+    throw new ProtocolError({ category: 'UNSUPPORTED_PROFILE', message: 'This Core deployment does not expose the broker encryption public key.' })
+  }
+
   async getBrokerPrivateAccount(brokerId: string): Promise<PrivateAccountView> {
     const broker = await this.transport.view<RawBroker | null>('get_broker', { broker_id: wireId(brokerId) })
     if (!broker) throw new ProtocolError({ category: 'NOT_REGISTERED', message: 'This broker account is no longer available.' })
@@ -452,7 +482,7 @@ export class NearProtocolClient implements ProtocolClient {
   }
 
   registerAuthorizationKey(input: AuthorizationKeyRegistration): Promise<ActionReceipt> {
-    return this.call('register_authorization_key', { key_id: input.keyId, public_key: hexToBytes(input.publicKey), proof: proofArgs(input.proof).proof })
+    return this.call('register_authorization_key', { key_id: input.keyId, public_key: hexToBytes(input.publicKey) })
   }
 
   revokeAuthorizationKey(input: { keyId: string }): Promise<ActionReceipt> {
@@ -475,12 +505,33 @@ export class NearProtocolClient implements ProtocolClient {
     return this.call('deposit_to_vault', { claim_id: input.claimId, vault_id: input.vaultId, amount: input.amount, min_shares_out: input.minShares, expiry: decimal(input.expiresAt) })
   }
 
-  redeemShares(input: { vaultId: string; shares: string; minAmount: string; expiresAt: number }): Promise<ActionReceipt> {
-    return this.call('redeem_shares', { vault_id: input.vaultId, shares: input.shares, min_assets_out: input.minAmount, expiry: decimal(input.expiresAt), sole_shareholder_waiver: false })
+  redeemShares(input: { vaultId: string; shares: string; minAmount: string; expiresAt: number; soleShareholderWaiver?: boolean; burnWorthless?: boolean }): Promise<ActionReceipt> {
+    return this.call('redeem_shares', { vault_id: input.vaultId, shares: input.shares, min_assets_out: input.minAmount, expiry: decimal(input.expiresAt), sole_shareholder_waiver: input.soleShareholderWaiver === true, burn_worthless: input.burnWorthless === true, broker_zero_proofs: [] })
+  }
+
+  transferShares(input: { vaultId: string; receiverId: string; shares: string }): Promise<ActionReceipt> {
+    return this.call('transfer_shares', { vault_id: input.vaultId, receiver: input.receiverId, shares: input.shares })
   }
 
   requestPayout(input: { claimId: string; operationId: string; recipientId: string }): Promise<ActionReceipt> {
     return this.call('request_payout', { claim_id: input.claimId, operation_id: input.operationId, recipient: input.recipientId })
+  }
+
+  shield(input: { claimId: string; amount: string; proof: PreparedProof }): Promise<ActionReceipt> {
+    return this.call('shield', { claim_id: input.claimId, amount: input.amount, ...proofArgs(input.proof) })
+  }
+
+  unshield(input: { amount: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> {
+    return this.call('unshield', { amount: input.amount, expected_spending_version: input.expectedSpendingVersion, ...proofArgs(input.proof) })
+  }
+
+  deleteLoan(input: { loanId: string }): Promise<ActionReceipt> {
+    return this.call('delete_loan', { loan_id: input.loanId, evidence: [] })
+  }
+
+  deleteBroker(input: { brokerId: string; proof: PreparedProof }): Promise<ActionReceipt> {
+    const mapped = proofArgs(input.proof)
+    return this.call('delete_broker', { broker_id: input.brokerId, zero_proof: mapped.zero_proof })
   }
 
   mergeInbox(input: { accountId: string; expectedSpendingVersion: string; proof: PreparedProof }): Promise<ActionReceipt> {
@@ -495,8 +546,19 @@ export class NearProtocolClient implements ProtocolClient {
     return this.call('draw', { broker_id: input.brokerId, amount: input.amount, ...proofArgs(input.proof) })
   }
 
-  createProposal(input: { brokerId: string; borrowerId: string; vaultId: string; borrowerKeyId: string; brokerKeyId: string; borrowerAuthorizationKeyId?: string; brokerAuthorizationKeyId?: string; auditorKeyId: string; auditorPublicKey: string; paymentCount: number; paymentIntervalSeconds: number; gracePeriodSeconds: number; encryptedPrincipal: string[]; encryptedOwed: string[]; encryptedPayment: string[]; principalCommitment: string; owedCommitment: string; paymentCommitment: string; encryptedAgreement: string; termsDigest: string; brokerSignature: string; borrowerSignature: string; brokerAuthorizationEpoch: string; borrowerAuthorizationEpoch: string; brokerAuthorizationNonce?: string; borrowerAuthorizationNonce?: string; expiresAt: number }): Promise<ActionReceipt> {
-    return this.call('create_proposal', { borrower: input.borrowerId, broker_id: input.brokerId, vault_id: input.vaultId, borrower_key_id: input.borrowerKeyId, broker_key_id: input.brokerKeyId, ...(input.brokerAuthorizationKeyId ? { broker_authorization_key_id: input.brokerAuthorizationKeyId } : {}), ...(input.borrowerAuthorizationKeyId ? { borrower_authorization_key_id: input.borrowerAuthorizationKeyId } : {}), loan_auditor_key_id: input.auditorKeyId, loan_auditor_public_key: hexToBytes(input.auditorPublicKey), payment_count: input.paymentCount, payment_interval: decimal(input.paymentIntervalSeconds), grace_period: decimal(input.gracePeriodSeconds), expiry: decimal(input.expiresAt), principal_ciphertexts: input.encryptedPrincipal.map(hexToBytes), initial_owed_ciphertexts: input.encryptedOwed.map(hexToBytes), periodic_payment_ciphertexts: input.encryptedPayment.map(hexToBytes), principal_commitment: hexToBytes(input.principalCommitment), owed_commitment: hexToBytes(input.owedCommitment), payment_commitment: hexToBytes(input.paymentCommitment), agreement_digest: input.termsDigest.trim() ? hexToBytes(input.termsDigest) : [], broker_signature: optionalHexToBytes(input.brokerSignature), borrower_signature: optionalHexToBytes(input.borrowerSignature), broker_authorization_epoch: input.brokerAuthorizationEpoch, borrower_authorization_epoch: input.borrowerAuthorizationEpoch, broker_authorization_nonce: input.brokerAuthorizationNonce || '0', borrower_authorization_nonce: input.borrowerAuthorizationNonce || '0' })
+  async createProposal(input: { brokerId: string; borrowerId: string; vaultId: string; borrowerKeyId: string; brokerKeyId: string; borrowerAuthorizationKeyId?: string; brokerAuthorizationKeyId?: string; auditorKeyId: string; auditorPublicKey: string; paymentCount: number; paymentIntervalSeconds: number; gracePeriodSeconds: number; encryptedPrincipal: string[]; encryptedOwed: string[]; encryptedPayment: string[]; principalCommitment: string; owedCommitment: string; paymentCommitment: string; encryptedAgreement: string; termsDigest: string; brokerSignature: string; borrowerSignature: string; brokerAuthorizationEpoch?: string; borrowerAuthorizationEpoch?: string; brokerAuthorizationNonce?: string; borrowerAuthorizationNonce?: string; expiresAt: number }): Promise<ActionReceipt> {
+    let brokerEpoch = input.brokerAuthorizationEpoch
+    let borrowerEpoch = input.borrowerAuthorizationEpoch
+    if (!brokerEpoch || !borrowerEpoch) {
+      const [broker, borrower] = await Promise.all([
+        this.transport.view<RawBroker | null>('get_broker', { broker_id: wireId(input.brokerId) }),
+        this.transport.view<RawHolder | null>('get_holder', { owner: input.borrowerId }),
+      ])
+      if (!broker || broker.authorization_epoch === undefined || !borrower || borrower.authorization_epoch === undefined) throw new ProtocolError({ category: 'STALE_STATE', message: 'Registered authorization epochs could not be read from finalized Core state.' })
+      brokerEpoch = decimal(broker.authorization_epoch)
+      borrowerEpoch = decimal(borrower.authorization_epoch)
+    }
+    return this.call('create_proposal', { borrower: input.borrowerId, broker_id: input.brokerId, vault_id: input.vaultId, borrower_key_id: input.borrowerKeyId, broker_key_id: input.brokerKeyId, ...(input.brokerAuthorizationKeyId ? { broker_authorization_key_id: input.brokerAuthorizationKeyId } : {}), ...(input.borrowerAuthorizationKeyId ? { borrower_authorization_key_id: input.borrowerAuthorizationKeyId } : {}), loan_auditor_key_id: input.auditorKeyId, loan_auditor_public_key: hexToBytes(input.auditorPublicKey), payment_count: input.paymentCount, payment_interval: decimal(input.paymentIntervalSeconds), grace_period: decimal(input.gracePeriodSeconds), expiry: decimal(input.expiresAt), principal_ciphertexts: input.encryptedPrincipal.map(hexToBytes), initial_owed_ciphertexts: input.encryptedOwed.map(hexToBytes), periodic_payment_ciphertexts: input.encryptedPayment.map(hexToBytes), principal_commitment: hexToBytes(input.principalCommitment), owed_commitment: hexToBytes(input.owedCommitment), payment_commitment: hexToBytes(input.paymentCommitment), agreement_digest: input.termsDigest.trim() ? hexToBytes(input.termsDigest) : [], broker_signature: optionalHexToBytes(input.brokerSignature), borrower_signature: optionalHexToBytes(input.borrowerSignature), broker_authorization_epoch: brokerEpoch, borrower_authorization_epoch: borrowerEpoch, broker_authorization_nonce: input.brokerAuthorizationNonce || '0', borrower_authorization_nonce: input.borrowerAuthorizationNonce || '0' })
   }
 
   authorizeProposal(input: { proposalId: string; authorizationSignature: string }): Promise<ActionReceipt> {
