@@ -128,6 +128,27 @@ test('asset audit recovery reconstructs a mirror with only the authorized reader
   await tokenKeys.importMaterial({ schema: 'confidential-lending-wallet/v1', identity: tokenKeys.identity, keys: [{ role: 'token_auditor', subjectId: 'token.near', keyId: '1', publicKey: tokenAuditorKey, secretKey: '5'.repeat(64) }] });
   const tokenAudit = await new LedgerWallet(new AuditRpc(), tokenKeys, tokenCrypto, manifestHash).auditBalance('holder', 'alice.near', 'token_auditor');
   assert.equal(tokenAudit.mirror, '65');
+  let terminalStatus = 'Paid';
+  class ArchivedBrokerRpc extends AuditRpc {
+    override async viewAt<T>(at: FinalizedBlock, account: string, method: string, input: Arguments = {}): Promise<T> {
+      if (method === 'get_broker') return super.viewAt<T>(at, account, 'get_holder', input);
+      if (method === 'list_recovery_history') {
+        if (input.cursor === '18446744073709551615') return { records: [], end_cursor: '4', next_cursor: null } as T;
+        const history = records.map((entry, index) => ({ ...entry, subject_key: 'broker:7',
+          origin_subject_key: index === 1 ? 'holder:borrower.near' : 'broker:7',
+          statement: index === 1 ? jsonBytes({ Repayment: { transfer_views: auditTransferViews(), transfer_recovery: Array.from({ length: 5 }, () => pair(25)) } }) : entry.statement,
+          operation: ['draw', 'repay', 'settle'][index] }));
+        return { records: [...history, { event_id: '4', subject_sequence: '4', subject_key: 'broker:7', origin_subject_key: 'loan:9',
+          operation: 'delete-loan', statement: null, key_ids: ['1'],
+          metadata: { action: 'delete-loan', noop: false, loan_id: '9', loan_status: terminalStatus } }], end_cursor: '4', next_cursor: null } as T;
+      }
+      return super.viewAt<T>(at, account, method, input);
+    }
+  }
+  assert.equal((await new LedgerWallet(new ArchivedBrokerRpc(), keys, crypto, manifestHash).auditBalance('broker', '7', 'issuer')).mirror, '65');
+  assert.equal((await new LedgerWallet(new ArchivedBrokerRpc(), tokenKeys, tokenCrypto, manifestHash).auditBalance('broker', '7', 'token_auditor')).mirror, '65');
+  terminalStatus = 'Active';
+  await assert.rejects(new LedgerWallet(new ArchivedBrokerRpc(), keys, crypto, manifestHash).auditBalance('broker', '7', 'issuer'), /Invalid archived loan/);
   await assert.rejects(new LedgerWallet(new AuditRpc(true), keys, crypto, manifestHash).auditBalance('holder', 'alice.near', 'issuer'), /Incomplete confidential audit history/);
   records[1]!.statement = jsonBytes({ ConfidentialTransfer: { transfer_views: auditTransferViews(), transfer_recovery: Array.from({ length: 5 }, () => pair(26)) } });
   await assert.rejects(new LedgerWallet(new AuditRpc(), keys, crypto, manifestHash).auditBalance('holder', 'alice.near', 'issuer'), /Recovered amount does not match/);

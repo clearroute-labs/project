@@ -55,6 +55,14 @@ function keyMatches(reference: KeyReference, keys: Keyring, views: ReaderView[],
   if (!views[index] || views[index]!.reader_key.point !== keys.publicKey(reference).point) throw new Error('Recovery reader does not match the registered key');
 }
 
+function archivedStatus(record: HistoryRecord, loanId?: string): 'closed' | 'defaulted' {
+  const metadata = record.metadata;
+  if (record.statement !== null || metadata.action !== 'delete-loan' || metadata.noop || !metadata.loan_id
+    || loanId !== undefined && metadata.loan_id !== loanId
+    || metadata.loan_status !== 'Paid' && metadata.loan_status !== 'Defaulted') throw new Error('Invalid archived loan recovery record');
+  return metadata.loan_status === 'Paid' ? 'closed' : 'defaulted';
+}
+
 /**
  * A private debit may only be prepared from spending.  Incoming credits are
  * intentionally kept in the inbox until the user (or an explicitly scoped
@@ -168,6 +176,7 @@ export class LedgerWallet {
       sequence = expected;
       const operation = record.operation;
       if (operation === 'merge-holder' || operation === 'merge-broker' || operation === 'manage-loan' || operation === 'reconcile-credit') continue;
+      if (operation === 'delete-loan') { archivedStatus(record); continue; }
       if (!record.statement) throw new Error('Audit history is missing its statement');
       const statement = fields(decodeWire<Statement>(record.statement));
       let delta: bigint;
@@ -243,7 +252,7 @@ export class LedgerWallet {
       if (record.operation === 'merge-holder' || record.operation === 'merge-broker') { yield { ...common, change: { operation: 'merge' } }; continue; }
       if (record.operation === 'manage-loan' || record.operation === 'reconcile-credit') { yield { ...common, change: { operation: 'noop' } }; continue; }
       if (record.operation === 'delete-loan') {
-        if (record.statement !== null || record.metadata.action !== 'delete-loan' || record.metadata.noop || !record.metadata.loan_id || !record.metadata.loan_status || !['Paid', 'Defaulted'].includes(record.metadata.loan_status)) throw new Error('Invalid archived loan recovery record');
+        archivedStatus(record);
         yield { ...common, change: { operation: 'noop' } }; continue;
       }
       if (!record.statement) throw new Error('Financial history is missing its statement');
@@ -269,8 +278,7 @@ export class LedgerWallet {
         yield { ...common, change: { operation: record.metadata.action as 'impair' | 'unimpair' | 'default' } }; continue;
       }
       if (record.operation === 'delete-loan') {
-        if (record.statement !== null || record.metadata.action !== 'delete-loan' || record.metadata.noop || record.metadata.loan_id !== loanId || !record.metadata.loan_status || !['Paid', 'Defaulted'].includes(record.metadata.loan_status)) throw new Error('Invalid archived loan recovery record');
-        yield { ...common, change: { operation: 'delete', status: record.metadata.loan_status === 'Paid' ? 'closed' : 'defaulted' } }; continue;
+        yield { ...common, change: { operation: 'delete', status: archivedStatus(record, loanId) } }; continue;
       }
       if (!record.statement) throw new Error('Loan history is missing its statement');
       const statement = fields(decodeWire<Statement>(record.statement));

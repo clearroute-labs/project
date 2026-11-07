@@ -160,11 +160,13 @@ proves external RNG entropy; callers must still sample independent
 cryptographic randomness. Randomizers for unrelated reader views, separate
 transactions, and homomorphic derived values are not compared.
 
-Public conversion has two explicit modes. `Credit` proves a public amount is
-added to the owner’s private spending ciphertext; `Debit` proves possession,
-decrypts the private pre-balance, proves sufficient funds, and subtracts the
-public amount. Both modes bind three matching reader ciphertexts and the
-spending version.
+Public conversion has two explicit modes. `Credit` proves the public amount
+and its three reader ciphertexts. Core credits that proven delta to the current
+recipient inbox and audit mirrors; it does not replace the inbox with the
+prover's earlier snapshot. `Debit` proves possession, decrypts the authoritative
+private spending pre-balance, proves sufficient funds, and subtracts the
+public amount. Both modes bind the configured reader keys and context. A
+concurrent incoming credit does not invalidate another prepared credit.
 
 Transfers bind five matching reader views, a positive amount commitment,
 sender secret-key possession, sender pre-balance decryption, a bounded
