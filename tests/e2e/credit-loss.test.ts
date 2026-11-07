@@ -98,7 +98,7 @@ test('multiple brokers reconcile impairment and default without charging the sam
     const priorCheckpoint = await call<string>(actors.broker, 'prepare_reconciliation', { broker_id: firstBroker });
     assert.ok((await fastForwardFinalized(worker, 120)).elapsedSeconds >= 60n);
     const staleCheckpoint = await wallet.prepareReconciliation(firstBroker, priorCheckpoint);
-    const impairedSettlement = await wallet.prepareSettlement(firstBroker, '50000000');
+    const impairedSettlement = await wallet.prepareSettlement(firstBroker, '50000000', '0');
     assert.equal((impairedSettlement.args.args as { reconciliation: { checkpoint_id: string } }).reconciliation.checkpoint_id, '0');
     await submit(actors.broker, impairedSettlement);
     await reject(actors.broker, staleCheckpoint, /STALE_STATE/);
@@ -123,8 +123,14 @@ test('multiple brokers reconcile impairment and default without charging the sam
     assert.equal(vault.assets_total, '250000000'); assert.equal(vault.loss_unrealized, '0');
     assert.equal((await wallet.broker(secondBroker)).record.debt_total, '100000000', 'Unimpairment cannot forgive principal');
     await submit(actors.broker, await wallet.prepareSettlement(firstBroker, '100000000'));
+    await submit(actors.broker, await wallet.prepareManagement(recoverableLoan, 'Impair'));
     await submit(actors.borrower, await wallet.prepareRepayment(actors.borrower.accountId, recoverableLoan, 'Full'));
+    const repaidBroker = await wallet.broker(secondBroker);
+    assert.deepEqual(await wallet.brokerBook(repaidBroker), { active: '0', impaired: '0' },
+      'Repaying an impaired loan must remove its principal from both active and impaired aggregates');
+    assert.equal(repaidBroker.record.accounting_pending, true, 'Payoff cannot clear unresolved risk accounting');
     await submit(actors.broker, await wallet.prepareMergeBroker(secondBroker));
+    assert.ok((await fastForwardFinalized(worker, 120)).elapsedSeconds >= 60n);
     await submit(actors.broker, await wallet.prepareSettlement(secondBroker, '110000000'));
     vault = await core.view('get_vault', { vault_id: vaultId });
     assert.equal(vault.assets_total, '260000000'); assert.equal(vault.assets_available, '260000000');

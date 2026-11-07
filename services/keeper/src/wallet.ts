@@ -23,9 +23,18 @@ export class NativeKeeperWallet implements KeeperWallet {
       return { ...grant, active: key !== null && key.owner === grant.delegate_account && !key.revoked && key.epoch === grant.delegate_epoch };
     }));
     const timestampSeconds = BigInt(block.header.timestamp_nanosec) / 1_000_000_000n;
+    const epoch = BigInt(vault.checkpoint_policy.epoch_seconds);
+    if (epoch < 60n || epoch > 86_400n) throw new Error('Invalid finalized checkpoint cadence');
+    let settlementDue = timestampSeconds >= BigInt(broker.last_settlement_at) + epoch;
+    if (broker.accounting_pending) {
+      const since = BigInt(broker.accounting_pending_since);
+      if (since <= 0n || since > timestampSeconds) throw new Error('Invalid finalized pending-accounting timestamp');
+      const checkpointBoundary = (since / epoch + 1n) * epoch;
+      settlementDue &&= timestampSeconds >= checkpointBoundary;
+    }
     return { brokerId, owner: broker.owner, timestampSeconds, frozen: freeze.asset_frozen || freeze.holder_frozen,
       spending: BigInt(balance.spending), inbox: BigInt(balance.inbox), grants: authorizedGrants, authorizationEpoch: broker.authorization_epoch,
-      settlementDue: timestampSeconds >= BigInt(broker.last_settlement_at) + BigInt(vault.checkpoint_policy.epoch_seconds) };
+      settlementDue };
   }
 
   async merge(brokerId: string, signal: AbortSignal): Promise<Arguments> {

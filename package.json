@@ -11,7 +11,7 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck && tsc -p tsconfig.tools.json",
     "test": "pnpm -r test && tsx --test tests/*.test.ts",
-    "test:e2e": "tsx --test tests/e2e/*.test.ts",
+    "test:e2e": "tsx --test --test-concurrency=2 tests/e2e/*.test.ts",
     "dev": "pnpm --dir web dev",
     "demo": "tsx scripts/local-demo.ts",
     "build:contracts": "bash scripts/build-contracts.sh",

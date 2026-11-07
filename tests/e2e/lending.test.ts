@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import type { NearAccount } from 'near-workspaces';
 import { decodeWire, LedgerWallet, type LedgerVault, type PreparedCall } from '../../packages/wallet/src/ledger.js';
+import { Keyring } from '../../packages/wallet/src/keyring.js';
 import { deployProtocol, maximumGas } from './deployment.js';
 
 function assertPrivatePayload(value: unknown, forbiddenAmounts: ReadonlySet<string>): void {
@@ -18,6 +19,18 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
   const deployment = await deployProtocol();
   const { worker, core, token, actors, rpc, crypto, keys } = deployment;
   const wallet = new LedgerWallet(rpc, keys, crypto, deployment.manifestHash);
+  const auditMirror = async (kind: 'holder' | 'broker', subject: string, role: 'issuer' | 'token_auditor'): Promise<string> => {
+    const material = keys.exportMaterial();
+    const readerKeys = new Keyring(keys.identity, crypto);
+    try {
+      await readerKeys.importMaterial({ ...material, keys: material.keys.filter(key => key.role === role) });
+      const reader = new LedgerWallet(rpc, readerKeys, crypto, deployment.manifestHash);
+      const recovered = kind === 'holder'
+        ? await reader.auditBalance('holder', subject, role)
+        : await reader.auditBalance('broker', subject, role);
+      return recovered.mirror;
+    } finally { readerKeys.clear(); }
+  };
   const measurements: Array<{ method: string; gas: string; argumentBytes: number; milliseconds: number; storageBytesBefore: number; storageBytesAfter: number; succeeded: boolean }> = [];
   const storageBytes = async (): Promise<number> => {
     const account = await rpc.request<{ storage_usage: number }>('query', { request_type: 'view_account', finality: 'final', account_id: core.accountId });
@@ -158,6 +171,8 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
     const beforeSettlement = await wallet.broker(brokerId);
     assert.equal(beforeSettlement.spending, '860000000');
     assert.equal(beforeSettlement.record.debt_total, '800000000');
+    assert.equal(await auditMirror('broker', brokerId, 'token_auditor'), '860000000');
+    assert.equal(await auditMirror('holder', actors.borrower.accountId, 'issuer'), '1000000');
     await submit(actors.broker, await wallet.prepareSettlement(brokerId, '860000000'));
     const vault = await core.view<LedgerVault>('get_vault', { vault_id: vaultId });
     assert.equal(vault.assets_total, '1060000000'); assert.equal(vault.assets_available, '1060000000');
@@ -195,6 +210,8 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
     assert.equal(restored.inbox, '1000000'); assert.equal(restored.spending, '0');
     await wallet.recovery.verify({ role: 'issuer', subjectId: token.accountId, keyId: '1' }, decodeWire(restored.record.issuer_balance_ciphertext), 1000000n);
     await wallet.recovery.verify({ role: 'token_auditor', subjectId: token.accountId, keyId: '1' }, decodeWire(restored.record.auditor_balance_ciphertext), 1000000n);
+    assert.equal(await auditMirror('holder', actors.borrower.accountId, 'issuer'), '1000000');
+    assert.equal(await auditMirror('holder', actors.borrower.accountId, 'token_auditor'), '1000000');
     assert.equal(await core.view('get_custody_total'), '40000000');
     await mkdir('.artifacts', { recursive: true });
     await writeFile('.artifacts/lifecycle-benchmark.json', JSON.stringify({ complete: true, core: core.accountId, manifestHash: deployment.manifestHash, coreWasmHash: deployment.coreWasmHash, measurements }, null, 2));
