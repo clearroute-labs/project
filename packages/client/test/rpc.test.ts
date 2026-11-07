@@ -9,6 +9,18 @@ function rpcFetch(handler: (request: Record<string, unknown>) => unknown): typeo
   }) as typeof fetch;
 }
 
+test('the default transport retains the browser global receiver', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async function (this: unknown, _url, init) {
+    assert.equal(this, globalThis, 'Browser fetch rejects a foreign receiver');
+    const request = JSON.parse(init!.body as string) as { id: number };
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: 'ok' }));
+  } as typeof fetch;
+  try {
+    assert.equal(await new NearRpc('https://rpc.example.org').request('status', []), 'ok');
+  } finally { globalThis.fetch = original; }
+});
+
 test('contract reads use finalized state and preserve large decimal strings', async () => {
   const rpc = new NearRpc('https://rpc.testnet.near.org', { fetch: rpcFetch(request => {
     assert.equal(request.method, 'query');

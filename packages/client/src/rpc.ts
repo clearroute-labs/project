@@ -70,7 +70,7 @@ export class NearRpc {
     }
     if (parsed.username || parsed.password) throw new TypeError('Do not put RPC credentials in the URL');
     this.url = parsed.href;
-    this.#fetch = options.fetch ?? globalThis.fetch;
+    this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.#timeoutMs = options.timeoutMs ?? 20_000;
   }
 
