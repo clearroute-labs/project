@@ -48,7 +48,7 @@ export class ContractClient {
     assertAccountId(wallet.accountId);
     const receiverId = options.receiverId ?? this.deployment.coreAccountId;
     assertAccountId(receiverId);
-    const gas = options.gas ?? '250000000000000';
+    const gas = options.gas ?? '300000000000000';
     const deposit = options.deposit ?? '0';
     if (!/^(0|[1-9]\d*)$/.test(deposit) || !/^[1-9]\d*$/.test(gas) || BigInt(gas) > 300_000_000_000_000n) throw new RangeError('Invalid call gas or deposit');
     options.signal?.throwIfAborted();

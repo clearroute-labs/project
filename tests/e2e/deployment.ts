@@ -61,16 +61,19 @@ export async function deployProtocol(directory = process.env.CRYPTO_ARTIFACT_DIR
       custody_cap: ((1n << 63n) - 1n).toString(), verifier_key: [], verifier_manifest_hash: wireBytes(pin.manifestHash),
       verifier_manifest_json: canonicalManifest(manifest),
     } }, { gas: maximumGas });
+    const installationBudget = BigInt(await worker.rootAccount.call<string>(core, 'storage_deposit', { account_id: worker.rootAccount.accountId }, { attachedDeposit: 20n * near }));
     for (const [index, family] of proofFamilies.entries()) {
       const entry = manifest.artifacts[`${family}.prepared-vk`];
       if (!entry) throw new Error('Missing prepared verification key');
       const prepared = await readFile(join(artifactRoot, entry.path));
       await worker.rootAccount.call(core, 'stage_verifier_key', { statement_kind: index + 1, prepared_key: Array.from(prepared) }, { gas: maximumGas });
     }
+    const remainingInstallationBudget = BigInt(await core.view<string>('storage_balance_of', { account_id: worker.rootAccount.accountId }));
+    if (remainingInstallationBudget >= installationBudget) throw new Error('Verifier installation did not charge its storage payer');
     await worker.rootAccount.call(core, 'activate_verifier_keys', {}, { gas: maximumGas });
     for (const account of [worker.rootAccount, core, ...Object.values(actors)]) {
       await worker.rootAccount.call(token, 'storage_deposit', { account_id: account.accountId, registration_only: true }, { attachedDeposit: near });
-      if (account !== core) await account.call(core, 'storage_deposit', { account_id: account.accountId }, { attachedDeposit: 20n * near });
+      if (account !== core && account !== worker.rootAccount) await account.call(core, 'storage_deposit', { account_id: account.accountId }, { attachedDeposit: 20n * near });
     }
     for (const actor of [actors.lender, actors.borrower]) await worker.rootAccount.call(token, 'mint', { receiver_id: actor.accountId, amount: '1000000000' });
     return { worker, core, token, actors, rpc: new NearRpc(worker.provider.connection.url, { allowInsecureLocalhost: true }), crypto, keys, proofs: new ProofBuilder(crypto, keys), manifest, manifestHash: pin.manifestHash, coreWasmHash };

@@ -72,6 +72,12 @@ test('multiple brokers reconcile impairment and default without charging the sam
     assert.ok((await fastForwardFinalized(worker, 4_000)).elapsedSeconds >= 3_600n);
     await submit(actors.broker, await wallet.prepareManagement(defaultingLoan, 'Impair'));
     await submit(actors.broker, await wallet.prepareManagement(recoverableLoan, 'Impair'));
+    const oldRiskCheckpoint = await call<string>(actors.recipient, 'prepare_reconciliation', { broker_id: firstBroker });
+    assert.ok((await fastForwardFinalized(worker, 120)).elapsedSeconds >= 60n);
+    const staleRiskProof = await wallet.prepareReconciliation(firstBroker, oldRiskCheckpoint);
+    await submit(actors.broker, await wallet.prepareManagement(defaultingLoan, 'Unimpair'));
+    await submit(actors.broker, await wallet.prepareManagement(defaultingLoan, 'Impair'));
+    await reject(actors.broker, staleRiskProof, /STALE_STATE/);
     const lenderShares = await core.view<string>('get_share_balance', { vault_id: vaultId, owner: actors.lender.accountId });
     const whilePending = await actors.lender.callRaw(core, 'redeem_shares', { args: {
       vault_id: vaultId, shares: (BigInt(lenderShares) / 10n).toString(), min_assets_out: '0', expiry: '18446744073709551615',
@@ -136,6 +142,16 @@ test('multiple brokers reconcile impairment and default without charging the sam
     assert.equal(vault.assets_total, '260000000'); assert.equal(vault.assets_available, '260000000');
     assert.equal(vault.loss_unrealized, '0');
     assert.equal(await core.view('get_custody_total'), '360000000');
+    for (const [brokerId, expected] of [
+      [firstBroker, ['200000000', '150000000', '0', '50000000']],
+      [secondBroker, ['100000000', '110000000', '10000000', '0']],
+    ] as const) {
+      const publicBook = await core.view<Record<string, string>>('get_broker', { broker_id: brokerId });
+      assert.deepEqual([
+        publicBook.cumulative_draws, publicBook.cumulative_settlements,
+        publicBook.cumulative_yield, publicBook.cumulative_realized_losses,
+      ], expected, 'Public cumulative accounting must reconcile to the actual loss and yield');
+    }
     for (const id of [profitableLoan, defaultingLoan, recoverableLoan]) await call(actors.broker, 'delete_loan', { loan_id: id, evidence: [] });
     for (const id of [firstBroker, secondBroker]) await submit(actors.broker, await wallet.prepareBrokerClosure(id));
     const redemption = await call<string>(actors.lender, 'redeem_shares', { args: {

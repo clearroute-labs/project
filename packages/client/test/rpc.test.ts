@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { NearRpc, RpcError, TransactionPendingError, extractEvents, type FinalOutcome } from '../src/index.js';
+import { ContractClient, NearRpc, RpcError, TransactionPendingError, extractEvents, type FinalOutcome, type WalletTransaction } from '../src/index.js';
 
 function rpcFetch(handler: (request: Record<string, unknown>) => unknown): typeof fetch {
   return (async (_url, init) => {
@@ -96,4 +96,23 @@ test('event extraction excludes foreign and failed receipt logs', () => {
     ],
   } satisfies FinalOutcome;
   assert.deepEqual(extractEvents(outcome, 'core.near').map(event => event.receiptId), ['r1']);
+});
+
+test('default wallet calls fund complete lending proofs within the NEAR gas ceiling', async () => {
+  const calls: WalletTransaction[] = [];
+  const client = new ContractClient(new NearRpc('https://rpc.example.org'), {
+    networkId: 'testnet', coreAccountId: 'core.testnet', tokenAccountId: 'token.testnet',
+    rpcUrl: 'https://rpc.example.org', profileHash: '00'.repeat(32), assetDecimals: 6, assetSymbol: 'TEST',
+  });
+  const wallet = { accountId: 'broker.testnet', async signAndSendTransaction(value: WalletTransaction) { calls.push(value); } };
+  await client.call(wallet, 'originate', {});
+  await client.call(wallet, 'repay', {});
+  for (const call of calls) {
+    assert.equal(call.actions[0]!.params.gas, '300000000000000');
+    assert.ok(BigInt(call.actions[0]!.params.gas) > 289_888_223_689_950n, 'Budget must cover measured complete origination, not only the verifier');
+  }
+  await client.call(wallet, 'storage_deposit', {}, { gas: '30000000000000', deposit: '100000000000000000000000' });
+  assert.equal(calls[2]!.actions[0]!.params.gas, '30000000000000');
+  await assert.rejects(client.call(wallet, 'originate', {}, { gas: '300000000000001' }), RangeError);
+  assert.equal(calls.length, 3);
 });

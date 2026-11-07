@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useAppContext } from '../App'
 import { ActionFeedback, Button, Card, EmptyState, Field, Metric, Mono, Money, Notice, SectionHeading, SelectInput, StatusBadge, Table, TextInput } from '../components/ui'
 import { isInboxMergeRequired, requireFinalized, useAction } from '../lib/actionState'
+import { publicKeyPointHex } from '../lib/nearClient'
 import { downloadBrokerZeroProof, makeBrokerZeroProofPackage } from '../lib/brokerZeroProof'
 import { parseAmount, parseNonNegativeAmount, unixSecondsNow } from '../lib/money'
 import { CORE_MAX_PAYMENT_COUNT, ProtocolError, type AgreementDraft, type BrokerKeyPreparation, type BrokerSummary, type KeeperGrant, type LoanSummary } from '../lib/types'
@@ -139,13 +140,16 @@ function BrokerOriginationCard({ proposals, brokers }: { proposals: import('../l
     try {
       if (!backupSaved) throw new Error('Export and confirm an encrypted wallet backup before preparing a broker funding proof.')
       if (!proposal || !broker) throw new Error('Choose an authorized proposal with a visible broker record.')
-      if (!['borrower_authorized', 'broker_authorized'].includes(proposal.status)) throw new Error('Both party authorizations must be present before funding.')
+      if (proposal.expiresAt <= unixSecondsNow()) throw new ProtocolError({ category: 'EXPIRED', message: 'This proposal has expired. Publish and authorize a new agreement.' })
+      if (proposal.status !== 'broker_authorized') throw new Error('Both party authorizations must be present before funding.')
       const receipt = await action.run('Originate loan from proposal', async () => {
         let currentProposal = proposal
         let currentBroker = broker
         for (let attempt = 0; attempt < 3; attempt += 1) {
           try {
+            if (currentProposal.expiresAt <= unixSecondsNow()) throw new ProtocolError({ category: 'EXPIRED', message: 'This proposal has expired. Publish and authorize a new agreement.' })
             const proof = await crypto.prepareBrokerOrigination({ proposal: currentProposal, broker: currentBroker })
+            if (currentProposal.expiresAt <= unixSecondsNow()) throw new ProtocolError({ category: 'EXPIRED', message: 'The proposal expired while proving. Publish and authorize a new agreement.' })
             return requireFinalized(await adapters.protocol.originate({ proposalId, proof }), 'Origination')
           } catch (caught) {
             if (isInboxMergeRequired(caught)) {
@@ -179,7 +183,7 @@ function BrokerOriginationCard({ proposals, brokers }: { proposals: import('../l
     const receipt = await action.run('Revoke loan proposal', () => adapters.protocol.revokeProposal({ proposalId: proposal.proposalId }))
     if (receipt) void refresh()
   }
-  return <Card className="form-card"><SectionHeading eyebrow="Broker funding" title="Originate an authorized proposal" description="Funding uses the broker's private balance and only runs after both parties authorize the same proposal. Either party may revoke before consumption." />{!backupSaved ? <p className="field-hint">Export and confirm an encrypted wallet backup before preparing the funding operation.</p> : null}<form onSubmit={submit} className="form-stack"><Field label="Proposal" htmlFor="originate-proposal"><SelectInput id="originate-proposal" value={proposalId} onChange={(event) => setProposalId(event.target.value)}><option value="">Select authorized proposal</option>{proposals.filter((item) => ['borrower_authorized', 'broker_authorized'].includes(item.status)).map((item) => <option key={item.proposalId} value={item.proposalId}>{item.proposalId} · {item.status}</option>)}</SelectInput></Field>{proposal ? <div className="readonly-field"><span>Terms digest</span><Mono>{proposal.termsDigest}</Mono><span>Broker</span><Mono>{proposal.brokerId}</Mono></div> : null}{error ? <p className="field-error" role="alert">{error}</p> : null}<div className="review-actions"><Button type="submit" disabled={!proposal || !broker || !backupSaved} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Prepare funding</Button><Button type="button" variant="danger" onClick={() => void revoke()} disabled={!proposal || proposal.status === 'consumed' || proposal.status === 'revoked'} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Revoke</Button></div><ActionFeedback state={action.state} /></form></Card>
+  return <Card className="form-card"><SectionHeading eyebrow="Broker funding" title="Originate an authorized proposal" description="Funding uses the broker's private balance and only runs after both parties authorize the same proposal. Either party may revoke before consumption." />{!backupSaved ? <p className="field-hint">Export and confirm an encrypted wallet backup before preparing the funding operation.</p> : null}<form onSubmit={submit} className="form-stack"><Field label="Proposal" htmlFor="originate-proposal"><SelectInput id="originate-proposal" value={proposalId} onChange={(event) => setProposalId(event.target.value)}><option value="">Select proposal</option>{proposals.filter((item) => !['consumed', 'revoked'].includes(item.status)).map((item) => <option key={item.proposalId} value={item.proposalId}>{item.proposalId} · {item.status}</option>)}</SelectInput></Field>{proposal ? <div className="readonly-field"><span>Terms digest</span><Mono>{proposal.termsDigest}</Mono><span>Broker</span><Mono>{proposal.brokerId}</Mono></div> : null}{error ? <p className="field-error" role="alert">{error}</p> : null}<div className="review-actions"><Button type="submit" disabled={!proposal || proposal.status !== 'broker_authorized' || proposal.expiresAt <= unixSecondsNow() || !broker || !backupSaved} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Prepare funding</Button><Button type="button" variant="danger" onClick={() => void revoke()} disabled={!proposal || proposal.status === 'consumed' || proposal.status === 'revoked'} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Revoke</Button></div><ActionFeedback state={action.state} /></form></Card>
 }
 
 function CreateProposalCard({ brokers }: { brokers: BrokerSummary[] }) {
@@ -555,16 +559,11 @@ function parseHexValue(input: string, label: string, expectedBytes?: number): st
 }
 
 function parsePublicKeyPoint(input: string, label: string): string {
-  const value = input.trim().replace(/^0x/, '').toLowerCase()
-  if (/^[a-f\d]{64}$/.test(value)) return value
   try {
-    const decoded = new TextDecoder().decode(Uint8Array.from(parseHexValue(value, label)))
-    const parsed = JSON.parse(decoded) as { point?: unknown }
-    if (parsed && typeof parsed.point === 'string' && /^[a-f\d]{64}$/i.test(parsed.point)) return parsed.point.toLowerCase()
+    return publicKeyPointHex(input.trim().replace(/^0x/, '').toLowerCase(), label)
   } catch {
-    // Fall through to one actionable validation error; no untrusted key is sent.
+    throw new Error(`${label} must be a 32-byte point or canonical JSON public-key bytes.`)
   }
-  throw new Error(`${label} must be a 32-byte point or canonical JSON public-key bytes.`)
 }
 
 function parseNonNegativeInteger(input: string, label: string): number {

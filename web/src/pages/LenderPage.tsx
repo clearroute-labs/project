@@ -3,7 +3,7 @@ import { useAppContext } from '../App'
 import { ActionFeedback, Button, Card, EmptyState, Field, Metric, Mono, Money, Notice, SectionHeading, SelectInput, StatusBadge, Table, TextInput } from '../components/ui'
 import { useAction } from '../lib/actionState'
 import { readBrokerZeroProof, type BrokerZeroProofPackage } from '../lib/brokerZeroProof'
-import { parseAmount, parseNonNegativeAmount, randomUint64Decimal, unixSecondsNow } from '../lib/money'
+import { MAX_U128_UNITS, parseAmount, parseNonNegativeAmount, randomUint64Decimal, sharesForAssets, unixSecondsNow } from '../lib/money'
 import type { PayoutSummary, PublicClaim, VaultSummary } from '../lib/types'
 import { AmountCell, AssetBoundary, ConnectionGate, EmptyRow, IdLabel, PageHeader, PublicPrivateNotice, StateFreshness, VaultPolicyNotice } from './shared'
 
@@ -23,18 +23,18 @@ function LenderWorkspace() {
 function LenderOverview({ onOpenVaults, onOpenClaims, onRefresh }: { onOpenVaults: () => void; onOpenClaims: () => void; onRefresh: () => Promise<void> }) {
   const { snapshot } = useAppContext()
   if (!snapshot) return null
-  const assets = snapshot.vaults.reduce((total, vault) => total + BigInt(vault.assetsTotal), 0n).toString()
+  const netAssets = snapshot.vaults.reduce((total, vault) => total + BigInt(vault.assetsTotal) - BigInt(vault.lossUnrealized), 0n).toString()
   const available = snapshot.vaults.reduce((total, vault) => total + BigInt(vault.assetsAvailable), 0n).toString()
-  const shares = snapshot.vaults.reduce((total, vault) => total + BigInt(vault.yourShares || '0'), 0n).toString()
+  const positions = snapshot.vaults.filter((vault) => BigInt(vault.yourShares || '0') > 0n).length
   const hasData = snapshot.vaults.length > 0 || snapshot.claims.length > 0 || snapshot.payouts.length > 0
   return <>
     <PageHeader eyebrow="Lender workspace" title="A measured view of your capital" description="Vault liquidity and shares are public protocol state. Loan-level cash flows stay encrypted and are never inferred from the dashboard." action={<Button variant="secondary" onClick={() => void onRefresh()}>Refresh state</Button>} />
     <PublicPrivateNotice>Vault assets, available liquidity, share supply and your share balance are public. Individual loan principal, owed amounts and repayment amounts are encrypted; a share is a claim under current accounting, not a guaranteed original price.</PublicPrivateNotice>
     <AssetBoundary asset={snapshot.asset} />
     <div className="metrics-grid">
-      <Metric label="Vault assets" value={<Money units={assets} decimals={snapshot.asset.decimals} />} supporting={snapshot.asset.tokenAccount || 'Configured asset'} />
-      <Metric label="Available liquidity" value={<Money units={available} decimals={snapshot.asset.decimals} />} supporting="Public and withdrawable at the vault" tone="positive" />
-      <Metric label="Your shares" value={<Money units={shares} decimals={snapshot.asset.decimals} />} supporting="Across visible vaults" />
+      <Metric label="Net asset value" value={<Money units={netAssets} decimals={snapshot.asset.decimals} />} supporting="Assets less recognized provisions" />
+      <Metric label="Available liquidity" value={<Money units={available} decimals={snapshot.asset.decimals} />} supporting="Public cash held by the vault" tone="positive" />
+      <Metric label="Vault positions" value={String(positions)} supporting="Separate share balances by vault" />
       <Metric label="Payout operations" value={String(snapshot.payouts.length)} supporting="Pending and finalized records" tone={snapshot.payouts.some((payout) => payout.status === 'unknown') ? 'warning' : 'default'} />
     </div>
     {!hasData ? <Card><EmptyState icon="▥" title="No vault positions yet" description="Your vaults, shares and claims will appear here when this account has activity." action={<Button variant="secondary" onClick={onOpenVaults}>Open vaults</Button>} /></Card> : <div className="dashboard-grid"><Card><SectionHeading eyebrow="Public positions" title="Vaults" action={<Button variant="quiet" onClick={onOpenVaults}>View all →</Button>} /><VaultTable vaults={snapshot.vaults.slice(0, 4)} decimals={snapshot.asset.decimals} /></Card><Card><SectionHeading eyebrow="Exit rail" title="Claims & payouts" action={<Button variant="quiet" onClick={onOpenClaims}>Review →</Button>} /><ClaimsSummary claims={snapshot.claims} payouts={snapshot.payouts} decimals={snapshot.asset.decimals} /></Card></div>}
@@ -70,7 +70,7 @@ function DepositCard({ claims, vaults, decimals, selectedVaultId }: { claims: Pu
     if (!claims.some((claim) => claim.claimId === claimId && ['available', 'restored'].includes(claim.status))) return setError('Choose an available public claim. Fund one below if no claim is listed.')
     try {
       const amountUnits = parseAmount(amount, decimals)
-      const minSharesUnits = parseNonNegativeAmount(minShares || '0', vault.shareScale ?? decimals)
+      const minSharesUnits = parseNonNegativeAmount(minShares || '0', vault.shareScale ?? decimals, MAX_U128_UNITS)
       const receipt = await action.run('Deposit claim to vault', () => adapters.protocol.depositToVault({ claimId, vaultId, amount: amountUnits, minShares: minSharesUnits, expiresAt: unixSecondsNow() + 900 }))
       if (receipt) {
         setAmount('')
@@ -97,7 +97,7 @@ function ShareTransferCard({ vaults, decimals, selectedVaultId }: { vaults: Vaul
       const vault = vaults.find((item) => item.vaultId === vaultId)
       if (!vault) throw new Error('Choose a vault.')
       if (!receiver.trim()) throw new Error('Enter the receiving NEAR account.')
-      const shareUnits = parseAmount(shares, vault.shareScale ?? decimals)
+      const shareUnits = parseAmount(shares, vault.shareScale ?? decimals, MAX_U128_UNITS)
       const receipt = await action.run('Transfer vault shares', () => adapters.protocol.transferShares({ vaultId, receiverId: receiver.trim(), shares: shareUnits }))
       if (receipt) { setShares(''); void refresh() }
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Share transfer could not be prepared.') }
@@ -156,17 +156,17 @@ function RedeemCard({ vaults, decimals, selectedVaultId }: { vaults: VaultSummar
     try {
       const vault = vaults.find((item) => item.vaultId === vaultId)
       if (!vault) throw new Error('Choose a vault.')
-      const shareUnits = mode === 'shares' ? parseAmount(shares, vault.shareScale ?? decimals) : ''
+      const shareUnits = mode === 'shares' ? parseAmount(shares, vault.shareScale ?? decimals, MAX_U128_UNITS) : ''
       const minAmountUnits = mode === 'shares' ? parseNonNegativeAmount(minAmount || '0', decimals) : ''
       const assetUnits = mode === 'assets' ? parseAmount(assetsOut, decimals) : ''
-      const maxShareUnits = mode === 'assets' ? parseAmount(maxShares, vault.shareScale ?? decimals) : ''
-      // An amount-based redemption can also consume the full share position
-      // when its checked maximum reaches the current supply. In that case Core
-      // requires the same broker-zero packages as an exact-share close.
-      const finalRedemption = mode === 'shares' ? shareUnits === vault.sharesSupply : maxShareUnits === vault.sharesSupply
+      const maxShareUnits = mode === 'assets' ? parseAmount(maxShares, vault.shareScale ?? decimals, MAX_U128_UNITS) : ''
+      const pricedNav = BigInt(vault.assetsTotal) - (soleShareholderWaiver && vault.yourShares === vault.sharesSupply ? 0n : BigInt(vault.lossUnrealized))
+      const requiredShares = mode === 'shares' ? shareUnits : sharesForAssets(assetUnits, vault.sharesSupply, pricedNav.toString())
+      if (mode === 'assets' && BigInt(requiredShares) > BigInt(maxShareUnits)) throw new Error('The requested amount exceeds the maximum share spend.')
+      const finalRedemption = requiredShares === vault.sharesSupply
       let finalProofs: import('../lib/types').PreparedProof[] | undefined
       if (finalRedemption) {
-        const brokerIds = await adapters.protocol.getVaultBrokerIds(vaultId)
+        const brokerIds = await adapters.protocol.getVaultClosureBrokerIds(vaultId)
         if (brokerProofs.length !== brokerIds.length) throw new Error(`Final redemption requires one current zero-state proof for each associated broker (${brokerIds.length} required).`)
         const expectedProfile = adapters.protocol.config.cryptoProfileHash.toLowerCase()
         const expectedArtifact = adapters.protocol.config.cryptoArtifactHash?.toLowerCase()
@@ -229,7 +229,7 @@ function RequestPayoutCard({ claims }: { claims: PublicClaim[] }) {
 }
 
 function PayoutStatusCard({ payouts, decimals }: { payouts: PayoutSummary[]; decimals: number }) {
-  return <Card><SectionHeading eyebrow="Operation monitor" title="Payout status" description="No result is inferred from RPC availability or wallet UI state. Finalize only after Core records an authenticated token result." />{payouts.length ? <div className="operation-list">{payouts.slice(0, 6).map((payout) => <PayoutOperationRow key={payout.operationId} payout={payout} decimals={decimals} />)}</div> : <EmptyState title="No payout operations" description="Finalized payout reservations will appear here." />}</Card>
+  return <Card><SectionHeading eyebrow="Operation monitor" title="Payout status" description="No result is inferred from RPC availability or wallet UI state. Finalize only after Core records an authenticated token result." />{payouts.length ? <div className="operation-list">{payouts.map((payout) => <PayoutOperationRow key={payout.operationId} payout={payout} decimals={decimals} />)}</div> : <EmptyState title="No payout operations" description="Finalized payout reservations will appear here." />}</Card>
 }
 
 function PayoutOperationRow({ payout, decimals }: { payout: PayoutSummary; decimals: number }) {
@@ -246,7 +246,7 @@ function PayoutOperationRow({ payout, decimals }: { payout: PayoutSummary; decim
 }
 
 function VaultTable({ vaults, decimals, onSelect, selectedVaultId }: { vaults: VaultSummary[]; decimals: number; onSelect?: (vault: VaultSummary) => void; selectedVaultId?: string }) {
-  return <Table caption="Public vault positions"><thead><tr><th scope="col">Vault</th><th scope="col">Phase</th><th scope="col">Assets</th><th scope="col">Available</th><th scope="col">Your shares</th><th scope="col">Accounting</th></tr></thead><tbody>{vaults.length ? vaults.map((vault) => <tr key={vault.vaultId} className={selectedVaultId === vault.vaultId ? 'row-selected' : ''} onClick={() => onSelect?.(vault)} tabIndex={onSelect ? 0 : undefined} onKeyDown={(event) => { if (event.key === 'Enter') onSelect?.(vault) }}><td><Mono>{vault.vaultId}</Mono><small>{vault.assetAccount}</small></td><td><StatusBadge tone={vault.phase === 'open' ? 'success' : vault.phase === 'closed' ? 'danger' : 'warning'}>{vault.phase.replace('_', ' ')}</StatusBadge></td><td><AmountCell units={vault.assetsTotal} decimals={decimals} /></td><td><AmountCell units={vault.assetsAvailable} decimals={decimals} /></td><td><AmountCell units={vault.yourShares} decimals={vault.shareScale ?? decimals} /></td><td><StateFreshness status={vault.checkpointStatus} /><small>v{vault.accountingVersion}</small></td></tr>) : <EmptyRow message="No finalized vault records for this wallet." colSpan={6} />}</tbody></Table>
+  return <Table caption="Public vault positions"><thead><tr><th scope="col">Vault</th><th scope="col">Phase</th><th scope="col">Gross assets</th><th scope="col">Provision</th><th scope="col">NAV</th><th scope="col">Available</th><th scope="col">Your shares</th><th scope="col">Accounting</th></tr></thead><tbody>{vaults.length ? vaults.map((vault) => <tr key={vault.vaultId} className={selectedVaultId === vault.vaultId ? 'row-selected' : ''} onClick={() => onSelect?.(vault)} tabIndex={onSelect ? 0 : undefined} onKeyDown={(event) => { if (event.key === 'Enter') onSelect?.(vault) }}><td><Mono>{vault.vaultId}</Mono><small>{vault.assetAccount}</small></td><td><StatusBadge tone={vault.phase === 'open' ? 'success' : vault.phase === 'closed' ? 'danger' : 'warning'}>{vault.phase.replace('_', ' ')}</StatusBadge></td><td><AmountCell units={vault.assetsTotal} decimals={decimals} /></td><td><AmountCell units={vault.lossUnrealized} decimals={decimals} /></td><td><AmountCell units={(BigInt(vault.assetsTotal) - BigInt(vault.lossUnrealized)).toString()} decimals={decimals} /></td><td><AmountCell units={vault.assetsAvailable} decimals={decimals} /></td><td><AmountCell units={vault.yourShares} decimals={vault.shareScale ?? decimals} /></td><td><StateFreshness status={vault.checkpointStatus} /><small>v{vault.accountingVersion}</small></td></tr>) : <EmptyRow message="No finalized vault records for this wallet." colSpan={8} />}</tbody></Table>
 }
 
 function ClaimsTable({ claims, decimals }: { claims: PublicClaim[]; decimals: number }) {

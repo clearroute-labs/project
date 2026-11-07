@@ -19,6 +19,7 @@
     "setup:development": "tsx scripts/setup-development.ts",
     "validate:crypto": "tsx scripts/validate-crypto-client.ts",
     "validate:browser": "node scripts/validate-browser.mjs",
+    "validate:product": "node scripts/validate-product.mjs",
     "install:sandbox": "node scripts/install-sandbox.mjs",
     "check:release": "tsx scripts/check-release.ts"
   },

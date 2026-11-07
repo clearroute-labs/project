@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { generateKeyPairSync, sign } from 'node:crypto';
 import type { NearAccount } from 'near-workspaces';
+import { originationOperationMessage, registeredAuthorizationMessage, repaymentOperationMessage } from '../../packages/client/src/authorization.js';
 import { decodeWire, LedgerWallet, type LedgerVault, type PreparedCall } from '../../packages/wallet/src/ledger.js';
 import { Keyring } from '../../packages/wallet/src/keyring.js';
 import { deployProtocol, maximumGas } from './deployment.js';
@@ -29,6 +31,15 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
         ? await reader.auditBalance('holder', subject, role)
         : await reader.auditBalance('broker', subject, role);
       return recovered.mirror;
+    } finally { readerKeys.clear(); }
+  };
+  const auditLoan = async (loanId: string) => {
+    const material = keys.exportMaterial();
+    const readerKeys = new Keyring(keys.identity, crypto);
+    try {
+      await readerKeys.importMaterial({ ...material, keys: material.keys.filter(key => key.role === 'loan_auditor') });
+      const reader = new LedgerWallet(rpc, readerKeys, crypto, deployment.manifestHash);
+      return await reader.loan(loanId, { role: 'loan_auditor', subjectId: actors.auditor.accountId, keyId: '1' });
     } finally { readerKeys.clear(); }
   };
   const measurements: Array<{ method: string; gas: string; argumentBytes: number; milliseconds: number; storageBytesBefore: number; storageBytesAfter: number; succeeded: boolean }> = [];
@@ -79,6 +90,17 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
     console.log('Lifecycle: registering confidential readers');
     await submit(actors.borrower, await wallet.prepareHolderRegistration(actors.borrower.accountId, '1'));
     await submit(actors.recipient, await wallet.prepareHolderRegistration(actors.recipient.accountId, '1'));
+    const relayKey = generateKeyPairSync('ed25519');
+    const relayPublicKey = Array.from(relayKey.publicKey.export({ type: 'spki', format: 'der' }).subarray(-32));
+    for (const keyId of ['7', '8']) await call(actors.borrower, 'register_authorization_key', { args: { key_id: keyId, public_key: relayPublicKey } });
+    assert.equal(await core.view('get_holder', { owner: actors.broker.accountId }), null);
+    await call(actors.broker, 'register_authorization_key', { args: { key_id: '11', public_key: relayPublicKey } });
+    const brokerAuthorization = await core.view<{ epoch: string }>('get_authorization_key', { owner: actors.broker.accountId, key_id: '11' });
+    await call(actors.broker, 'revoke_authorization_key', { key_id: '11' });
+    await call(actors.broker, 'register_authorization_key', { args: { key_id: '11', public_key: relayPublicKey } });
+    const brokerReregistered = await core.view<{ epoch: string }>('get_authorization_key', { owner: actors.broker.accountId, key_id: '11' });
+    assert.ok(BigInt(brokerReregistered.epoch) > BigInt(brokerAuthorization.epoch));
+    assert.equal(await core.view('get_holder', { owner: actors.broker.accountId }), null, 'Application authorization must not manufacture a confidential balance');
     const auditor = { role: 'loan_auditor' as const, subjectId: actors.auditor.accountId, keyId: '1' };
     const auditorPublicKey = await keys.generate(auditor);
     const vaultId = await call<string>(actors.broker, 'create_vault', { args: { assets_maximum: '0', kind: 'OpenEnded', phase_times: null, share_scale: 6, shares_transferable: true,
@@ -122,10 +144,35 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
     assert.equal(await wallet.recovery.amount({ recovery: draft.owed.recovery[0]! }, borrowerKey), 660000000n);
     assert.equal(await wallet.recovery.amount({ recovery: draft.payment.recovery[0]! }, borrowerKey), 220000000n);
     await call(actors.borrower, 'sign_proposal', { proposal_id: proposalId, signature: [] });
-    const loanId = await submit<string>(actors.broker, preparedLoan);
+    const registered = await core.view<{ epoch: string; nonce: string }>('get_authorization_key', { owner: actors.borrower.accountId, key_id: '7' });
+    const storedProposal = await core.view<{ agreement_digest: number[] }>('get_proposal', { proposal_id: proposalId });
+    const fundingBook = await core.view<{ spending_version: string }>('get_broker', { broker_id: brokerId });
+    const relay = structuredClone(preparedLoan);
+    const relayArgs = relay.args.args as Record<string, unknown>;
+    const operationMessage = await originationOperationMessage({
+      proposalId, agreementDigest: Uint8Array.from(storedProposal.agreement_digest),
+      brokerSpendingVersion: fundingBook.spending_version,
+      statement: Uint8Array.from((relayArgs.proof as { statement: number[] }).statement),
+    });
+    const authorizationMessage = await registeredAuthorizationMessage({
+      networkId: deployment.manifest.networkId, coreAccount: core.accountId, assetAccount: token.accountId,
+      owner: actors.borrower.accountId, keyId: '7', epoch: registered.epoch, nonce: registered.nonce,
+    }, operationMessage);
+    Object.assign(relayArgs, { authorization_key_id: '7', authorization_epoch: registered.epoch,
+      authorization_nonce: registered.nonce, authorization_signature: Array.from(sign(null, authorizationMessage, relayKey.privateKey)) });
+    const swappedKey = structuredClone(relay);
+    const otherKey = await core.view<{ epoch: string }>('get_authorization_key', { owner: actors.borrower.accountId, key_id: '8' });
+    Object.assign(swappedKey.args.args as Record<string, unknown>, { authorization_key_id: '8', authorization_epoch: otherKey.epoch });
+    await reject(actors.recipient, swappedKey, /UNAUTHORIZED/);
+    const staleNonce = structuredClone(relay);
+    (staleNonce.args.args as Record<string, unknown>).authorization_nonce = '1';
+    await reject(actors.recipient, staleNonce, /UNAUTHORIZED/);
+    const loanId = await submit<string>(actors.recipient, relay);
+    assert.equal((await core.view<{ nonce: string }>('get_authorization_key', { owner: actors.borrower.accountId, key_id: '7' })).nonce, '1');
+    await reject(actors.recipient, relay, /UNAUTHORIZED/);
     await reject(actors.broker, preparedLoan, /REPLAY/);
     const borrowerLoan = await wallet.loan(loanId, borrowerKey);
-    const auditedLoan = await wallet.loan(loanId, auditor);
+    const auditedLoan = await auditLoan(loanId);
     assert.equal(borrowerLoan.amounts.owed, '660000000');
     assert.deepEqual(auditedLoan.amounts, borrowerLoan.amounts);
     assertPrivatePayload(borrowerLoan.record, privateAmounts);
@@ -158,7 +205,22 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
     await submit(actors.borrower, installment);
     await reject(actors.borrower, installment, /STALE_STATE/);
     assert.equal((await wallet.loan(loanId, borrowerKey)).amounts.principalRemaining, '380000000');
-    await submit(actors.borrower, await wallet.prepareRepayment(actors.borrower.accountId, loanId, 'Full'));
+    const payoff = await wallet.prepareRepayment(actors.borrower.accountId, loanId, 'Full');
+    const payoffArgs = payoff.args.args as Record<string, unknown>;
+    const payoffKey = await core.view<{ epoch: string; nonce: string }>('get_authorization_key', { owner: actors.borrower.accountId, key_id: '7' });
+    const payoffMessage = await registeredAuthorizationMessage({
+      networkId: deployment.manifest.networkId, coreAccount: core.accountId, assetAccount: token.accountId,
+      owner: actors.borrower.accountId, keyId: '7', epoch: payoffKey.epoch, nonce: payoffKey.nonce,
+    }, await repaymentOperationMessage({
+      loanId, mode: 'Full', loanVersion: payoffArgs.expected_loan_version as string,
+      spendingVersion: payoffArgs.expected_borrower_spending_version as string,
+      statement: Uint8Array.from((payoffArgs.proof as { statement: number[] }).statement),
+    }));
+    Object.assign(payoffArgs, { authorization_key_id: '7', authorization_epoch: payoffKey.epoch,
+      authorization_nonce: payoffKey.nonce, authorization_signature: Array.from(sign(null, payoffMessage, relayKey.privateKey)) });
+    await submit(actors.recipient, payoff);
+    assert.equal((await core.view<{ nonce: string }>('get_authorization_key', { owner: actors.borrower.accountId, key_id: '7' })).nonce, '2');
+    await reject(actors.recipient, payoff, /UNAUTHORIZED/);
     const paid = await wallet.loan(loanId, borrowerKey);
     assert.equal(paid.record.status, 'Paid');
     assert.equal(paid.amounts.owed, '0'); assert.equal(paid.amounts.principalRemaining, '0');
@@ -196,8 +258,22 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
     assert.equal(await core.view('get_custody_total'), '569999999');
     assert.equal((await wallet.holder(actors.borrower.accountId)).inbox, '1000000');
     assert.equal((await wallet.holder(actors.recipient.accountId)).spending, '39000000');
+    await reject(actors.broker, await wallet.prepareBrokerClosure(brokerId), /HAS_OBLIGATIONS/);
     await call(actors.broker, 'delete_loan', { loan_id: loanId, evidence: [] });
+    assert.equal(await core.view('get_loan', { loan_id: loanId }), null);
+    assert.deepEqual((await auditLoan(loanId)).amounts, paid.amounts,
+      'Deleting a terminal loan must preserve authorized historical audit recovery');
+    assert.equal(await auditMirror('broker', brokerId, 'token_auditor'), '0');
+    const closureBeforeProposal = await wallet.prepareBrokerClosure(brokerId);
+    const unresolvedProposalId = await submit<string>(actors.broker, proposal);
+    await reject(actors.broker, closureBeforeProposal, /HAS_OBLIGATIONS/);
+    await call(actors.broker, 'revoke_proposal', { proposal_id: unresolvedProposalId });
     await submit(actors.broker, await wallet.prepareBrokerClosure(brokerId));
+    assert.equal(await core.view('get_broker', { broker_id: brokerId }), null);
+    assert.deepEqual(await core.view('get_vault_broker_ids', { vault_id: vaultId, cursor: '0', limit: 50 }), [brokerId],
+      'Closing a broker must preserve its stable membership tombstone');
+    assert.deepEqual((await auditLoan(loanId)).amounts, paid.amounts,
+      'Loan auditing must not depend on the broker remaining active');
     const finalClaim = await call<string>(actors.lender, 'redeem_shares', { args: { vault_id: vaultId, shares: (shares - requiredShares).toString(), min_assets_out: '529999999', expiry: '18446744073709551615', sole_shareholder_waiver: false, burn_worthless: false, broker_zero_proofs: [] } });
     await call(actors.lender, 'request_payout', { args: { claim_id: finalClaim, recipient: actors.lender.accountId, operation_id: '9007199254740996' } });
     await call(actors.recipient, 'finalize_payout', { operation_id: '9007199254740996' });

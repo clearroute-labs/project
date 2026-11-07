@@ -1,6 +1,7 @@
 import { ProtocolError } from './types'
 
 export const MAX_ASSET_UNITS = (2n ** 63n) - 1n
+export const MAX_U128_UNITS = (1n << 128n) - 1n
 
 export function parseAmount(input: string, decimals: number, maxUnits = MAX_ASSET_UNITS): string {
   if (!Number.isInteger(decimals) || decimals < 0 || decimals > 38) {
@@ -31,6 +32,11 @@ export function parseAmount(input: string, decimals: number, maxUnits = MAX_ASSE
   return units.toString(10)
 }
 
+/** Native NEAR deposits use u128 yoctoNEAR, independently of the private asset limit. */
+export function parseNearAmount(input: string): string {
+  return parseAmount(input, 24, MAX_U128_UNITS)
+}
+
 export function parseNonNegativeAmount(input: string, decimals: number, maxUnits = MAX_ASSET_UNITS): string {
   const value = input.trim()
   if (!/^\d+(?:\.\d+)?$/.test(value)) {
@@ -45,6 +51,17 @@ export function parseNonNegativeAmount(input: string, decimals: number, maxUnits
     throw new ProtocolError({ category: 'INVALID_AMOUNT', message: 'Amount exceeds the protocol limit.' })
   }
   return units.toString(10)
+}
+
+/** Public asset redemption burns ceil(assets * supply / priced NAV) shares. */
+export function sharesForAssets(assets: string, supply: string, pricedNav: string): string {
+  const amount = BigInt(assets), totalShares = BigInt(supply), nav = BigInt(pricedNav)
+  if (amount <= 0n || totalShares <= 0n || nav <= 0n) {
+    throw new ProtocolError({ category: 'INVALID_AMOUNT', message: 'Asset redemption requires a positive amount, share supply and net asset value.' })
+  }
+  const shares = (amount * totalShares + nav - 1n) / nav
+  if (shares > MAX_U128_UNITS) throw new ProtocolError({ category: 'INVALID_AMOUNT', message: 'Share quantity exceeds the protocol limit.' })
+  return shares.toString()
 }
 
 export function formatAmount(units: string | bigint | undefined, decimals: number, placeholder = '—'): string {

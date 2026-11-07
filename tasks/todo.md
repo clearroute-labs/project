@@ -6,9 +6,13 @@ The user authorized full implementation after approving `SPEC.md`. Earlier resea
 
 - [x] Establish the implementation workspace and dispatch isolated contract, cryptography and web work.
 - [x] Validate the NEAR host proof verifier and implement tested accounting/client/keeper foundations.
-- [ ] Integrate complete, sound proof relations with authoritative contract state.
-- [ ] Complete the application, recovery and keeper flows using the actual artifacts and contract.
-- [ ] Verify complete scenarios, resolve review findings, and document reproducible operation.
+- [x] Integrate complete proof relations with authoritative contract state and verify their positive/negative cases in native, browser and NEAR runtimes.
+- [x] Complete the application, recovery and keeper flows using the actual artifacts and contract.
+- [x] Verify complete scenarios, resolve review findings, and document reproducible operation.
+
+### Implementation review
+
+Completed against the final v4 artifacts: all proof families pass native/browser/NEAR verification, four financial sandbox scenarios pass, and the full browser flow passes through repayment, lender payout, archived audit and backup restoration. Final workspace checks pass 117 TypeScript tests, strict typechecking and the production build. [implementation.md](implementation.md) records exact artifacts, runtime measurements and evidence. Development setup remains subject to the specification's independent review and production setup gates before a funded release.
 
 ## Historical feasibility review
 

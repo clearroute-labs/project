@@ -5,3 +5,4 @@
 - Validate delegated integrations against the concrete SDK interfaces and a connected execution path. Optional method casts, guessed return shapes and disconnected UI smoke checks cannot establish that a financial flow works.
 - Recover full-range confidential values from authenticated limb/history data and verify the resulting ciphertext. A whole-range discrete-log call is not a usable fallback for 63-bit balances or loan previews.
 - Mock RPCs must enforce the real contract's argument shapes and pagination limits. A healthy server with failing dashboard reads is an integration bug to diagnose; require actual connected transactions before accepting a UI workflow.
+- Keep a curve point's canonical hex representation distinct from a contract's JSON-encoded byte blob. Normalize at the UI/contract adapter boundary, and use actual Core wire encodings in integration fixtures; equal-looking hex strings are not interchangeable types.

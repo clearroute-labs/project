@@ -5,7 +5,7 @@ import { useAction } from '../lib/actionState'
 import { decryptWalletBackup, downloadWalletBackup, encryptWalletBackup, readWalletBackup } from '../lib/walletVault'
 import { clearEncryptedWalletBackup, markEncryptedWalletBackupSaved, useEncryptedWalletBackup, walletBackupScope } from '../lib/walletBackupGate'
 import type { AuthorizationKeyRegistration, EncryptedWalletBackup, KeyRegistration } from '../lib/types'
-import { parseAmount } from '../lib/money'
+import { parseNearAmount } from '../lib/money'
 import { PageHeader } from './shared'
 
 export function SecurityPage() {
@@ -159,7 +159,7 @@ export function SecurityPage() {
     <StorageBudgetCard accountId={accountId} balance={storageBalance} error={storageError} deposit={storageDeposit} onDepositChange={setStorageDeposit} onRefresh={() => void refreshStorage()} action={storageAction} onDeposit={async () => {
       setStorageError('')
       try {
-        const depositUnits = parseAmount(storageDeposit, 24)
+        const depositUnits = parseNearAmount(storageDeposit)
         const receipt = await storageAction.run('Add Core storage budget', () => adapters.protocol.storageDeposit({ accountId: accountId || '', deposit: depositUnits }))
         if (receipt?.status === 'succeeded') await refreshStorage()
       } catch (caught) {
@@ -192,7 +192,7 @@ function StorageBudgetCard({ accountId, balance, error, deposit, onDepositChange
   action: ReturnType<typeof useAction>
 }) {
   let depositUnits = ''
-  try { depositUnits = parseAmount(deposit, 24) } catch { /* keep the action disabled until the decimal is valid */ }
+  try { depositUnits = parseNearAmount(deposit) } catch { /* keep the action disabled until the decimal is valid */ }
   return <Card className="configuration-card"><SectionHeading eyebrow="Core storage" title="Keep this account funded" action={<StatusBadge tone={balance === null ? 'warning' : 'success'}>{balance === null ? 'Not read' : 'Finalized'}</StatusBadge>} /><p className="muted">Core reserves a small NEAR storage budget for holder, claim and loan records. This is public account infrastructure, separate from confidential asset balances.</p><div className="security-detail"><span>Remaining budget</span><strong>{formatYoctoNear(balance)}</strong></div><div className="security-detail"><span>Exact yoctoNEAR</span><Mono>{balance || '—'}</Mono></div><form className="form-stack" onSubmit={(event) => { event.preventDefault(); void onDeposit() }}><Field label="Top-up amount (NEAR)" htmlFor="storage-deposit" hint="Enter a decimal NEAR amount; it is converted to exact yoctoNEAR for the signed action."><TextInput id="storage-deposit" inputMode="decimal" value={deposit} onChange={(event) => onDepositChange(event.target.value)} placeholder="0.1" /></Field>{error ? <p className="field-error" role="alert">{error}</p> : null}<div className="review-actions"><Button type="submit" variant="secondary" disabled={!accountId || !depositUnits} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Add NEAR storage</Button><Button type="button" variant="quiet" onClick={onRefresh} disabled={!accountId}>Refresh budget</Button></div><ActionFeedback state={action.state} /></form></Card>
 }
 

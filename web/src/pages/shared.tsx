@@ -9,11 +9,13 @@ export function PageHeader({ eyebrow, title, description, action }: { eyebrow: s
 }
 
 export function ConnectionGate({ role, children }: { role: Role; children: ReactNode }) {
-  const { accountId, adapters, loading, loadError, refresh } = useAppContext()
+  const { accountId, adapters, loading, loadError, refresh, snapshot } = useAppContext()
   if (!accountId || adapters.wallet.status !== 'connected') {
     return <><PageHeader eyebrow={role} title="Your workspace is ready" description="Connect a NEAR wallet to view finalized account state and authorize actions." /><Card><EmptyState icon="⌁" title="Connect your NEAR wallet" description="Connect a wallet to view balances, loans and activity." action={<Button onClick={() => void adapters.wallet.connect()}>Connect NEAR wallet</Button>} /></Card></>
   }
-  if (loading) return <LoadingState label="Reading finalized Core state…" />
+  // Refresh keeps mounted forms, transaction feedback and local agreement packages.
+  // An account switch clears the snapshot in App before its workspace can render.
+  if (loading && !snapshot) return <LoadingState label="Reading finalized Core state…" />
   if (loadError) return <ErrorState error={loadError} onRetry={() => void refresh()} />
   return <>{children}</>
 }
@@ -23,7 +25,7 @@ export function LoadingState({ label = 'Loading finalized state…' }: { label?:
 }
 
 export function ErrorState({ error, onRetry }: { error: ProtocolError; onRetry: () => void }) {
-  return <Card><EmptyState icon="!" title="State could not be read" description={`${error.details.message} No financial state was changed.`} action={<Button variant="secondary" onClick={onRetry}>Retry read</Button>} /><div className="diagnostic"><span>Category</span><Mono>{error.details.category}</Mono></div></Card>
+  return <Card><EmptyState icon="!" title="State could not be read" description={`${error.details.message} The latest finalized state could not be read. Check any pending transaction before retrying an action.`} action={<Button variant="secondary" onClick={onRetry}>Retry read</Button>} /><div className="diagnostic"><span>Category</span><Mono>{error.details.category}</Mono></div></Card>
 }
 
 export function PublicPrivateNotice({ children }: { children?: ReactNode }) {

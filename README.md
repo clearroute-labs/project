@@ -24,6 +24,8 @@ The launcher starts an isolated NEAR sandbox, deploys the Core and a test token,
 
 `.local/demo/public.json` contains public deployment details and the loan auditor public key. The encrypted auditor wallet and its locally generated passphrase are separate owner-only files in the same directory. All generated keys, backups, artifacts and local chain files are excluded from Git.
 
+Follow [the local product walkthrough](docs/LOCAL_DEMO.md) to create a vault, fund and repay a confidential loan, settle yield, withdraw and audit the terminal record.
+
 ## Components
 
 | Location | Responsibility |
@@ -39,6 +41,8 @@ The launcher starts an isolated NEAR sandbox, deploys the Core and a test token,
 | `services/keeper` | Restricted settlement signing, grant/cadence planning and durable transaction journal |
 
 See [the cryptographic profile](docs/CRYPTO_PROFILE.md) and [the Core ABI](docs/CONTRACT_API.md) for wire formats. The wallet's `LedgerWallet` prepares `{ method, args }` calls from a single finalized block; secret witnesses never enter those arguments. Incoming token callbacks create idempotent public claims. Outgoing transfers reserve a claim before calling the token and require an authenticated result before finalization.
+
+[Registered operation authorization](docs/AUTHORIZATION.md) describes exact-operation signatures for relayers and the portable client helpers.
 
 ## Verification
 
@@ -56,7 +60,9 @@ CRYPTO_ARTIFACT_DIR=.artifacts/development pnpm test:e2e
 
 For actual browser/WASM proof validation, install Chromium with `pnpm exec playwright install chromium`, keep `pnpm --dir web dev --host 127.0.0.1 --port 5174 --strictPort` running in another terminal, then run `CRYPTO_ARTIFACT_DIR=.artifacts/development pnpm validate:browser`. The harness verifies the original pinned artifact bytes and writes timings and allocated WASM memory to `.artifacts/browser-validation.json`. `VALIDATION_ORIGIN` selects another local Vite origin. The full suite generates large proofs and requires a desktop browser with sufficient memory.
 
-Integration is still in progress. Native proof validation and the TypeScript suites pass. The target-runtime benchmark exposed excessive repeated point-validation cost in large statements; gas optimization and complete lending/custody/browser acceptance are tracked in [the implementation review](tasks/implementation-review.md). A passing unit suite alone is not a release assertion.
+The v4 profile passes native, Chromium/WASM and NEAR host verification for all eight proof families. Complete sandbox scenarios pass for lending, credit losses, token custody and the restricted keeper. The connected browser scenario also passes: agreement exchange, confidential funding/spending, both repayment modes, settlement, lender payout, archival, authorized audit and encrypted-backup restoration. Run `pnpm validate:product` against a fresh local demo to repeat it.
+
+Complete origination measured 289.89 Tgas; repayment measured up to 268.77 Tgas. The client supplies 300 Tgas by default for these calls. Large browser proofs took about three minutes and allocated about 1.72 GB of WASM linear memory, in addition to browser/artifact memory. See [the verification record](tasks/implementation.md) for artifact hashes, measurements and test coverage.
 
 ## Keeper operation
 

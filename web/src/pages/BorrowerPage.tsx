@@ -100,10 +100,11 @@ function AgreementReviewCard({ proposal, proposalPackage }: { proposal?: Proposa
     setError('')
     if (!decrypted) return setError('Decrypt and inspect the agreement before authorizing.')
     if (!backupSaved) return setError('Export and confirm an encrypted wallet backup in Security before authorizing a loan.')
-    if (expired) return setError('This proposal has expired. Ask the broker to issue a new one.')
+    if (proposal.expiresAt <= unixSecondsNow()) return setError('This proposal has expired. Ask the broker to issue a new one.')
     try {
       if (!proposalPackage) return setError('Import and decrypt the matching signed proposal package first.')
       const finalizedProposal = await adapters.protocol.getProposal(proposal.proposalId)
+      if (finalizedProposal.expiresAt <= unixSecondsNow()) return setError('This proposal has expired. Ask the broker to issue a new one.')
       const reviewedProposal = authoritativeProposal(finalizedProposal, proposalPackage)
       const signature = await adapters.crypto.authorizeAgreement(reviewedProposal)
       await action.run('Authorize loan proposal', () => adapters.protocol.authorizeProposal({ proposalId: proposal.proposalId, authorizationSignature: signature.authorizationSignature }))
