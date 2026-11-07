@@ -4,9 +4,9 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    // Wallet Selector's Meteor module still ships safe-buffer. Resolve the
-    // Node builtin to the browser implementation before that module evaluates.
-    alias: { buffer: 'buffer/' },
+    // Wallet dependencies use safe-buffer and generate-function's util.format.
+    // Both need their browser implementations in development and production.
+    alias: { buffer: 'buffer/', util: 'util/' },
   },
   define: {
     global: 'globalThis',
