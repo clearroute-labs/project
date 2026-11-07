@@ -277,7 +277,7 @@ fn parse_verifier_manifest(args: &InitArgs) -> Vec<VerifierArtifactExpectation> 
                 verifying_key_bytes: vk.bytes as u32,
                 prepared_key_sha256: prepared_hash,
                 prepared_key_bytes: prepared.bytes as u32,
-                public_input_count: kind.slot_count() as u32,
+                public_input_count: (kind.slot_count() + 1) as u32,
             }
         })
         .collect()

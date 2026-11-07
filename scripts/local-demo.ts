@@ -13,6 +13,8 @@ import { confinedPath } from './release.js';
 import { deployProtocol, maximumGas } from '../tests/e2e/deployment.js';
 
 const artifactDirectory = resolve(process.argv[2] ?? '.artifacts/development');
+const webPort = Number(process.env.DEMO_PORT ?? '5174');
+if (!Number.isInteger(webPort) || webPort < 1024 || webPort > 65535) throw new Error('DEMO_PORT must be an integer from 1024 to 65535');
 const output = resolve('.local/demo');
 await mkdir(join(output, 'credentials'), { recursive: true, mode: 0o700 });
 await chmod(output, 0o700);
@@ -76,13 +78,14 @@ try {
   if (!address || typeof address === 'string') throw new Error('Artifact server did not bind');
   const artifactBase = `http://127.0.0.1:${address.port}/`;
   await privateFile(join(output, 'public.json'), JSON.stringify({ networkId: 'sandbox', coreAccountId: deployment.core.accountId,
+    webUrl: `http://127.0.0.1:${webPort}/`,
     tokenAccountId: deployment.token.accountId, rpcUrl: deployment.rpc.url, manifestHash: deployment.manifestHash,
     profileHash: deployment.manifest.profileHash, artifactBase, loanAuditorKey,
     keeperAuthorization: { keyId: '1', epoch: '2', accountId: deployment.actors.keeper.accountId },
     accounts: Object.fromEntries(Object.entries(deployment.actors).map(([name, account]) => [name, account.accountId])) }, null, 2));
   console.log(`Sandbox ready. Import a signing credential from ${join(output, 'credentials')} in the local wallet. These accounts hold test tokens only.`);
   console.log(`Loan auditor public key and deployment configuration: ${join(output, 'public.json')}`);
-  web = spawn('pnpm', ['--dir', 'web', 'dev', '--host', '127.0.0.1', '--port', '5174', '--strictPort'], {
+  web = spawn('pnpm', ['--dir', 'web', 'dev', '--host', '127.0.0.1', '--port', String(webPort), '--strictPort'], {
     stdio: 'inherit', env: { ...process.env,
       VITE_NETWORK_ID: 'sandbox', VITE_CORE_ACCOUNT_ID: deployment.core.accountId, VITE_TOKEN_ACCOUNT_ID: deployment.token.accountId,
       VITE_RPC_URL: deployment.rpc.url, VITE_ALLOW_INSECURE_LOCALHOST: 'true', VITE_CRYPTO_PROFILE_HASH: deployment.manifest.profileHash,
