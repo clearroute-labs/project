@@ -14,21 +14,24 @@ token account, decimals, controller, network ID, asset encryption keys,
 immutable. `InitArgs.verifier_manifest_json` must be the compact canonical JSON
 whose fields are, in order, `schema`, `profileHash`, `networkId`,
 `coreAccountId`, `setup`, and an alphabetically ordered `artifacts` object.
-Each artifact entry has exactly `path`, `sha256`, and `bytes`; the object must
-contain exactly `<family>.vk` and `<family>.prepared-vk` for all eight families:
-`key-possession`, `public-conversion`, `confidential-transfer`, `origination`,
-`repayment`, `reconciliation`, `zero-balance`, and `ownership`. Core hashes the
-exact JSON bytes and requires that digest to equal `verifier_manifest_hash`,
-then pins every artifact hash/length and the profile's public-input count in
-state. Duplicate, missing, unknown, non-canonical, or deployment-mismatched
-entries are rejected. Verifier keys are uploaded one statement kind at a time
-with `stage_verifier_key`; a staged prepared key must match its manifest byte
-length and SHA-256, embed the manifest's canonical `.vk` hash, and expose the
-family's expected public-input count. Keys become immutable only after the
-owner calls `activate_verifier_keys`; all eight exact pinned kinds must be
-present before any financial method is enabled. The legacy single-key
-initializer is rejected. There is no unrestricted upgrade, verifier
-replacement, debt reset, or payout redirection method.
+Each artifact entry has exactly `path`, `sha256`, and `bytes`; the complete
+object contains 27 entries: `<family>.pk`, `<family>.vk`, and
+`<family>.prepared-vk` for all eight families (`key-possession`,
+`public-conversion`, `confidential-transfer`, `origination`, `repayment`,
+`reconciliation`, `zero-balance`, and `ownership`), plus `native.prover`,
+`browser.glue`, and `browser.wasm`. Core validates every artifact commitment,
+hashes the exact JSON bytes, and requires that digest to equal
+`verifier_manifest_hash`. It persists the verifier hash/length and profile
+public-input expectations; the proving/executable entries remain pinned by the
+immutable manifest hash. Duplicate, missing, unknown, non-canonical, or
+deployment-mismatched entries are rejected. Verifier keys are uploaded one
+statement kind at a time with `stage_verifier_key`; a staged prepared key must
+match its manifest byte length and SHA-256, embed the manifest's canonical
+`.vk` hash, and expose the family's expected public-input count. Keys become
+immutable only after the owner calls `activate_verifier_keys`; all eight exact
+pinned kinds must be present before any financial method is enabled. The
+legacy single-key initializer is rejected. There is no unrestricted upgrade,
+verifier replacement, debt reset, or payout redirection method.
 
 All public amounts are JSON decimal strings ('U128'). IDs, timestamps, and
 versions are serialized as canonical decimal strings (no JSON numbers, leading

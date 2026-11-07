@@ -37,6 +37,7 @@ const MAX_CHECKPOINT_EPOCH: u64 = 86_400;
 const MIN_CHECKPOINT_EPOCH: u64 = 60;
 const MAX_PREPARED_KEY_BYTES: usize = 512 * 1024;
 const MAX_VERIFIER_MANIFEST_BYTES: usize = 64 * 1024;
+const MAX_EXTERNAL_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
 const REQUIRED_VERIFIER_KEYS: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 const MAX_BROKERS_PER_VAULT: usize = 64;
 
@@ -74,6 +75,8 @@ const VERIFIER_FAMILIES: [(&str, u8); 8] = [
     ("zero-balance", 7),
     ("ownership", 8),
 ];
+
+const EXTERNAL_ARTIFACTS: [&str; 3] = ["native.prover", "browser.glue", "browser.wasm"];
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -183,6 +186,18 @@ fn statement_kind_for_manifest(kind: u8) -> Option<StatementKind> {
     })
 }
 
+fn validate_manifest_artifact(artifact: &VerifierManifestArtifact, max_bytes: u64) -> Vec<u8> {
+    require!(
+        !artifact.path.is_empty() && artifact.path.len() <= MAX_VERIFIER_MANIFEST_BYTES,
+        ERR_UNSUPPORTED_PROFILE
+    );
+    require!(
+        artifact.bytes > 0 && artifact.bytes <= max_bytes,
+        ERR_UNSUPPORTED_PROFILE
+    );
+    manifest_sha256(&artifact.sha256).unwrap_or_else(|| env::panic_str(ERR_UNSUPPORTED_PROFILE))
+}
+
 fn parse_verifier_manifest(args: &InitArgs) -> Vec<VerifierArtifactExpectation> {
     require!(
         !args.verifier_manifest_json.is_empty()
@@ -220,15 +235,24 @@ fn parse_verifier_manifest(args: &InitArgs) -> Vec<VerifierArtifactExpectation> 
         ERR_UNSUPPORTED_PROFILE
     );
     require!(
-        manifest.artifacts.len() == VERIFIER_FAMILIES.len() * 2,
+        manifest.artifacts.len() == VERIFIER_FAMILIES.len() * 3 + EXTERNAL_ARTIFACTS.len(),
         ERR_UNSUPPORTED_PROFILE
     );
+
+    for name in EXTERNAL_ARTIFACTS {
+        let artifact = manifest
+            .artifacts
+            .get(name)
+            .unwrap_or_else(|| env::panic_str(ERR_UNSUPPORTED_PROFILE));
+        validate_manifest_artifact(artifact, MAX_EXTERNAL_ARTIFACT_BYTES);
+    }
 
     VERIFIER_FAMILIES
         .iter()
         .map(|(family, statement_kind)| {
             let vk_name = format!("{family}.vk");
             let prepared_name = format!("{family}.prepared-vk");
+            let proving_name = format!("{family}.pk");
             let vk = manifest
                 .artifacts
                 .get(&vk_name)
@@ -237,24 +261,13 @@ fn parse_verifier_manifest(args: &InitArgs) -> Vec<VerifierArtifactExpectation> 
                 .artifacts
                 .get(&prepared_name)
                 .unwrap_or_else(|| env::panic_str(ERR_UNSUPPORTED_PROFILE));
-            require!(
-                !vk.path.is_empty()
-                    && !prepared.path.is_empty()
-                    && vk.path.len() <= MAX_VERIFIER_MANIFEST_BYTES
-                    && prepared.path.len() <= MAX_VERIFIER_MANIFEST_BYTES,
-                ERR_UNSUPPORTED_PROFILE
-            );
-            require!(
-                vk.bytes > 0
-                    && vk.bytes <= 128 * 1024
-                    && prepared.bytes > 0
-                    && prepared.bytes <= MAX_PREPARED_KEY_BYTES as u64,
-                ERR_UNSUPPORTED_PROFILE
-            );
-            let vk_hash = manifest_sha256(&vk.sha256)
+            let proving = manifest
+                .artifacts
+                .get(&proving_name)
                 .unwrap_or_else(|| env::panic_str(ERR_UNSUPPORTED_PROFILE));
-            let prepared_hash = manifest_sha256(&prepared.sha256)
-                .unwrap_or_else(|| env::panic_str(ERR_UNSUPPORTED_PROFILE));
+            let vk_hash = validate_manifest_artifact(vk, 128 * 1024);
+            let prepared_hash = validate_manifest_artifact(prepared, MAX_PREPARED_KEY_BYTES as u64);
+            validate_manifest_artifact(proving, MAX_EXTERNAL_ARTIFACT_BYTES);
             let kind = statement_kind_for_manifest(*statement_kind)
                 .unwrap_or_else(|| env::panic_str(ERR_UNSUPPORTED_PROFILE));
             VerifierArtifactExpectation {
@@ -7010,6 +7023,9 @@ impl Core {
             .unwrap_or(false);
         require!(accepted, ERR_BAD_PROOF);
         statement
+            .promote_after_verified_proof()
+            .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
+        statement
     }
 
     // Conversion verification has three fixed reader keys and three fixed
@@ -7502,6 +7518,15 @@ mod tests {
         for (family, statement_kind) in VERIFIER_FAMILIES {
             let vk_hash = format!("{statement_kind:02x}").repeat(32);
             let prepared_hash = format!("{:02x}", statement_kind + 16).repeat(32);
+            let proving_hash = format!("{:02x}", statement_kind + 32).repeat(32);
+            artifacts.insert(
+                format!("{family}.pk"),
+                json!({
+                    "path": format!("{family}.pk"),
+                    "sha256": proving_hash,
+                    "bytes": 3
+                }),
+            );
             artifacts.insert(
                 format!("{family}.vk"),
                 json!({
@@ -7516,6 +7541,20 @@ mod tests {
                     "path": format!("{family}.prepared-vk"),
                     "sha256": prepared_hash,
                     "bytes": 2
+                }),
+            );
+        }
+        for (name, bytes) in [
+            ("native.prover", 4),
+            ("browser.glue", 5),
+            ("browser.wasm", 6),
+        ] {
+            artifacts.insert(
+                name.to_string(),
+                json!({
+                    "path": name,
+                    "sha256": format!("{:02x}", bytes).repeat(32),
+                    "bytes": bytes
                 }),
             );
         }
