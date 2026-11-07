@@ -56,3 +56,11 @@ Current v3 verification:
 - Holder rotation proves the old total balance is zero, preserves freezes, and records an immutable recovery-history boundary. Broker settlement can atomically derive and consume a reconciliation checkpoint, including through restricted keeper keys.
 - Application screens now expose shield/unshield, share transfers, loan/broker closure, auditor recovery, and proof-backed final redemption. Chromium renders desktop/mobile; live UI operation and mobile workspace selection remain under verification.
 - Fresh native/browser proofs and complete lending, loss, and keeper scenarios are running. Earlier v2 results do not establish v3 acceptance.
+
+Latest verified results:
+
+- The v3 native and Chromium runs both passed all eight proof families, including both conversion and repayment modes. Chromium's largest measured proof took 131,158 ms; its WASM linear-memory high-water allocation was 988,020,736 bytes. This is allocated WASM memory, not a measured whole-process peak.
+- All eight v3 families verify through the actual NEAR host verifier. The largest measured typed verification call was full repayment at about 242 Tgas; complete Core execution has a separate gas budget and remains under test.
+- Core: 18 unit tests and strict Clippy pass. Shared crates: 13 arithmetic tests, two authenticated-book tests and two host-verifier tests pass.
+- A real restricted keeper now passes merge, per-operation/window settlement limits, journal restart and execution-time revocation against the v3 sandbox. Sandbox time advances now wait for finalized state before timestamp-dependent assertions.
+- Compacted proof transport removes duplicated public-input vectors; Core derives them from the typed statement and authoritative state. No proof relation or verifier key changed.
