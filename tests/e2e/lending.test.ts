@@ -6,7 +6,7 @@ import { decodeWire, LedgerWallet, type LedgerVault, type PreparedCall } from '.
 import { deployProtocol, maximumGas } from './deployment.js';
 
 function assertPrivatePayload(value: unknown, forbiddenAmounts: ReadonlySet<string>): void {
-  if (typeof value === 'string') assert.equal(forbiddenAmounts.has(value), false, 'Private amount appeared as a public field');
+  if (typeof value === 'string' || typeof value === 'number') assert.equal(forbiddenAmounts.has(String(value)), false, 'Private amount appeared as a public field');
   else if (Array.isArray(value)) for (const child of value) assertPrivatePayload(child, forbiddenAmounts);
   else if (value && typeof value === 'object') for (const [key, child] of Object.entries(value)) {
     assert.equal(/secret|randomness|private_balance|witness/i.test(key), false, 'Private witness field appeared in transaction');
@@ -19,10 +19,14 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
   const { worker, core, token, actors, rpc, crypto, keys } = deployment;
   const wallet = new LedgerWallet(rpc, keys, crypto, deployment.manifestHash);
   const measurements: Array<{ method: string; gas: string; argumentBytes: number; milliseconds: number; succeeded: boolean }> = [];
+  const privateAmounts = new Set(['600000000', '660000000', '220000000', '440000000']);
   await mkdir('.artifacts', { recursive: true });
   const call = async <T>(actor: NearAccount, method: string, input: Record<string, unknown>): Promise<T> => {
     const before = Date.now();
     const outcome = await actor.callRaw(core, method, input, { gas: maximumGas });
+    for (const log of outcome.logs) {
+      if (log.startsWith('EVENT_JSON:')) assertPrivatePayload(JSON.parse(log.slice('EVENT_JSON:'.length)), privateAmounts);
+    }
     measurements.push({ method, gas: outcome.gas_burnt, argumentBytes: Buffer.byteLength(JSON.stringify(input)), milliseconds: Date.now() - before, succeeded: !outcome.failed });
     await writeFile('.artifacts/lifecycle-benchmark.json', JSON.stringify({ complete: false, core: core.accountId, manifestHash: deployment.manifestHash, measurements }, null, 2));
     assert.equal(outcome.failed, false, `${method}: ${JSON.stringify(outcome.status)}`);
@@ -30,6 +34,11 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
     return outcome.parseResult<T>();
   };
   const submit = <T>(actor: NearAccount, prepared: PreparedCall): Promise<T> => call(actor, prepared.method, prepared.args);
+  const reject = async (actor: NearAccount, prepared: PreparedCall, reason: RegExp): Promise<void> => {
+    const outcome = await actor.callRaw(core, prepared.method, prepared.args, { gas: maximumGas });
+    assert.equal(outcome.failed, true, `${prepared.method} unexpectedly succeeded`);
+    assert.match(JSON.stringify(outcome.status), reason, 'Rejection must be the expected contract error, not a runtime or gas failure');
+  };
   const deposit = async (actor: NearAccount, amount: string, id: string): Promise<string> => {
     const outcome = await actor.callRaw(token, 'ft_transfer_call', { receiver_id: core.accountId, amount, memo: null, msg: JSON.stringify({ version: 1, deposit_id: id }) }, { gas: maximumGas, attachedDeposit: 1n });
     assert.equal(outcome.failed, false);
@@ -50,7 +59,9 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
     const lenderClaim = await deposit(actors.lender, '1000000000', 'lifecycle-lender');
     await call(actors.lender, 'deposit_to_vault', { args: { claim_id: lenderClaim, vault_id: vaultId, amount: '1000000000', min_shares_out: '1', expiry: '18446744073709551615' } });
     await submit(actors.broker, await wallet.prepareDraw(brokerId, '800000000'));
-    await submit(actors.broker, await wallet.prepareMergeBroker(brokerId));
+    const brokerMerge = await wallet.prepareMergeBroker(brokerId);
+    await reject(actors.recipient, brokerMerge, /UNAUTHORIZED/);
+    await submit(actors.broker, brokerMerge);
     const borrowerClaim = await deposit(actors.borrower, '100000000', 'lifecycle-borrower');
     await submit(actors.borrower, await wallet.prepareShield(actors.borrower.accountId, borrowerClaim));
     await submit(actors.borrower, await wallet.prepareMergeHolder(actors.borrower.accountId));
@@ -65,31 +76,63 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
     assertPrivatePayload(preparedLoan.args, new Set(['600000000', '660000000', '220000000']));
     const unsigned = await actors.broker.callRaw(core, 'originate', preparedLoan.args, { gas: maximumGas });
     assert.equal(unsigned.failed, true, 'A broker cannot fund a loan without borrower consent');
+    await reject(actors.recipient, preparedLoan, /UNAUTHORIZED/);
+    const expired = structuredClone(proposal);
+    (expired.args.args as Record<string, unknown>).expiry = '1';
+    await reject(actors.broker, expired, /EXPIRED/);
+    const mismatchedSignature = structuredClone(proposal);
+    (mismatchedSignature.args.args as Record<string, unknown>).borrower_signature = Array(64).fill(7);
+    await reject(actors.broker, mismatchedSignature, /UNAUTHORIZED/);
+    const revokedId = await submit<string>(actors.broker, proposal);
+    await call(actors.borrower, 'revoke_proposal', { proposal_id: revokedId });
+    const revoked = structuredClone(preparedLoan);
+    (revoked.args.args as Record<string, unknown>).proposal_id = revokedId;
+    await reject(actors.broker, revoked, /REPLAY/);
     const borrowerKey = { role: 'holder' as const, subjectId: actors.borrower.accountId, keyId: '1' };
     assert.equal(await wallet.recovery.amount({ recovery: draft.principal.recovery[1]! }, borrowerKey), 600000000n);
     assert.equal(await wallet.recovery.amount({ recovery: draft.owed.recovery[0]! }, borrowerKey), 660000000n);
     assert.equal(await wallet.recovery.amount({ recovery: draft.payment.recovery[0]! }, borrowerKey), 220000000n);
     await call(actors.borrower, 'sign_proposal', { proposal_id: proposalId, signature: [] });
     const loanId = await submit<string>(actors.broker, preparedLoan);
+    await reject(actors.broker, preparedLoan, /REPLAY/);
     const borrowerLoan = await wallet.loan(loanId, borrowerKey);
     const auditedLoan = await wallet.loan(loanId, auditor);
     assert.equal(borrowerLoan.amounts.owed, '660000000');
     assert.deepEqual(auditedLoan.amounts, borrowerLoan.amounts);
+    assertPrivatePayload(borrowerLoan.record, privateAmounts);
     await submit(actors.borrower, await wallet.prepareMergeHolder(actors.borrower.accountId));
 
     console.log('Lifecycle: private spending and repayment with a concurrent inbox credit');
-    await submit(actors.borrower, await wallet.prepareTransfer(actors.borrower.accountId, actors.recipient.accountId, '40000000'));
+    const staleTransfer = await wallet.prepareTransfer(actors.borrower.accountId, actors.recipient.accountId, '40000000');
+    const merge = await wallet.prepareMergeHolder(actors.borrower.accountId);
+    await submit(actors.borrower, merge);
+    await reject(actors.borrower, merge, /STALE_STATE/);
+    await reject(actors.borrower, staleTransfer, /STALE_STATE/);
+    const transfer = await wallet.prepareTransfer(actors.borrower.accountId, actors.recipient.accountId, '40000000');
+    await call(actors.issuer, 'set_holder_frozen', { account_id: actors.borrower.accountId, frozen: true });
+    await reject(actors.borrower, transfer, /ACCOUNT_FROZEN/);
+    await call(actors.issuer, 'set_holder_frozen', { account_id: actors.borrower.accountId, frozen: false });
+    await submit(actors.borrower, transfer);
+    await reject(actors.borrower, transfer, /STALE_STATE/);
     await submit(actors.recipient, await wallet.prepareMergeHolder(actors.recipient.accountId));
+    for (const invalidAmount of ['0', '219999999', '660000000', '660000001']) {
+      await assert.rejects(wallet.prepareRepayment(actors.borrower.accountId, loanId, 'Regular', invalidAmount), /Invalid loan repayment/);
+    }
     const installment = await wallet.prepareRepayment(actors.borrower.accountId, loanId, 'Regular', '220000000');
     assertPrivatePayload(installment.args, new Set(['600000000', '660000000', '220000000']));
     await submit(actors.recipient, await wallet.prepareTransfer(actors.recipient.accountId, actors.borrower.accountId, '1000000'));
     await submit(actors.borrower, installment);
+    await reject(actors.borrower, installment, /STALE_STATE/);
     assert.equal((await wallet.loan(loanId, borrowerKey)).amounts.principalRemaining, '380000000');
     await submit(actors.borrower, await wallet.prepareRepayment(actors.borrower.accountId, loanId, 'Full'));
     const paid = await wallet.loan(loanId, borrowerKey);
     assert.equal(paid.record.status, 'Paid');
     assert.equal(paid.amounts.owed, '0'); assert.equal(paid.amounts.principalRemaining, '0');
     assert.equal(paid.record.payment_remaining, 0);
+    const schedule = await core.view<{ next_due: string | null }>('get_loan', { loan_id: loanId });
+    assert.equal(schedule.next_due, null);
+    assert.equal(BigInt(paid.record.loan_version), BigInt(borrowerLoan.record.loan_version) + 2n);
+    await reject(actors.broker, await wallet.prepareManagement(loanId, 'Default'), /LOAN_CLOSED/);
     await assert.rejects(wallet.prepareRepayment(actors.borrower.accountId, loanId, 'Full'), /not payable/);
 
     console.log('Lifecycle: public yield settlement and lender redemption');
