@@ -48,3 +48,11 @@ Integration update:
 - The real lending scenario passes registration, vault deposit, broker draw/merge, borrower shielding/merge, proposal creation and borrower consent. Origination still exceeds 300 Tgas in the initial contract build; full lifecycle acceptance remains open.
 - Fixed the contract build's missing `--cfg near`, which made the pinned NEAR SDK select local panic/hash implementations. Builds now assert required NEAR host imports. Release optimization targets execution cost (`opt-level = 3`).
 - Added real multi-broker impairment/default/redemption and restricted-keeper restart/limits/revocation scenarios. Their acceptance awaits the remaining contract/verifier integration fixes.
+
+Current v3 verification:
+
+- Replaced repeated host subgroup checks with in-circuit cofactor-preimage constraints for every typed statement point. Generic point decoding stays strict; successful proof verification promotes only that statement's points. The cryptographic profile changed and all eight development key sets were regenerated in `.artifacts/integration-v3`.
+- Core now binds staged keys to the complete canonical deployment manifest, validates its identity, and permits no proof state transition before activation. Actual deployment caught and resolved the transcript-digest input-count offset.
+- Holder rotation proves the old total balance is zero, preserves freezes, and records an immutable recovery-history boundary. Broker settlement can atomically derive and consume a reconciliation checkpoint, including through restricted keeper keys.
+- Application screens now expose shield/unshield, share transfers, loan/broker closure, auditor recovery, and proof-backed final redemption. Chromium renders desktop/mobile; live UI operation and mobile workspace selection remain under verification.
+- Fresh native/browser proofs and complete lending, loss, and keeper scenarios are running. Earlier v2 results do not establish v3 acceptance.
