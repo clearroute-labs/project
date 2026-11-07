@@ -65,7 +65,7 @@ view with `authorization_policy`, `confidential_outstanding: U128`, and
 | 'confidential_send' | receiver, expected sender version, typed proof | sender holder | Credits receiver inbox without changing receiver spending version |
 | 'repay' | loan/mode, expected loan/spending versions, typed proof; optional relayed auth key/epoch/nonce/signature | borrower or registered relayer | Regular or full confidential payment |
 | 'manage_loan' | loan, 'Impair'/'Unimpair'/'Default', expected version | broker owner | Changes public risk state; queues accounting |
-| 'prepare_reconciliation' | broker ID | anyone | Creates the next scheduled checkpoint |
+| 'prepare_reconciliation' | broker ID | anyone | Returns the current snapshot checkpoint or replaces a stale one |
 | 'reconcile_credit' | checkpoint, bounded public outputs, proof | anyone with valid proof | Applies aggregate loss/provision once |
 | 'merge_broker_inbox' | broker, expected version, exact homomorphic spending+inbox ciphertext | owner or settlement keeper | Broker-only inbox merge |
 | 'settle' | broker, public amount, expected versions, post states/proof, optional reconciliation | owner or scoped keeper | Returns broker funds to associated vault |
@@ -223,7 +223,13 @@ refresh these views after a merge or any stale-state error.
 `get_proof_context` operation `settle-reconcile` returns the post-settlement
 accounting version and the derived checkpoint ID. It is the only context a
 keeper needs for the bundled path; no keeper authority is granted for
-`prepare_reconciliation` or arbitrary reconciliation.
+`prepare_reconciliation` or arbitrary reconciliation. A checkpoint prepared
+for a prior risk version is retired as a permanent consumed tombstone when a
+new checkpoint is prepared or successfully bundled; the replacement ID is
+derived from the checkpoint high-water counter. Repeated preparation for the
+same risk snapshot is idempotent. If a broker has positive provision but no
+new `accounting_pending` risk boundary, the inline context is immediately
+eligible rather than inventing a future cadence.
 
 Mutation events include a decimal-string `recovery_event_id` whenever the
 transition appends a recovery record. Settlement additionally exposes

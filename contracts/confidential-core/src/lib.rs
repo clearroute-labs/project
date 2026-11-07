@@ -2440,21 +2440,13 @@ impl Core {
         );
         require!(proposal.vault_id == broker.vault_id, ERR_WRONG_ASSET);
         let start = now_seconds();
-        let scheduled_offset = proposal
-            .payment_interval
-            .checked_mul(u64::from(proposal.payment_count))
-            .and_then(|offset| offset.checked_add(proposal.grace_period))
-            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
-        if let (VaultKind::ClosedEnded, Some(phases)) = (&vault.kind, &vault.phase_times) {
-            let schedule_end = start
-                .checked_add(scheduled_offset)
-                .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
-            let latest_due = phases
-                .redemption_start
-                .checked_sub(phases.redemption_buffer)
-                .unwrap_or_else(|| env::panic_str(ERR_INVALID_ENCODING));
-            require!(schedule_end <= latest_due, ERR_WRONG_PHASE);
-        }
+        validate_loan_schedule(
+            &vault,
+            start,
+            proposal.payment_interval,
+            proposal.payment_count,
+            proposal.grace_period,
+        );
         if !args.loan_principal_ciphertexts.is_empty() {
             let provided = validate_ciphertext_set(&args.loan_principal_ciphertexts, 5);
             require!(provided == proposal.principal_ciphertexts, ERR_BAD_PROOF);
@@ -3964,7 +3956,29 @@ impl Core {
             broker.risk_version > broker.reconciled_risk_version || broker.impairment_provision > 0,
             ERR_ACCOUNTING_PENDING
         );
-        require!(broker.reconciliation_checkpoint_id.is_none(), ERR_REPLAY);
+        if let Some(previous_id) = broker.reconciliation_checkpoint_id {
+            let mut previous = self
+                .checkpoints
+                .get(&previous_id)
+                .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
+            let current_snapshot = !previous.consumed
+                && previous.broker_id == broker.broker_id
+                && previous.risk_version == broker.risk_version
+                && previous.accounting_version <= broker.accounting_version;
+            if current_snapshot {
+                // Repeated preparation for the same risk snapshot is
+                // idempotent; clients can safely refresh the existing proof
+                // context without allocating another checkpoint.
+                return U64(previous_id);
+            }
+            // Risk changed after this checkpoint was prepared. Retire the
+            // old ID before allocating a replacement so an old proof can
+            // never become valid again, while preserving its replay record.
+            if !previous.consumed {
+                previous.consumed = true;
+                self.checkpoints.insert(&previous_id, &previous);
+            }
+        }
         let scheduled_at = self.reconciliation_scheduled_at(&broker, &vault);
         let id = self.next_checkpoint_id();
         self.checkpoints.insert(
@@ -3996,16 +4010,20 @@ impl Core {
         vault: &Vault,
         context: &OperationContext,
     ) -> ReconciliationCheck {
-        require!(!checkpoint.consumed, ERR_REPLAY);
-        require!(
-            broker.accounting_pending || broker.impairment_provision > 0,
-            ERR_ACCOUNTING_PENDING
-        );
         require!(checkpoint.broker_id == args.broker_id, ERR_WRONG_ASSET);
         require!(broker.broker_id == args.broker_id, ERR_WRONG_ASSET);
         require!(
             broker.reconciliation_checkpoint_id == Some(checkpoint.checkpoint_id),
             ERR_STALE_STATE
+        );
+        // Check the live broker association before the permanent consumed
+        // marker.  A superseded/settled checkpoint is a stale snapshot for
+        // callers, while an otherwise-current checkpoint that was consumed
+        // in place remains a replay.
+        require!(!checkpoint.consumed, ERR_REPLAY);
+        require!(
+            broker.accounting_pending || broker.impairment_provision > 0,
+            ERR_ACCOUNTING_PENDING
         );
         require!(
             broker.risk_version == args.expected_risk_version,
@@ -4432,25 +4450,13 @@ impl Core {
                 // checkpoint atomically with this settlement.  The client
                 // binds its proof to that derived ID through the
                 // `settle-reconcile` proof-context view.
-                require!(broker.reconciliation_checkpoint_id.is_none(), ERR_REPLAY);
                 require!(
                     broker.accounting_pending || broker.impairment_provision > 0,
                     ERR_ACCOUNTING_PENDING
                 );
-                let scheduled_at = self.reconciliation_scheduled_at(&broker, &vault);
-                require!(now_seconds() >= scheduled_at, ERR_TOO_SOON);
-                let checkpoint_id = self
-                    .checkpoint_sequence
-                    .checked_add(1)
-                    .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
-                Checkpoint {
-                    checkpoint_id,
-                    broker_id: broker.broker_id,
-                    risk_version: broker.risk_version,
-                    accounting_version: broker.accounting_version,
-                    scheduled_at,
-                    consumed: false,
-                }
+                let checkpoint = self.inline_checkpoint(&broker, &vault);
+                require!(now_seconds() >= checkpoint.scheduled_at, ERR_TOO_SOON);
+                checkpoint
             } else {
                 require!(
                     broker.reconciliation_checkpoint_id == Some(reconciliation.checkpoint_id),
@@ -4530,7 +4536,19 @@ impl Core {
                 &post_vault,
                 &context,
             );
-            Some((reconciliation.clone(), checkpoint, checked))
+            let superseded_checkpoint_id = if reconciliation.checkpoint_id == 0 {
+                broker
+                    .reconciliation_checkpoint_id
+                    .filter(|previous_id| *previous_id != checkpoint.checkpoint_id)
+            } else {
+                None
+            };
+            Some((
+                reconciliation.clone(),
+                checkpoint,
+                checked,
+                superseded_checkpoint_id,
+            ))
         } else {
             None
         };
@@ -4597,7 +4615,9 @@ impl Core {
             broker.accounting_pending = true;
             vault.accounting_pending = true;
         }
-        if let Some((reconcile, mut checkpoint, checked)) = bundled_reconciliation {
+        if let Some((reconcile, mut checkpoint, checked, superseded_checkpoint_id)) =
+            bundled_reconciliation
+        {
             self.record_recovery(
                 "reconcile-credit",
                 &reconcile.proof.statement,
@@ -4649,7 +4669,20 @@ impl Core {
                 vault.reconciled_risk_version = vault.risk_version;
             }
             if reconcile.checkpoint_id == 0 {
-                self.checkpoint_sequence = checkpoint.checkpoint_id;
+                // Inline reconciliation may reuse a still-valid checkpoint
+                // while another broker has already advanced the global high
+                // water mark.  Never move that monotonic counter backwards.
+                self.checkpoint_sequence = self.checkpoint_sequence.max(checkpoint.checkpoint_id);
+            }
+            if let Some(previous_id) = superseded_checkpoint_id {
+                let mut previous = self
+                    .checkpoints
+                    .get(&previous_id)
+                    .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
+                if !previous.consumed {
+                    previous.consumed = true;
+                    self.checkpoints.insert(&previous_id, &previous);
+                }
             }
             self.checkpoints
                 .insert(&checkpoint.checkpoint_id, &checkpoint);
@@ -6335,16 +6368,12 @@ impl Core {
                 let broker = self.brokers.get(&broker_id)?;
                 let vault = self.vaults.get(&broker.vault_id)?;
                 require!(
-                    broker.reconciliation_checkpoint_id.is_none()
-                        && (broker.accounting_pending || broker.impairment_provision > 0),
+                    broker.accounting_pending || broker.impairment_provision > 0,
                     ERR_ACCOUNTING_PENDING
                 );
-                let scheduled_at = self.reconciliation_scheduled_at(&broker, &vault);
-                require!(now_seconds() >= scheduled_at, ERR_TOO_SOON);
-                let checkpoint_id = self
-                    .checkpoint_sequence
-                    .checked_add(1)
-                    .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
+                let checkpoint = self.inline_checkpoint(&broker, &vault);
+                require!(now_seconds() >= checkpoint.scheduled_at, ERR_TOO_SOON);
+                let checkpoint_id = checkpoint.checkpoint_id;
                 let post_accounting_version = broker
                     .accounting_version
                     .checked_add(1)
@@ -6386,7 +6415,7 @@ impl Core {
                         0,
                     ],
                     [broker.encryption_key.authorization_epoch, 0, 0, 0],
-                    scheduled_at,
+                    checkpoint.scheduled_at,
                     &self.book_bound_subject(&broker),
                 )
             }
@@ -7027,20 +7056,55 @@ impl Core {
     /// and the inline keeper settlement path use this exact value, so a
     /// settlement cannot bypass the vault cadence by choosing a timestamp.
     fn reconciliation_scheduled_at(&self, broker: &Broker, vault: &Vault) -> u64 {
-        let since = if broker.accounting_pending_since == 0 {
-            // A zero value is only possible for state created before this
-            // field existed or a synthetic unit-test context.  Use the
-            // current block as a conservative migration fallback.
-            now_seconds()
-        } else {
-            broker.accounting_pending_since
-        };
+        // A positive provision after a completed reconciliation does not
+        // represent a new risk boundary.  It is already accounted for and a
+        // bundled positive-U settlement may reconcile its next snapshot
+        // immediately; deriving the next wall-clock epoch here would make
+        // that path permanently TOO_SOON when no pending transition exists.
+        if !broker.accounting_pending {
+            return 0;
+        }
+        let since = broker.accounting_pending_since;
+        require!(since > 0, ERR_STALE_STATE);
         let epoch = vault.checkpoint_policy.epoch_seconds;
         ((since / epoch)
             .checked_add(1)
             .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT)))
         .checked_mul(epoch)
         .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT))
+    }
+
+    /// Derive the checkpoint used by the inline settlement path without
+    /// mutating state.  A checkpoint prepared for the current risk snapshot
+    /// is reusable; one made stale by a later risk transition gets a fresh
+    /// high-water ID and is retired only after the bundled proof succeeds.
+    fn inline_checkpoint(&self, broker: &Broker, vault: &Vault) -> Checkpoint {
+        if let Some(previous_id) = broker.reconciliation_checkpoint_id {
+            let previous = self
+                .checkpoints
+                .get(&previous_id)
+                .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
+            if !previous.consumed
+                && previous.broker_id == broker.broker_id
+                && previous.risk_version == broker.risk_version
+                && previous.accounting_version <= broker.accounting_version
+            {
+                return previous;
+            }
+        }
+        let scheduled_at = self.reconciliation_scheduled_at(broker, vault);
+        let checkpoint_id = self
+            .checkpoint_sequence
+            .checked_add(1)
+            .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
+        Checkpoint {
+            checkpoint_id,
+            broker_id: broker.broker_id,
+            risk_version: broker.risk_version,
+            accounting_version: broker.accounting_version,
+            scheduled_at,
+            consumed: false,
+        }
     }
 
     /// Build the exact operation context used by the crypto profile.  The
@@ -7396,6 +7460,33 @@ impl Core {
 
 fn now_seconds() -> u64 {
     env::block_timestamp() / 1_000_000_000
+}
+
+/// Validate the complete loan schedule before any origination proof or state
+/// mutation.  Closed-ended loans must mature no later than the redemption
+/// phase after reserving its configured buffer; open-ended loans still use the
+/// checked arithmetic so an overflowing wire schedule is never accepted.
+fn validate_loan_schedule(
+    vault: &Vault,
+    start: u64,
+    payment_interval: u64,
+    payment_count: u32,
+    grace_period: u64,
+) {
+    let scheduled_offset = payment_interval
+        .checked_mul(u64::from(payment_count))
+        .and_then(|offset| offset.checked_add(grace_period))
+        .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
+    if let (VaultKind::ClosedEnded, Some(phases)) = (&vault.kind, &vault.phase_times) {
+        let schedule_end = start
+            .checked_add(scheduled_offset)
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
+        let latest_due = phases
+            .redemption_start
+            .checked_sub(phases.redemption_buffer)
+            .unwrap_or_else(|| env::panic_str(ERR_INVALID_ENCODING));
+        require!(schedule_end <= latest_due, ERR_WRONG_PHASE);
+    }
 }
 
 fn validate_ciphertext(bytes: &[u8]) {
@@ -8396,13 +8487,113 @@ mod tests {
     }
 
     #[test]
+    fn closed_ended_schedule_rejects_grace_buffer_overrun_and_overflow() {
+        let _guard = test_guard();
+        let mut core = init();
+        let owner = account("owner.testnet");
+        let mut args = closed_vault_args();
+        args.phase_times.as_mut().unwrap().redemption_buffer = 20;
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(owner)
+                .block_timestamp(0)
+                .build()
+        );
+        let vault_id = core.create_vault(args);
+        let vault = core.vaults.get(&vault_id.0).unwrap();
+
+        // 250 + (10 * 2) + 10 == redemption_start - buffer (280) is valid.
+        validate_loan_schedule(&vault, 250, 10, 2, 10);
+
+        // Grace must be included in the maturity bound; omitting it would
+        // incorrectly admit a loan whose final due date enters the buffer.
+        let overrun = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            validate_loan_schedule(&vault, 250, 10, 2, 11);
+        }));
+        assert!(overrun.is_err());
+
+        // Checked multiplication rejects a schedule that cannot be
+        // represented before any phase comparison or proof processing.
+        let arithmetic_overflow = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            validate_loan_schedule(&vault, 250, u64::MAX, 2, 0);
+        }));
+        assert!(arithmetic_overflow.is_err());
+    }
+
+    #[test]
+    fn stale_reconciliation_checkpoint_is_replaceable_and_no_pending_provision_is_immediate() {
+        let _guard = test_guard();
+        let mut core = init();
+        let owner = account("owner.testnet");
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(owner.clone())
+                .block_timestamp(0)
+                .build()
+        );
+        let vault_id = core.create_vault(CreateVaultArgs {
+            assets_maximum: U128(0),
+            kind: VaultKind::OpenEnded,
+            phase_times: None,
+            share_scale: 0,
+            shares_transferable: true,
+            checkpoint_policy: CheckpointPolicy {
+                epoch_seconds: 60,
+                disclosure_policy: "aggregate".into(),
+            },
+        });
+        let mut broker = minimal_broker(owner.clone(), 7, vault_id.0);
+        broker.accounting_pending = true;
+        broker.accounting_pending_since = 100;
+        broker.risk_version = 1;
+        core.brokers.insert(&7, &broker);
+
+        let first = core.prepare_reconciliation(U64(7));
+        assert_eq!(first, U64(1));
+        let mut stale = core.brokers.get(&7).unwrap();
+        stale.risk_version = 2;
+        core.brokers.insert(&7, &stale);
+        let replacement = core.prepare_reconciliation(U64(7));
+        assert_eq!(replacement, U64(2));
+        assert!(core.checkpoints.get(&1).unwrap().consumed);
+        assert_eq!(
+            core.brokers.get(&7).unwrap().reconciliation_checkpoint_id,
+            Some(2)
+        );
+
+        // Once the risk snapshot is reconciled, a positive provision is not a
+        // new pending boundary.  The inline keeper context must therefore be
+        // immediately eligible and derive the next high-water checkpoint ID.
+        let mut settled = core.brokers.get(&7).unwrap();
+        settled.accounting_pending = false;
+        settled.accounting_pending_since = 0;
+        settled.impairment_provision = 5;
+        settled.reconciliation_checkpoint_id = None;
+        core.brokers.insert(&7, &settled);
+        let context = core
+            .get_proof_context(ProofContextArgs {
+                operation: "settle-reconcile".to_string(),
+                primary_id: None,
+                account_id: None,
+                destination: None,
+                broker_id: Some(7),
+                key_id: None,
+                checkpoint_id: None,
+                action: None,
+                amount: Some(U128(1)),
+            })
+            .unwrap();
+        assert_eq!(context.ids, vec![7, 3]);
+    }
+
+    #[test]
     fn share_mint_and_redeem_guards_reject_rounding_slippage_and_illiquidity() {
         let _guard = test_guard();
         let mut core = init();
         let owner = account("owner.testnet");
         testing_env!(
             VMContextBuilder::new()
-                .predecessor_account_id(owner)
+                .predecessor_account_id(owner.clone())
                 .build()
         );
         let vault_id = core.create_vault(CreateVaultArgs {
@@ -8899,11 +9090,24 @@ mod tests {
         );
         testing_env!(
             VMContextBuilder::new()
-                .predecessor_account_id(owner)
+                .predecessor_account_id(owner.clone())
                 .build()
         );
+        let before_signature = core.storage_balance_of(owner.clone()).0;
         core.sign_proposal(U64(1), signature.clone());
         assert_eq!(core.proposals.get(&1).unwrap().broker_signature, signature);
+        let after_signature = core.storage_balance_of(owner.clone()).0;
+        assert!(
+            after_signature < before_signature,
+            "signature bytes must consume measured proposal storage"
+        );
+        let before_revoke = after_signature;
+        core.revoke_proposal(U64(1));
+        let after_revoke = core.storage_balance_of(owner).0;
+        assert!(
+            after_revoke < before_revoke,
+            "proposal tombstone storage must be charged to the revoker"
+        );
     }
 
     #[test]
@@ -9039,6 +9243,98 @@ mod tests {
                 core.originate(empty_originate_args(3));
             }));
         assert!(unauthorized_origination.is_err());
+    }
+
+    #[test]
+    fn proposal_ciphertext_sets_require_exact_readers_and_subgroup_points() {
+        let _guard = test_guard();
+        let mut core = init();
+        let owner = account("owner.testnet");
+        let borrower = account("alice.testnet");
+        let mut broker = minimal_broker(owner.clone(), 7, 1);
+        broker.encryption_key.public_key = test_public_key(11);
+        core.brokers.insert(&7, &broker);
+        let mut holder = minimal_holder(&core, borrower.clone(), 22);
+        holder.encryption_key.public_key = test_public_key(22);
+        core.holders.insert(&borrower, &holder);
+
+        let valid_ciphertext = core.canonical_zero_for(
+            &holder.encryption_key.public_key,
+            "proposal-reader-regression",
+            holder.encryption_key.key_id,
+            holder.encryption_key.authorization_epoch,
+        );
+        let valid_commitment =
+            crypto_adapter::encode(&crypto_adapter::zero_commitment().unwrap()).unwrap();
+        let make_args = || CreateProposalArgs {
+            borrower: borrower.clone(),
+            broker_id: 7,
+            vault_id: 1,
+            borrower_key_id: 22,
+            broker_key_id: 11,
+            loan_auditor_key_id: 33,
+            loan_auditor_public_key: test_public_key(33),
+            payment_count: 1,
+            payment_interval: 60,
+            grace_period: 10,
+            expiry: u64::MAX,
+            principal_ciphertexts: vec![valid_ciphertext.clone(); 5],
+            initial_owed_ciphertexts: vec![valid_ciphertext.clone(); 3],
+            periodic_payment_ciphertexts: vec![valid_ciphertext.clone(); 3],
+            principal_commitment: valid_commitment.clone(),
+            owed_commitment: valid_commitment.clone(),
+            payment_commitment: valid_commitment.clone(),
+            agreement_digest: Vec::new(),
+            broker_signature: Vec::new(),
+            borrower_signature: Vec::new(),
+            broker_authorization_epoch: 0,
+            borrower_authorization_epoch: 0,
+            broker_authorization_nonce: 0,
+            borrower_authorization_nonce: 0,
+            broker_authorization_key_id: None,
+            borrower_authorization_key_id: None,
+        };
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(owner)
+                .block_timestamp(0)
+                .build()
+        );
+
+        for reader_set in 0..3 {
+            let mut args = make_args();
+            match reader_set {
+                0 => args.principal_ciphertexts.push(valid_ciphertext.clone()),
+                1 => args.initial_owed_ciphertexts.push(valid_ciphertext.clone()),
+                _ => args
+                    .periodic_payment_ciphertexts
+                    .push(valid_ciphertext.clone()),
+            }
+            let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                core.create_proposal(args);
+            }));
+            assert!(rejected.is_err(), "reader set {reader_set} must be exact");
+            assert!(core.proposals.get(&1).is_none());
+            assert_eq!(core.proposal_sequence, 0);
+        }
+
+        // (0, -1) is the order-two Baby-Jubjub torsion point. It is
+        // canonical/on-curve but outside the prime subgroup and must be
+        // rejected while the proposal is still only a caller argument.
+        let mut malformed_value: serde_json::Value =
+            serde_json::from_slice(&valid_ciphertext).unwrap();
+        malformed_value["ephemeral"] =
+            json!("000000f093f5e1439170b97948e833285d588181b64550b829a031e1724e6430");
+        let malformed_ciphertext = serde_json::to_vec(&malformed_value).unwrap();
+        assert!(crypto_adapter::parse_ciphertext(&malformed_ciphertext).is_err());
+        let mut args = make_args();
+        args.principal_ciphertexts[0] = malformed_ciphertext;
+        let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.create_proposal(args);
+        }));
+        assert!(rejected.is_err());
+        assert!(core.proposals.get(&1).is_none());
+        assert_eq!(core.proposal_sequence, 0);
     }
 
     #[test]
