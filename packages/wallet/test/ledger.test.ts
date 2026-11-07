@@ -13,7 +13,7 @@ const pair = (amount: number) => ({ low_limb: cipher(amount), high_limb: cipher(
 const views = Array.from({ length: 5 }, () => ({ reader_key: key, ciphertext: cipher(0) }));
 
 test('Core history adapter preserves secondary subjects, merges and accounting-only records at one finalized block', async () => {
-  const records = [
+  const records: Array<{ operation: string; statement?: Record<string, unknown> | null; metadata?: { action: string; loan_id: string; loan_status: 'Paid'; noop: boolean } }> = [
     { operation: 'draw', statement: { PublicConversion: { public_amount: '100', views } } },
     { operation: 'merge-broker', statement: null },
     { operation: 'originate', statement: { Origination: { transfer_views: views, transfer_recovery: Array(5).fill(pair(60)) } } },
@@ -183,5 +183,50 @@ test('broker book pagination stays within Core bounds and does not skip filtered
   const book = await ledger.brokerBook(balance);
   assert.deepEqual(book, { active: '0', impaired: '0' });
   assert.deepEqual(requests, [{ cursor: '0', limit: 50 }, { cursor: '50', limit: 50 }, { cursor: '100', limit: 50 }]);
+});
+
+test('loan recovery falls back to the finalized archive and consumes delete-loan metadata', async () => {
+  const loanKey = { point: '4'.repeat(64) };
+  const loanViews = Array.from({ length: 3 }, () => ({ reader_key: loanKey, ciphertext: cipher(0) }));
+  const transferViews = Array.from({ length: 5 }, () => ({ reader_key: loanKey, ciphertext: cipher(0) }));
+  const records = [
+    { operation: 'originate', statement: { Origination: { owed_views: loanViews, transfer_recovery: Array.from({ length: 5 }, () => pair(100)), owed_recovery: Array.from({ length: 3 }, () => pair(120)), payment_recovery: Array.from({ length: 3 }, () => pair(20)) } } },
+    { operation: 'repay', statement: { Repayment: { owed_delta: loanViews, owed_delta_recovery: Array.from({ length: 3 }, () => pair(120)), principal_delta_recovery: Array.from({ length: 3 }, () => pair(100)), mode: 'Full' } } },
+    { operation: 'delete-loan', statement: null, metadata: { action: 'delete-loan', loan_id: '7', loan_status: 'Paid', noop: false } },
+  ].map((entry, index) => ({ event_id: String(index + 1), operation: entry.operation, subject_key: 'loan:7', subject_sequence: String(index + 1), origin_subject_key: 'loan:7', statement: entry.statement ? jsonBytes(entry.statement) : null, key_ids: ['3'], metadata: entry.metadata ?? { action: '', noop: false, loan_id: null } }));
+  const archived = {
+    loan_id: '7', broker_id: '2', borrower: 'borrower.near', loan_version: '3', status: 'Paid', impaired: false,
+    borrower_key_id: '1', broker_key_id: '2', loan_auditor_key_id: '3', loan_auditor_public_key: jsonBytes(loanKey), payment_remaining: 0,
+    principal_ciphertexts: [jsonBytes(cipher(100)), jsonBytes(cipher(100)), jsonBytes(cipher(100))], amount_owed_ciphertexts: [jsonBytes(cipher(0)), jsonBytes(cipher(0)), jsonBytes(cipher(0))], periodic_payment_ciphertexts: [jsonBytes(cipher(20)), jsonBytes(cipher(20)), jsonBytes(cipher(20))], principal_remaining_ciphertexts: [jsonBytes(cipher(0)), jsonBytes(cipher(0)), jsonBytes(cipher(0))], principal_remaining_commitment: [], tombstoned: true,
+  };
+  class ArchiveRpc extends NearRpc {
+    override async finalizedBlock(): Promise<FinalizedBlock> { return block; }
+    override async viewAt<T>(_at: FinalizedBlock, _account: string, method: string, input: Arguments = {}): Promise<T> {
+      if (method === 'get_asset_profile') return { token_account: 'token.near', network_id: 'sandbox', crypto_profile_hash: Array(32).fill(0x22), issuer_key: { key_id: '1', public_key: jsonBytes(key), authorization_epoch: '0' }, token_auditor_key: { key_id: '2', public_key: jsonBytes({ point: '5'.repeat(64) }), authorization_epoch: '0' }, frozen: false } as T;
+      if (method === 'get_verifier_config') return { manifest_hash: Array(32).fill(0x33), ready: true } as T;
+      if (method === 'get_loan') return null as T;
+      if (method === 'get_archived_loan') return archived as T;
+      if (method === 'list_recovery_history') {
+        const cursor = BigInt(input.cursor as string);
+        if (cursor === 18446744073709551615n) return { records: [], end_cursor: '3', next_cursor: null } as T;
+        return { records, end_cursor: '3', next_cursor: null } as T;
+      }
+      throw new Error(`Unexpected archive RPC method ${method}`);
+    }
+  }
+  const crypto: CryptoExecutor = { async execute<T>(method: string, params: unknown): Promise<T> {
+    const input = params as Record<string, unknown>;
+    if (method === 'public_key_from_secret') return loanKey as T;
+    if (method === 'decrypt_recovery_pair') return ((input.pair as ReturnType<typeof pair>).low_limb.message) as T;
+    if (method === 'verify_plaintext_u128') return (JSON.parse(input.ciphertext as string).message === input.amount) as T;
+    throw new Error(`Unexpected archive crypto call ${method}`);
+  } };
+  const keys = new Keyring({ networkId: 'sandbox', coreAccountId: 'core.near', assetId: 'token.near', profileHash }, crypto);
+  const reference: KeyReference = { role: 'loan_auditor', subjectId: '7', keyId: '3' };
+  await keys.importMaterial({ schema: 'confidential-lending-wallet/v1', identity: keys.identity, keys: [{ ...reference, publicKey: loanKey, secretKey: '6'.repeat(64) }] });
+  const recovered = await new LedgerWallet(new ArchiveRpc('https://rpc.example'), keys, crypto, manifestHash).loan('7', reference);
+  assert.equal(recovered.record.tombstoned, true);
+  assert.equal(recovered.amounts.owed, '0');
+  assert.equal(recovered.amounts.cumulativePaid, '120');
 });
 

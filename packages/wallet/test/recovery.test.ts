@@ -52,6 +52,20 @@ test('loan recovery preserves a defaulted claim and rejects repayments after def
   await assert.rejects(reader.loan(snapshot, entries([records[0]!, badAllocation, ...records.slice(2)])), /repayment history/);
 });
 
+test('loan recovery consumes a validated delete event without losing the terminal amounts', async () => {
+  const reader = await recovery();
+  const records: LoanHistoryEntry[] = [
+    { sequence: '1', keyId: '1', change: { operation: 'originate', principal: { publicAmount: '100' }, owed: { publicAmount: '120' }, periodic: { publicAmount: '20' } } },
+    { sequence: '2', keyId: '1', change: { operation: 'repay', payment: { publicAmount: '120' }, principalPaid: { publicAmount: '100' }, full: true } },
+    { sequence: '3', keyId: '1', change: { operation: 'delete', status: 'closed' } },
+  ];
+  const snapshot = { lastSequence: '3', key: reference, principal: ciphertext('100'), owed: ciphertext('0'), periodic: ciphertext('20'), principalRemaining: ciphertext('0'), status: 'closed' as const };
+  const result = await reader.loan(snapshot, entries(records));
+  assert.deepEqual(result, { principal: '100', initialOwed: '120', owed: '0', periodic: '20', principalRemaining: '0', cumulativePaid: '120', status: 'closed' });
+  await assert.rejects(reader.loan(snapshot, entries(records.map((entry, index) => index === 2 ? { ...entry, change: { operation: 'delete', status: 'defaulted' as const } } : entry))), /archive transition/);
+  await assert.rejects(reader.loan({ ...snapshot, lastSequence: '4' }, entries([...records, { sequence: '4', keyId: '1', change: { operation: 'delete', status: 'closed' } }])), /terminal loan/);
+});
+
 test('a verified zero-balance rotation starts a new key history without accepting gaps or a false balance', async () => {
   const reader = await recovery();
   const snapshot = { startSequence: '9007199254740993', lastSequence: '9007199254740994', key: reference, spending: ciphertext('0'), inbox: ciphertext('7') };

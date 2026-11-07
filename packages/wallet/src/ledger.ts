@@ -22,6 +22,7 @@ export interface LedgerBroker {
 export interface LedgerVault { vault_id: string; assets_total: string; assets_available: string; loss_unrealized: string; accounting_version: string; checkpoint_policy: { epoch_seconds: string; disclosure_policy: string } }
 export interface LedgerLoan {
   loan_id: string; broker_id: string; borrower: string; loan_version: string; status: 'Active' | 'Impaired' | 'Defaulted' | 'Paid'; impaired: boolean;
+  tombstoned?: boolean;
   borrower_key_id: string; broker_key_id: string; loan_auditor_key_id: string; loan_auditor_public_key: number[]; payment_remaining: number;
   principal_ciphertexts: number[][]; amount_owed_ciphertexts: number[][]; periodic_payment_ciphertexts: number[][];
   principal_remaining_ciphertexts: number[][]; principal_remaining_commitment: number[];
@@ -29,7 +30,7 @@ export interface LedgerLoan {
 interface HistoryRecord {
   event_id: string; operation: string; subject_key: string; subject_sequence: string; origin_subject_key: string;
   statement: number[] | null; key_ids: string[];
-  metadata: { action: string; noop: boolean; loan_id: string | null };
+  metadata: { action: string; noop: boolean; loan_id: string | null; loan_status?: 'Active' | 'Impaired' | 'Defaulted' | 'Paid' };
 }
 interface HistoryPage { records: HistoryRecord[]; next_cursor: string | null; end_cursor: string }
 export interface LedgerSnapshot { block: FinalizedBlock; asset: LedgerAsset }
@@ -202,7 +203,11 @@ export class LedgerWallet {
 
   async loan(loanId: string, key: KeyReference, snapshot?: LedgerSnapshot, signal?: AbortSignal): Promise<{ record: LedgerLoan; amounts: RecoveredLoan; snapshot: LedgerSnapshot }> {
     const state = snapshot ?? await this.snapshot(signal);
-    const record = await this.view<LedgerLoan | null>(state.block, 'get_loan', { loan_id: loanId }, signal);
+    // A deleted loan is removed from the active map but remains available as
+    // an immutable terminal snapshot for its authorized auditor/holder. Use
+    // that exact archive endpoint before reporting the loan as missing.
+    let record = await this.view<LedgerLoan | null>(state.block, 'get_loan', { loan_id: loanId }, signal);
+    if (!record) record = await this.view<LedgerLoan | null>(state.block, 'get_archived_loan', { loan_id: loanId }, signal);
     if (!record) throw new Error('Loan does not exist');
     const index = key.role === 'holder' ? 0 : key.role === 'broker' ? 1 : key.role === 'loan_auditor' ? 2 : -1;
     if (index < 0 || [record.borrower_key_id, record.broker_key_id, record.loan_auditor_key_id][index] !== key.keyId) throw new Error('Key is not an authorized loan reader');
@@ -237,6 +242,10 @@ export class LedgerWallet {
       const common = { sequence: record.subject_sequence, keyId: key.keyId };
       if (record.operation === 'merge-holder' || record.operation === 'merge-broker') { yield { ...common, change: { operation: 'merge' } }; continue; }
       if (record.operation === 'manage-loan' || record.operation === 'reconcile-credit') { yield { ...common, change: { operation: 'noop' } }; continue; }
+      if (record.operation === 'delete-loan') {
+        if (record.statement !== null || record.metadata.action !== 'delete-loan' || record.metadata.noop || !record.metadata.loan_id || !record.metadata.loan_status || !['Paid', 'Defaulted'].includes(record.metadata.loan_status)) throw new Error('Invalid archived loan recovery record');
+        yield { ...common, change: { operation: 'noop' } }; continue;
+      }
       if (!record.statement) throw new Error('Financial history is missing its statement');
       const statement = fields(decodeWire<Statement>(record.statement));
       if (['draw', 'shield', 'unshield', 'settle'].includes(record.operation)) {
@@ -258,6 +267,10 @@ export class LedgerWallet {
       if (record.operation === 'manage-loan') {
         if (!['impair', 'unimpair', 'default'].includes(record.metadata.action) || record.metadata.noop) throw new Error('Invalid loan status recovery record');
         yield { ...common, change: { operation: record.metadata.action as 'impair' | 'unimpair' | 'default' } }; continue;
+      }
+      if (record.operation === 'delete-loan') {
+        if (record.statement !== null || record.metadata.action !== 'delete-loan' || record.metadata.noop || record.metadata.loan_id !== loanId || !record.metadata.loan_status || !['Paid', 'Defaulted'].includes(record.metadata.loan_status)) throw new Error('Invalid archived loan recovery record');
+        yield { ...common, change: { operation: 'delete', status: record.metadata.loan_status === 'Paid' ? 'closed' : 'defaulted' } }; continue;
       }
       if (!record.statement) throw new Error('Loan history is missing its statement');
       const statement = fields(decodeWire<Statement>(record.statement));

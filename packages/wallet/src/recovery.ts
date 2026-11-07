@@ -24,6 +24,7 @@ export interface LoanHistoryEntry {
   change:
     | { operation: 'originate'; principal: RecoverableAmount; owed: RecoverableAmount; periodic: RecoverableAmount }
     | { operation: 'repay'; payment: RecoverableAmount; principalPaid: RecoverableAmount; full: boolean }
+    | { operation: 'delete'; status: 'closed' | 'defaulted' }
     | { operation: 'impair' | 'unimpair' | 'default' };
 }
 export interface LoanSnapshot {
@@ -79,6 +80,7 @@ export class HistoryRecovery {
   async loan(snapshot: LoanSnapshot, entries: AsyncIterable<LoanHistoryEntry>, signal?: AbortSignal): Promise<RecoveredLoan> {
     let sequence = 0n, principal = 0n, initialOwed = 0n, owed = 0n, periodic = 0n, remaining = 0n, paid = 0n;
     let status: LoanSnapshot['status'] = 'active';
+    let deleted = false;
     const last = unsigned(snapshot.lastSequence, (1n << 64n) - 1n);
     for await (const entry of entries) {
       signal?.throwIfAborted();
@@ -93,7 +95,7 @@ export class HistoryRecovery {
         remaining = principal;
         if (principal === 0n || owed < principal || periodic === 0n || periodic > owed) throw new Error('Invalid confidential loan terms');
       } else {
-        if (sequence === 1n || status === 'closed' || status === 'defaulted') throw new Error('Invalid terminal loan history');
+        if (sequence === 1n || deleted || (status === 'closed' || status === 'defaulted') && change.operation !== 'delete') throw new Error('Invalid terminal loan history');
         if (change.operation === 'repay') {
           const amount = await this.amount(change.payment, snapshot.key);
           const principalPaid = await this.amount(change.principalPaid, snapshot.key);
@@ -103,6 +105,10 @@ export class HistoryRecovery {
           remaining -= principalPaid; owed -= amount; paid += amount;
           if (change.full) status = 'closed';
         } else if (change.operation === 'default') status = 'defaulted';
+        else if (change.operation === 'delete') {
+          if (status !== change.status) throw new Error('Invalid loan archive transition');
+          deleted = true;
+        }
         else if (change.operation === 'impair') {
           if (status !== 'active') throw new Error('Invalid impairment history');
           status = 'impaired';
