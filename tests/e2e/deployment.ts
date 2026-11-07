@@ -24,7 +24,7 @@ export interface TestDeployment {
 }
 
 /** Deploys real contracts and real proof keys into an isolated ephemeral chain. No state patching or verifier bypass. */
-export async function deployProtocol(directory = process.env.CRYPTO_ARTIFACT_DIR ?? '.artifacts/integration-v2'): Promise<TestDeployment> {
+export async function deployProtocol(directory = process.env.CRYPTO_ARTIFACT_DIR ?? '.artifacts/development'): Promise<TestDeployment> {
   const artifactRoot = resolve(directory);
   const manifest = JSON.parse(await readFile(join(artifactRoot, 'manifest.json'), 'utf8')) as CryptoManifest;
   const pin = JSON.parse(await readFile(join(artifactRoot, 'deployment-pin.json'), 'utf8')) as { manifestHash: string };

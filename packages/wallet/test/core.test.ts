@@ -55,6 +55,6 @@ test('CoreWallet delegates proof argument conversion without private witnesses',
   }));
   const operation = { statement: { PublicConversion: { public_amount: '3' } }, envelope: { context_digest: 'aa', proof: 'bb', statement_kind: 'PublicConversion', public_inputs: ['cc'], verifying_key_hash: 'dd', profile_hash: profileHash } };
   const proved = await result.prove({ operation: 'draw' }, async () => operation);
-  assert.deepEqual(proved.args, { statement: [123, 34, 80, 117, 98, 108, 105, 99, 67, 111, 110, 118, 101, 114, 115, 105, 111, 110, 34, 58, 123, 34, 112, 117, 98, 108, 105, 99, 95, 97, 109, 111, 117, 110, 116, 34, 58, 34, 51, 34, 125, 125], context: [170], proof: [187], statement_kind: 2, public_inputs: [[204]], verifying_key_hash: [221], profile_hash: Array(32).fill(170) });
+  assert.deepEqual(proved.args, { statement: [123, 34, 80, 117, 98, 108, 105, 99, 67, 111, 110, 118, 101, 114, 115, 105, 111, 110, 34, 58, 123, 34, 112, 117, 98, 108, 105, 99, 95, 97, 109, 111, 117, 110, 116, 34, 58, 34, 51, 34, 125, 125], context: [170], proof: [187], statement_kind: 2, public_inputs: [], verifying_key_hash: [221], profile_hash: Array(32).fill(170) });
   assert.equal(JSON.stringify(proved.args).includes('private'), false);
 });

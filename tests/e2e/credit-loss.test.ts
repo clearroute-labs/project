@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type { NearAccount } from 'near-workspaces';
 import { LedgerWallet, type LedgerVault, type PreparedCall } from '../../packages/wallet/src/ledger.js';
 import { deployProtocol, maximumGas } from './deployment.js';
+import { fastForwardFinalized } from '../sandbox.js';
 
 test('multiple brokers reconcile impairment and default without charging the same principal twice', { timeout: 2_400_000 }, async () => {
   const { worker, core, token, actors, rpc, crypto, keys, manifestHash } = await deployProtocol();
@@ -63,7 +64,7 @@ test('multiple brokers reconcile impairment and default without charging the sam
     const beforeDefault = await wallet.prepareManagement(defaultingLoan, 'Default');
     const premature = await actors.broker.callRaw(core, beforeDefault.method, beforeDefault.args, { gas: maximumGas });
     assert.equal(premature.failed, true, 'An unpaid loan cannot default before its grace deadline');
-    await worker.provider.fastForward(4_000);
+    assert.ok((await fastForwardFinalized(worker, 4_000)).elapsedSeconds >= 3_600n);
     await submit(actors.broker, await wallet.prepareManagement(defaultingLoan, 'Impair'));
     await submit(actors.broker, await wallet.prepareManagement(recoverableLoan, 'Impair'));
     const lenderShares = await core.view<string>('get_share_balance', { vault_id: vaultId, owner: actors.lender.accountId });
@@ -74,7 +75,7 @@ test('multiple brokers reconcile impairment and default without charging the sam
     assert.equal(whilePending.failed, true, 'Pending risk accounting must block NAV-sensitive redemption');
     const reconcile = async (broker: string): Promise<void> => {
       const checkpoint = await call<string>(actors.broker, 'prepare_reconciliation', { broker_id: broker });
-      await worker.provider.fastForward(120);
+      assert.ok((await fastForwardFinalized(worker, 120)).elapsedSeconds >= 60n);
       await submit(actors.broker, await wallet.prepareReconciliation(broker, checkpoint));
     };
     await reconcile(firstBroker);
@@ -89,7 +90,7 @@ test('multiple brokers reconcile impairment and default without charging the sam
 
     // A positive provision requires an atomic post-settlement reconciliation.
     // The wallet derives an inline checkpoint; no separate prepare transaction is needed.
-    await worker.provider.fastForward(120);
+    assert.ok((await fastForwardFinalized(worker, 120)).elapsedSeconds >= 60n);
     const impairedSettlement = await wallet.prepareSettlement(firstBroker, '50000000');
     assert.equal((impairedSettlement.args.args as { reconciliation: { checkpoint_id: string } }).reconciliation.checkpoint_id, '0');
     await submit(actors.broker, impairedSettlement);

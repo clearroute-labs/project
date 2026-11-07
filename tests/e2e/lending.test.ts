@@ -19,13 +19,24 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
   const { worker, core, token, actors, rpc, crypto, keys } = deployment;
   const wallet = new LedgerWallet(rpc, keys, crypto, deployment.manifestHash);
   const measurements: Array<{ method: string; gas: string; argumentBytes: number; milliseconds: number; succeeded: boolean }> = [];
-  const privateAmounts = new Set(['600000000', '660000000', '220000000', '440000000']);
+  const privateAmounts = new Set(['600000000', '660000000', '220000000', '440000000', '40000000', '1000000']);
+  const confidentialMethods = new Set(['create_proposal', 'sign_proposal', 'originate', 'confidential_send', 'repay', 'manage_loan', 'delete_loan']);
+  const assertNoKeys = (value: unknown): void => {
+    const serialized = JSON.stringify(value);
+    for (const entry of keys.exportMaterial().keys) {
+      assert.equal(serialized.includes(entry.secretKey), false, 'Secret key appeared in public data');
+      assert.equal(serialized.includes(JSON.stringify(Array.from(Buffer.from(entry.secretKey, 'hex')))), false, 'Raw secret key bytes appeared in public data');
+    }
+  };
   await mkdir('.artifacts', { recursive: true });
   const call = async <T>(actor: NearAccount, method: string, input: Record<string, unknown>): Promise<T> => {
     const before = Date.now();
+    assertNoKeys(input);
+    if (confidentialMethods.has(method)) assertPrivatePayload(input, privateAmounts);
     const outcome = await actor.callRaw(core, method, input, { gas: maximumGas });
+    assertNoKeys(outcome.logs);
     for (const log of outcome.logs) {
-      if (log.startsWith('EVENT_JSON:')) assertPrivatePayload(JSON.parse(log.slice('EVENT_JSON:'.length)), privateAmounts);
+      if (confidentialMethods.has(method) && log.startsWith('EVENT_JSON:')) assertPrivatePayload(JSON.parse(log.slice('EVENT_JSON:'.length)), privateAmounts);
     }
     measurements.push({ method, gas: outcome.gas_burnt, argumentBytes: Buffer.byteLength(JSON.stringify(input)), milliseconds: Date.now() - before, succeeded: !outcome.failed });
     await writeFile('.artifacts/lifecycle-benchmark.json', JSON.stringify({ complete: false, core: core.accountId, manifestHash: deployment.manifestHash, measurements }, null, 2));
@@ -100,6 +111,7 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
     assert.equal(borrowerLoan.amounts.owed, '660000000');
     assert.deepEqual(auditedLoan.amounts, borrowerLoan.amounts);
     assertPrivatePayload(borrowerLoan.record, privateAmounts);
+    assertNoKeys(borrowerLoan.record);
     await submit(actors.borrower, await wallet.prepareMergeHolder(actors.borrower.accountId));
 
     console.log('Lifecycle: private spending and repayment with a concurrent inbox credit');

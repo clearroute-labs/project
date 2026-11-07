@@ -71,7 +71,8 @@ export function proofArguments(operation: ProvenOperation): Record<string, unkno
   const envelope = operation.envelope;
   return {
     statement: jsonBytes(operation.statement), context: wireBytes(envelope.context_digest), proof: wireBytes(envelope.proof),
-    statement_kind: kindIds[envelope.statement_kind], public_inputs: envelope.public_inputs.map(wireBytes),
+    // Core derives the public inputs from the typed statement and current state.
+    statement_kind: kindIds[envelope.statement_kind], public_inputs: [],
     verifying_key_hash: wireBytes(envelope.verifying_key_hash), profile_hash: wireBytes(envelope.profile_hash),
   };
 }
