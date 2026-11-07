@@ -207,7 +207,7 @@ fn sign<R: RngCore + CryptoRng>(
     let challenge = challenge_with_commitment(message, &commitment)?;
     let response = nonce + challenge * secret.scalar();
     Ok(RecoverySignature {
-        commitment: PointHex::from(commitment.into_affine()),
+        commitment: PointHex::from_prime_subgroup_affine(commitment.into_affine()),
         response: ScalarHex::from(response),
     })
 }
@@ -217,7 +217,7 @@ fn challenge_with_commitment(
     commitment: &EdwardsProjective,
 ) -> Result<Fr, CryptoError> {
     let mut bytes = canonical_unsigned(message)?;
-    let commitment = PointHex::from(commitment.into_affine());
+    let commitment = PointHex::from_prime_subgroup_affine(commitment.into_affine());
     bytes.extend_from_slice(commitment.0.as_bytes());
     let digest = Sha256::digest(bytes);
     Ok(Fr::from_le_bytes_mod_order(&digest))

@@ -177,6 +177,17 @@ impl From<EdwardsAffine> for PointHex {
 }
 
 impl PointHex {
+    /// Construct a wire point from an affine value whose subgroup membership
+    /// is established by the caller's operation. This is crate-private so an
+    /// unchecked external affine point cannot enter the trusted cache. It is
+    /// used only for results of operations whose inputs were strict-decoded,
+    /// or whose base is a fixed prime-subgroup generator.
+    pub(crate) fn from_prime_subgroup_affine(point: EdwardsAffine) -> Self {
+        let wire = encode_point(&point).expect("valid Edwards point serializes");
+        cache_validated_point(&wire, &point);
+        Self(wire)
+    }
+
     pub fn parse(value: &str) -> Result<Self, CryptoError> {
         // `decode_point` already verifies the compressed representation is
         // canonical, so preserve the validated wire string instead of
@@ -494,6 +505,19 @@ fn is_in_prime_subgroup(point: &EdwardsAffine) -> bool {
         }
     }
     result.is_zero()
+}
+
+fn cache_validated_point(value: &str, point: &EdwardsAffine) {
+    VALIDATED_POINT_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= MAX_VALIDATED_POINT_CACHE_ENTRIES
+            && !cache.contains_key(value)
+            && let Some(oldest) = cache.keys().next().cloned()
+        {
+            cache.remove(&oldest);
+        }
+        cache.insert(value.to_owned(), *point);
+    });
 }
 
 pub(crate) fn encode_scalar(value: &Fr) -> Result<String, CryptoError> {

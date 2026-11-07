@@ -49,7 +49,7 @@ impl PublicKey {
     pub fn from_secret(secret: &SecretKey) -> Self {
         let point = encryption_base() * secret.scalar;
         Self {
-            point: PointHex::from(point.into_affine()),
+            point: PointHex::from_prime_subgroup_affine(point.into_affine()),
         }
     }
 
@@ -175,7 +175,7 @@ impl Ciphertext {
     /// homomorphic cancellation. Persistent account state should prefer
     /// `canonical_zero` so its ciphertext remains non-degenerate.
     pub fn zero() -> Self {
-        let identity = PointHex::from(EdwardsProjective::zero().into_affine());
+        let identity = PointHex::from_prime_subgroup_affine(EdwardsProjective::zero().into_affine());
         Self {
             ephemeral: identity.clone(),
             message: identity,
@@ -218,8 +218,8 @@ impl Ciphertext {
         let ephemeral = base * randomness;
         let message = base * Fr::from(amount) + pk * randomness;
         Ok(Self {
-            ephemeral: PointHex::from(ephemeral.into_affine()),
-            message: PointHex::from(message.into_affine()),
+            ephemeral: PointHex::from_prime_subgroup_affine(ephemeral.into_affine()),
+            message: PointHex::from_prime_subgroup_affine(message.into_affine()),
         })
     }
 
@@ -250,8 +250,8 @@ impl Ciphertext {
         let ephemeral = base * randomness;
         let message = base * amount_scalar + pk * randomness;
         Ok(Self {
-            ephemeral: PointHex::from(ephemeral.into_affine()),
-            message: PointHex::from(message.into_affine()),
+            ephemeral: PointHex::from_prime_subgroup_affine(ephemeral.into_affine()),
+            message: PointHex::from_prime_subgroup_affine(message.into_affine()),
         })
     }
 
@@ -295,8 +295,8 @@ impl Ciphertext {
         let (e1, m1) = self.to_points()?;
         let (e2, m2) = other.to_points()?;
         Ok(Self {
-            ephemeral: PointHex::from((e1 + e2).into_affine()),
-            message: PointHex::from((m1 + m2).into_affine()),
+            ephemeral: PointHex::from_prime_subgroup_affine((e1 + e2).into_affine()),
+            message: PointHex::from_prime_subgroup_affine((m1 + m2).into_affine()),
         })
     }
 
@@ -305,8 +305,8 @@ impl Ciphertext {
         let (e2, m2) = other.to_points()?;
         let ephemeral = e1 - e2;
         Ok(Self {
-            ephemeral: PointHex::from(ephemeral.into_affine()),
-            message: PointHex::from((m1 - m2).into_affine()),
+            ephemeral: PointHex::from_prime_subgroup_affine(ephemeral.into_affine()),
+            message: PointHex::from_prime_subgroup_affine((m1 - m2).into_affine()),
         })
     }
 
@@ -324,8 +324,8 @@ impl Ciphertext {
         // randomness changes from r to r + delta.
         Ok((
             Self {
-                ephemeral: PointHex::from(next_ephemeral.into_affine()),
-                message: PointHex::from(next_message.into_affine()),
+                ephemeral: PointHex::from_prime_subgroup_affine(next_ephemeral.into_affine()),
+                message: PointHex::from_prime_subgroup_affine(next_message.into_affine()),
             },
             delta,
         ))

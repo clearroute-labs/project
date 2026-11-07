@@ -43,7 +43,7 @@ impl Commitment {
         }
         let point = encryption_base() * Fr::from(amount) + pedersen_base() * blind;
         Ok(Self {
-            point: PointHex::from(point.into_affine()),
+            point: PointHex::from_prime_subgroup_affine(point.into_affine()),
         })
     }
 
@@ -70,7 +70,7 @@ impl Commitment {
         let amount_scalar = Fr::from_le_bytes_mod_order(&amount.to_le_bytes());
         let point = encryption_base() * amount_scalar + pedersen_base() * blind;
         Ok(Self {
-            point: PointHex::from(point.into_affine()),
+            point: PointHex::from_prime_subgroup_affine(point.into_affine()),
         })
     }
 
@@ -98,14 +98,16 @@ impl Commitment {
 
     pub fn add(&self, other: &Self) -> Result<Self, CryptoError> {
         Ok(Self {
-            point: PointHex::from((self.to_point()? + other.to_point()?).into_affine()),
+            point: PointHex::from_prime_subgroup_affine(
+                (self.to_point()? + other.to_point()?).into_affine(),
+            ),
         })
     }
 
     pub fn sub(&self, other: &Self) -> Result<Self, CryptoError> {
         let point = self.to_point()? - other.to_point()?;
         Ok(Self {
-            point: PointHex::from(point.into_affine()),
+            point: PointHex::from_prime_subgroup_affine(point.into_affine()),
         })
     }
 }
