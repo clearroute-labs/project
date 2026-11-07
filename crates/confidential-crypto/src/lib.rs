@@ -16,6 +16,8 @@ mod statement;
 
 pub mod proof;
 pub mod recovery;
+#[cfg(feature = "validated-storage")]
+pub mod validated_storage;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;

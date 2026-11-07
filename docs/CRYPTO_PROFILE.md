@@ -68,6 +68,17 @@ After the exact statement's Groth16 proof verifies, the verifier may call
 `Statement::promote_after_verified_proof()` to promote only that statement's
 point fields into the strict cache before homomorphic state updates. No
 thread-local cache-wide promotion is permitted.
+
+Core may additionally enable the opt-in `validated-storage` crate feature for
+immutable ciphertexts, commitments, and keys loaded from authenticated
+persisted state whose subgroup membership was already established when the
+record was accepted. `validated_storage::parse_key`,
+`parse_ciphertext`, and `parse_commitment` still require canonical lower-hex
+and on-curve encodings, reject invalid key identities, and promote only the
+exact points they parsed. The returned `Stored*` types are the only API for
+this fast path. This feature is disabled by default and must never be enabled
+for untrusted request or statement bytes; generic `PublicKey::parse`,
+`Ciphertext::parse`, and `Commitment::parse` retain strict subgroup checks.
 Groth16 proof and verifying-key bytes use arkworks canonical compressed
 serialization. Public BN254 inputs passed to a host verifier are canonical
 little-endian 32-byte field encodings.

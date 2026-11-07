@@ -223,6 +223,14 @@ impl PointHex {
     /// Callers must invoke this only for point fields of that exact verified
     /// statement. Generic parsing never consults the statement-only cache.
     pub fn promote_after_verified_statement(&self) -> Result<(), CryptoError> {
+        self.promote_after_trusted_validation()
+    }
+
+    /// Promote one exact point after an independently authenticated state
+    /// boundary has established prime-subgroup membership. This is crate
+    /// private so only the feature-gated persisted-state decoder can use it;
+    /// ordinary callers must retain generic strict decoding.
+    pub(crate) fn promote_after_trusted_validation(&self) -> Result<(), CryptoError> {
         let cached = VALIDATED_POINT_CACHE
             .with(|cache| cache.borrow().get(&self.0).cloned())
             .or_else(|| STATEMENT_POINT_CACHE.with(|cache| cache.borrow().get(&self.0).cloned()));
