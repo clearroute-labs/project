@@ -70,7 +70,7 @@ view with `authorization_policy`, `confidential_outstanding: U128`, and
 | 'merge_broker_inbox' | broker, expected version, exact homomorphic spending+inbox ciphertext | owner or settlement keeper | Broker-only inbox merge |
 | 'settle' | broker, public amount, expected versions, post states/proof, optional reconciliation | owner or scoped keeper | Returns broker funds to associated vault |
 | 'grant_keeper' / 'revoke_keeper' | broker scope/limits/expiry or delegate | broker owner | Changes settlement/merge grant epoch |
-| 'delete_loan' | closed loan ID and evidence | borrower or broker owner | Removes display entry; retains leaf tombstone |
+| 'delete_loan' | closed loan ID and evidence | borrower or broker owner | Removes active entry; retains full terminal loan archive and leaf tombstone |
 | 'delete_broker' | broker ID | broker owner | Removes only an entirely closed broker |
 
 `storage_deposit` charges the measured first `StorageDeposits` map entry from
@@ -188,7 +188,8 @@ is no timeout refund or resend.
 ## Read APIs
 
 'get_asset_profile', 'get_verifier_config', 'get_verifier_key', 'get_vault', 'get_broker',
-'get_holder', 'get_holder_key', 'get_broker_key', 'get_loan', 'get_proposal', 'get_claim', 'get_payout',
+'get_holder', 'get_holder_key', 'get_broker_key', 'get_loan', 'get_archived_loan',
+'get_loan_tombstone', 'get_proposal', 'get_claim', 'get_payout',
 'get_checkpoint', 'get_deposit_receipt', 'get_vault_broker_ids(vault_id, cursor, limit)',
 'get_share_balance', 'list_vaults', 'list_brokers', 'list_loans',
 'list_claims', 'list_payouts', 'get_counters', and 'public_totals' expose public
@@ -304,7 +305,10 @@ Each broker has a domain-separated sparse Merkle loan book with depth 64 over
 loan IDs. Origination, repayment, impairment/unimpairment/default and deletion
 update exactly one authenticated path after checking the stored root and
 expected leaf. Closed-loan leaves become tombstones in Core storage, and the
-root is never accepted from a caller. Each leaf commits schedule dates,
+complete terminal `Loan` snapshot remains available through
+`get_archived_loan`; the root is never accepted from a caller.
+`get_loan_tombstone` exposes the terminal-record leaf, sparse-book tombstone
+leaf, final status/version, and the active-leaf removal evidence. Each leaf commits schedule dates,
 payment counts, impairment/status/version, key IDs and auditor key, agreement
 digest, all P/O/Q/R ciphertexts, cumulative repayment ciphertexts, and all
 principal/owed/payment commitments. Tombstone leaves additionally commit the
@@ -312,6 +316,25 @@ terminal record marker. This keeps membership and omission checks bounded even
 when a broker has many historical loans. Reconciliation contexts include the
 authoritative current book-root digest in their operation subject without
 adding a circuit input.
+
+`get_archived_loan(loan_id)` returns the complete terminal `LoanView` after
+deletion, with `tombstoned: true`; it never makes the record visible to
+`get_loan`/`list_loans` and cannot be passed to a financial transition.
+`get_loan_tombstone(loan_id)` returns `{id, final_status, final_version,
+terminal_leaf, leaf, removal_evidence}`. `terminal_leaf` is the digest of the
+archived record, `leaf` is the depth-64 book tombstone digest, and
+`removal_evidence` is the pre-deletion active leaf.
+
+The canonical `loan-leaf-v2` digest is defined by
+`contracts/confidential-core/src/lib.rs::derive_loan_leaf`: domain-separated
+`identity-core` (loan/broker/borrower/proposal/schedule/status/impairment/
+version), `identity-keys` (key IDs, auditor key, agreement digest),
+`ciphertexts` (principal, initial owed, amount owed, periodic payment,
+principal remaining, cumulative repaid), and `commitments` (principal, owed,
+payment, principal remaining), followed by the tombstoned marker. The sparse
+book wraps that terminal digest with `loan-tombstone-v1`, loan ID, final status,
+and final version. Clients must consume these chain-provided digests rather
+than reimplementing an alternate leaf schema.
 
 ## Stable error categories
 

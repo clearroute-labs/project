@@ -630,7 +630,30 @@ pub struct BookTombstone {
     pub final_status: LoanStatus,
     #[serde(with = "u64_string")]
     pub final_version: u64,
+    /// The terminal `Loan` leaf before it is wrapped in the book tombstone
+    /// marker.  This is retained separately from `leaf` so an auditor can
+    /// verify the archived snapshot without reconstructing an omitted record.
+    pub terminal_leaf: Vec<u8>,
     pub leaf: Vec<u8>,
+    pub removal_evidence: Vec<u8>,
+    /// Complete immutable terminal record.  The loan is never reinserted in
+    /// `Core::loans`; it is available only through the archive view.
+    pub terminal_loan: Loan,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(crate = "serde")]
+pub struct LoanTombstoneView {
+    #[serde(with = "u64_string")]
+    pub id: u64,
+    pub final_status: LoanStatus,
+    #[serde(with = "u64_string")]
+    pub final_version: u64,
+    /// Leaf derived from the full terminal loan snapshot.
+    pub terminal_leaf: Vec<u8>,
+    /// Sparse-book leaf containing the terminal marker.
+    pub leaf: Vec<u8>,
+    /// The active leaf supplied as removal evidence at deletion.
     pub removal_evidence: Vec<u8>,
 }
 
@@ -1426,6 +1449,9 @@ pub struct LoanView {
     pub payment_commitment: Vec<u8>,
     pub agreement_digest: Vec<u8>,
     pub accounting_leaf: Vec<u8>,
+    /// `true` only for `get_archived_loan`; active `get_loan` records are
+    /// never tombstoned and are omitted from the active book on deletion.
+    pub tombstoned: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]

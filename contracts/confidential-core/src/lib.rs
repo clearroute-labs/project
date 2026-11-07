@@ -44,8 +44,8 @@ const MAX_BROKERS_PER_VAULT: usize = 64;
 const AUTHORIZATION_POLICY: &str = "permissionless-v1";
 /// A final redemption proves one zero aggregate per still-live broker. Close
 /// brokers first when a vault has more live brokers than this bounded gas
-/// budget; `delete_broker` remains permissionless to call once obligations are
-/// settled and keeps the operation executable for arbitrarily many brokers.
+/// budget; the owner-callable `delete_broker` keeps the operation executable
+/// for arbitrarily many brokers once obligations are settled.
 const MAX_FINAL_LIVE_BROKERS: usize = 4;
 
 const ERR_INVALID_ENCODING: &str = "INVALID_ENCODING";
@@ -4872,6 +4872,11 @@ impl Core {
         let mut tombstone_record = loan.clone();
         tombstone_record.tombstoned = true;
         let terminal_leaf = derive_loan_leaf(&tombstone_record);
+        // The archived record's public leaf is the terminal (tombstoned)
+        // record leaf, while the sparse-book entry below wraps it in a
+        // deletion marker.  Keeping both avoids making auditors reconstruct
+        // the terminal leaf from a hash-only tombstone.
+        tombstone_record.accounting_leaf = terminal_leaf.clone();
         let tombstone_leaf = derive_tombstone_leaf(
             loan.loan_id,
             &loan.status,
@@ -4912,8 +4917,10 @@ impl Core {
             id: loan_id,
             final_status: loan.status.clone(),
             final_version: loan.loan_version,
+            terminal_leaf,
             leaf: tombstone_leaf,
             removal_evidence,
+            terminal_loan: tombstone_record,
         };
         self.loan_tombstones.insert(&loan_id, &tombstone);
         self.loans.remove(&loan_id);
@@ -5462,41 +5469,33 @@ impl Core {
     }
 
     pub fn get_loan(&self, loan_id: U64) -> Option<LoanView> {
-        self.loans.get(&loan_id.0).map(|loan| LoanView {
-            loan_id: loan.loan_id,
-            broker_id: loan.broker_id,
-            borrower: loan.borrower,
-            proposal_id: loan.proposal_id,
-            start_time: loan.start_time,
-            payment_interval: loan.payment_interval,
-            grace_period: loan.grace_period,
-            previous_due: loan.previous_due,
-            next_due: match loan.status {
-                LoanStatus::Active => Some(loan.next_due),
-                LoanStatus::Paid | LoanStatus::Defaulted => None,
-            },
-            payment_total: loan.payment_total,
-            payment_remaining: loan.payment_remaining,
-            status: loan.status,
-            impaired: loan.impaired,
-            loan_version: loan.loan_version,
-            borrower_key_id: loan.borrower_key_id,
-            broker_key_id: loan.broker_key_id,
-            loan_auditor_key_id: loan.loan_auditor_key_id,
-            loan_auditor_public_key: loan.loan_auditor_public_key,
-            principal_ciphertexts: loan.principal_ciphertexts,
-            initial_owed_ciphertexts: loan.initial_owed_ciphertexts,
-            amount_owed_ciphertexts: loan.amount_owed_ciphertexts,
-            periodic_payment_ciphertexts: loan.periodic_payment_ciphertexts,
-            principal_remaining_ciphertexts: loan.principal_remaining_ciphertexts,
-            principal_remaining_commitment: loan.principal_remaining_commitment,
-            cumulative_repaid_ciphertexts: loan.cumulative_repaid_ciphertexts,
-            principal_commitment: loan.principal_commitment,
-            owed_commitment: loan.owed_commitment,
-            payment_commitment: loan.payment_commitment,
-            agreement_digest: loan.agreement_digest,
-            accounting_leaf: loan.accounting_leaf,
-        })
+        self.loans.get(&loan_id.0).map(|loan| self.loan_view(loan))
+    }
+
+    /// Return a terminal loan snapshot retained after `delete_loan`.
+    /// Archived loans are never returned by `get_loan` or `list_loans` and
+    /// cannot be used as inputs to a financial transition.
+    pub fn get_archived_loan(&self, loan_id: U64) -> Option<LoanView> {
+        self.loan_tombstones
+            .get(&loan_id.0)
+            .map(|tombstone| self.loan_view(tombstone.terminal_loan))
+    }
+
+    /// Return the immutable sparse-book tombstone and its terminal-record
+    /// proof material.  `removal_evidence` is the active leaf supplied at
+    /// deletion; `terminal_leaf` is the full tombstoned record leaf; `leaf`
+    /// is the marker inserted in the authenticated book.
+    pub fn get_loan_tombstone(&self, loan_id: U64) -> Option<LoanTombstoneView> {
+        self.loan_tombstones
+            .get(&loan_id.0)
+            .map(|tombstone| LoanTombstoneView {
+                id: tombstone.id,
+                final_status: tombstone.final_status,
+                final_version: tombstone.final_version,
+                terminal_leaf: tombstone.terminal_leaf,
+                leaf: tombstone.leaf,
+                removal_evidence: tombstone.removal_evidence,
+            })
     }
 
     /// Return the current holder encryption key, optionally requiring an
@@ -7375,6 +7374,7 @@ impl Core {
             payment_commitment: loan.payment_commitment,
             agreement_digest: loan.agreement_digest,
             accounting_leaf: loan.accounting_leaf,
+            tombstoned: loan.tombstoned,
         }
     }
 
@@ -9265,6 +9265,76 @@ mod tests {
         assert_eq!(broker.delegates.len(), 1);
         assert_eq!(broker.delegates[0].delegate_key_id, 3);
         assert_eq!(broker.authorization_epoch, 4);
+    }
+
+    #[test]
+    fn archived_loan_tombstone_retains_terminal_leaf_without_active_membership() {
+        let _guard = test_guard();
+        let mut core = init();
+        let loan_id = 42;
+        let mut terminal_loan = Loan {
+            loan_id,
+            broker_id: 7,
+            borrower: account("alice.testnet"),
+            proposal_id: 11,
+            start_time: 100,
+            payment_interval: 60,
+            grace_period: 10,
+            previous_due: 200,
+            next_due: 0,
+            payment_total: 1,
+            payment_remaining: 0,
+            status: LoanStatus::Paid,
+            impaired: false,
+            loan_version: 3,
+            borrower_key_id: 22,
+            broker_key_id: 11,
+            loan_auditor_key_id: 33,
+            loan_auditor_public_key: vec![1, 2, 3],
+            principal_ciphertexts: vec![vec![4]],
+            initial_owed_ciphertexts: vec![vec![5]],
+            amount_owed_ciphertexts: vec![vec![6]],
+            periodic_payment_ciphertexts: vec![vec![7]],
+            principal_remaining_ciphertexts: vec![vec![8]],
+            principal_remaining_commitment: vec![9],
+            cumulative_repaid_ciphertexts: vec![vec![10]],
+            principal_commitment: vec![11],
+            owed_commitment: vec![12],
+            payment_commitment: vec![13],
+            agreement_digest: vec![14],
+            accounting_leaf: Vec::new(),
+            tombstoned: true,
+        };
+        let terminal_leaf = derive_loan_leaf(&terminal_loan);
+        terminal_loan.accounting_leaf = terminal_leaf.clone();
+        let tombstone_leaf = derive_tombstone_leaf(
+            loan_id,
+            &terminal_loan.status,
+            terminal_loan.loan_version,
+            &terminal_leaf,
+        );
+        core.loan_tombstones.insert(
+            &loan_id,
+            &BookTombstone {
+                id: loan_id,
+                final_status: terminal_loan.status.clone(),
+                final_version: terminal_loan.loan_version,
+                terminal_leaf: terminal_leaf.clone(),
+                leaf: tombstone_leaf.clone(),
+                removal_evidence: vec![15],
+                terminal_loan,
+            },
+        );
+
+        assert!(core.get_loan(U64(loan_id)).is_none());
+        let archived = core.get_archived_loan(U64(loan_id)).unwrap();
+        assert!(archived.tombstoned);
+        assert_eq!(archived.accounting_leaf, terminal_leaf);
+        assert_eq!(
+            core.get_loan_tombstone(U64(loan_id)).unwrap().leaf,
+            tombstone_leaf
+        );
+        assert!(core.list_loans(U64(0), None, None, 10).is_empty());
     }
 
     #[allow(deprecated)]
