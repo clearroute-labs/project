@@ -40,13 +40,13 @@ describe('action errors', () => {
     const mapped = toProtocolError(failedTransaction('Exceeded the prepaid gas.'))
     expect(mapped.details.category).toBe('GAS_EXCEEDED')
     expect(mapped.details.retryable).toBe(true)
-    expect(mapped.details.message).toContain('ran out of gas')
+    expect(mapped.details.message).toContain('exhausted its gas')
   })
 
   it('redacts an unknown on-chain failure instead of echoing arbitrary receipt data', () => {
     const mapped = toProtocolError(failedTransaction('private witness plaintext: do-not-display'))
     expect(mapped.details.category).toBe('UNKNOWN')
-    expect(mapped.details.message).toBe('The transaction failed on-chain. No state change was confirmed.')
+    expect(mapped.details.message).toBe('The transaction finalized with an on-chain failure. Review the finalized status before trying again.')
     expect(mapped.details.message).not.toContain('do-not-display')
   })
 

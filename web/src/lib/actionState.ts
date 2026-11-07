@@ -54,7 +54,7 @@ const CORE_ERROR_MESSAGES: Partial<Record<ProtocolErrorShape['category'], string
   REPLAY: 'This identifier has already been consumed, revoked, or replayed.',
   NOT_FOUND: 'The requested protocol record was not found.',
   STORAGE: 'This account needs more NEAR storage before the action can continue.',
-  GAS_EXCEEDED: 'The transaction ran out of gas before Core completed. No state change was confirmed.',
+  GAS_EXCEEDED: 'The transaction exhausted its gas before Core completed. Review the finalized status before trying again.',
 }
 
 const RETRYABLE_CATEGORIES = new Set<ProtocolErrorShape['category']>(['STALE_STATE', 'GAS_EXCEEDED'])
@@ -164,7 +164,7 @@ function transactionError(error: unknown): ProtocolError {
     })
   }
   const category = categoryFromExecutionError(isTransactionFailure(error) ? executionErrorFromFailure(error) : undefined)
-  const message = CORE_ERROR_MESSAGES[category] || 'The transaction failed on-chain. No state change was confirmed.'
+  const message = CORE_ERROR_MESSAGES[category] || 'The transaction finalized with an on-chain failure. Review the finalized status before trying again.'
   return new ProtocolError({
     category,
     message,
@@ -185,8 +185,8 @@ export function toProtocolError(error: unknown): ProtocolError {
 export function requireFinalized(receipt: ActionReceipt, label: string): ActionReceipt {
   if (receipt.status === 'succeeded' && receipt.finalized) return receipt
   const metadata = metadataFromReceipt(receipt)
-  if (receipt.status === 'failed') throw new ProtocolError({ category: 'UNKNOWN', message: `${label} failed. No state was changed.`, ...metadata })
-  throw new ProtocolError({ category: 'OPERATION_PENDING', message: `${label} remains unresolved. Wait for finality before retrying.`, retryable: false, ...metadata })
+  if (receipt.status === 'failed') throw new ProtocolError({ category: 'UNKNOWN', message: `${label} finalized with a failure. Review the finalized transaction status before trying again.`, ...metadata })
+  throw new ProtocolError({ category: 'OPERATION_PENDING', message: `${label} remains unresolved. Use the read-only status check before trying again.`, retryable: false, ...metadata })
 }
 
 /** Marker emitted by the finalized LedgerWallet when spending is short but
@@ -225,7 +225,7 @@ export function useAction() {
           phase: 'failed',
           label: current.label,
           receipt,
-          error: new ProtocolError({ category: 'UNKNOWN', message: 'The transaction finalized with failure. No state change was confirmed.', ...metadataFromReceipt(receipt) }),
+          error: new ProtocolError({ category: 'UNKNOWN', message: 'The transaction finalized with a failure. Review the finalized status before trying again.', ...metadataFromReceipt(receipt) }),
         })
         return
       }
@@ -251,13 +251,13 @@ export function useAction() {
   const run = useCallback(async <T extends ActionReceipt>(label: string, action: () => Promise<T>): Promise<T | undefined> => {
     // An unresolved spend must be resolved by a read-only status check before
     // another action can be prepared; this prevents duplicate submissions.
-    if (stateRef.current.phase === 'pending') return undefined
+    if (['preparing', 'awaiting_wallet', 'submitted', 'pending'].includes(stateRef.current.phase)) return undefined
     commit({ phase: 'preparing', label })
     try {
       commit({ phase: 'awaiting_wallet', label })
       const receipt = await action()
       if (receipt.status === 'succeeded' && receipt.finalized) commit({ phase: 'succeeded', label, receipt })
-      else if (receipt.status === 'failed') commit({ phase: 'failed', label, receipt, error: new ProtocolError({ category: 'UNKNOWN', message: `${label} failed. No state was changed.`, ...metadataFromReceipt(receipt) }) })
+      else if (receipt.status === 'failed') commit({ phase: 'failed', label, receipt, error: new ProtocolError({ category: 'UNKNOWN', message: `${label} finalized with a failure. Review the finalized transaction status before trying again.`, ...metadataFromReceipt(receipt) }) })
       else commit(makePendingState(label, receipt))
       return receipt
     } catch (error) {
@@ -269,7 +269,7 @@ export function useAction() {
   }, [commit, makePendingState])
 
   const reset = useCallback(() => {
-    if (stateRef.current.phase === 'pending') return
+    if (['preparing', 'awaiting_wallet', 'submitted', 'pending'].includes(stateRef.current.phase)) return
     commit({ phase: 'idle' })
   }, [commit])
 

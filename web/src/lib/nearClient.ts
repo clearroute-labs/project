@@ -20,7 +20,7 @@ import type {
 } from './types'
 import { ProtocolError } from './types'
 import { installPendingStatusReader, isClientTransactionError, toProtocolError } from './actionState'
-import { ContractClient, NearRpc, type FinalizedBlock, type WalletAdapter as RpcWalletAdapter } from '@confidential-lending/client'
+import { ContractClient, NearRpc, type FinalizedBlock, type FinalOutcome, type WalletAdapter as RpcWalletAdapter } from '@confidential-lending/client'
 
 /**
  * Minimal bridge expected from the real NEAR SDK. The root client package
@@ -318,6 +318,22 @@ function decodeMethodReturn(encoded: string | undefined): string | undefined {
   } catch {
     return undefined
   }
+}
+
+/**
+ * Map a status read only after the RPC has proved both the requested identity
+ * and final execution. A provider may return an optimistic/EXECUTED outcome
+ * despite wait_until=FINAL; that must remain pending in the UI.
+ */
+export function mapTransactionStatus(outcome: FinalOutcome, requestedHash: string, requestedSigner: string): NearCallResult {
+  if (outcome.transaction.hash !== requestedHash || outcome.transaction.signer_id !== requestedSigner) {
+    throw new ProtocolError({ category: 'INVALID_ENCODING', message: 'The transaction status response did not match the requested transaction.', retryable: true })
+  }
+  const identity = { transactionHash: requestedHash, signerId: requestedSigner, operationId: requestedHash }
+  if (outcome.final_execution_status !== 'FINAL') return { ...identity, status: 'pending', finalized: false }
+  if ('Failure' in outcome.status) return { ...identity, status: 'failed', finalized: true }
+  if ('SuccessValue' in outcome.status) return { ...identity, returnValue: decodeMethodReturn(outcome.status.SuccessValue), status: 'succeeded', finalized: true }
+  return { ...identity, status: 'pending', finalized: false }
 }
 
 type RawAssetProfile = { token_account: string; decimals: number; controller_account: string; issuer_key: { key_id: string | number; public_key: unknown }; token_auditor_key: { key_id: string | number; public_key: unknown }; crypto_profile_hash: unknown; token_trust_policy: string; authorization_policy?: string; freeze_policy?: string; custody_cap?: string | number; confidential_outstanding?: string | number }
@@ -954,9 +970,7 @@ export function createRpcProtocolClient(config: DeploymentConfig, session: NearW
     },
     transactionStatus: async (transactionHash, signerId, signal) => {
       const outcome = await rpc.transactionStatus(transactionHash, signerId, signal)
-      if ('Failure' in outcome.status) return { transactionHash: outcome.transaction.hash, signerId: outcome.transaction.signer_id, operationId: outcome.transaction.hash, status: 'failed', finalized: true }
-      if ('SuccessValue' in outcome.status) return { transactionHash: outcome.transaction.hash, signerId: outcome.transaction.signer_id, operationId: outcome.transaction.hash, returnValue: decodeMethodReturn(outcome.status.SuccessValue), status: 'succeeded', finalized: true }
-      return { transactionHash: outcome.transaction.hash, signerId: outcome.transaction.signer_id, operationId: outcome.transaction.hash, status: 'unknown', finalized: false }
+      return mapTransactionStatus(outcome, transactionHash, signerId)
     },
   }
   const protocol = new NearProtocolClient(transport, config)

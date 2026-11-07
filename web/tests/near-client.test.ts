@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { NearProtocolClient, type NearContractTransport } from '../src/lib/nearClient'
+import { mapTransactionStatus, NearProtocolClient, type NearContractTransport } from '../src/lib/nearClient'
 import { createBrowserAdapters } from '../src/lib/adapters'
 import { createRpcProtocolClient, type NearWalletSession } from '../src/lib/nearClient'
 import { NearWalletSelectorSession } from '../src/lib/nearWallet'
@@ -46,6 +46,19 @@ describe('real Core client mapping', () => {
       transactionStatus: async (transactionHash, signerId) => ({ transactionHash, signerId, operationId: transactionHash, returnValue: '42', status: 'succeeded', finalized: true }),
     }
     await expect(new NearProtocolClient(transport, config).getTransactionStatus({ transactionHash: hash, signerId: 'alice.testnet' })).resolves.toEqual({ operationId: hash, transactionHash: hash, signerId: 'alice.testnet', returnValue: '42', status: 'succeeded', finalized: true })
+  })
+
+  it('keeps optimistic status responses pending and rejects mismatched identities', () => {
+    const hash = 'A'.repeat(44)
+    const outcome = {
+      final_execution_status: 'EXECUTED',
+      status: { SuccessValue: '' },
+      transaction: { hash, signer_id: 'alice.testnet', receiver_id: 'core.testnet' },
+      transaction_outcome: { id: 'B'.repeat(44), outcome: { executor_id: 'core.testnet', logs: [], status: {} } },
+      receipts_outcome: [],
+    } as Parameters<typeof mapTransactionStatus>[0]
+    expect(mapTransactionStatus(outcome, hash, 'alice.testnet')).toMatchObject({ transactionHash: hash, signerId: 'alice.testnet', status: 'pending', finalized: false })
+    expect(() => mapTransactionStatus(outcome, hash, 'bob.testnet')).toThrow(ProtocolError)
   })
 
   it('normalizes a real client transaction failure before it reaches action callers', async () => {

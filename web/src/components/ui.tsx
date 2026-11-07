@@ -78,7 +78,7 @@ export function ActionFeedback({ state }: { state: ActionState }) {
   if (state.phase === 'failed') {
     return (
       <div className="action-feedback action-failed" role="alert">
-        <div><strong>{state.label || 'Action'} could not be completed.</strong><p>{state.error?.details.message || 'No state was changed.'}</p>{state.error?.details.transactionHash ? <p>Transaction <Mono>{state.error.details.transactionHash}</Mono></p> : null}</div>
+        <div><strong>{state.label || 'Action'} needs review.</strong><p>{state.error?.details.message || 'The transaction outcome needs review. Check its finalized status before trying again.'}</p>{state.error?.details.transactionHash ? <p>Transaction <Mono>{state.error.details.transactionHash}</Mono></p> : null}</div>
         {state.error?.details.category ? <code>{state.error.details.category}</code> : null}
       </div>
     )
