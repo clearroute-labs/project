@@ -457,6 +457,7 @@ export interface ProtocolClient {
   getPrivateAccount(accountId: string): Promise<PrivateAccountView>
   getHolderEncryptionKey(accountId: string): Promise<HolderKeyView>
   getBrokerEncryptionKey(brokerId: string): Promise<BrokerKeyView>
+  getVaultBrokerIds(vaultId: string): Promise<string[]>
   getBrokerPrivateAccount(brokerId: string): Promise<PrivateAccountView>
   getProposal(proposalId: string): Promise<ProposalSummary>
   getAuditBundle(input: { scope: 'loan' | 'token'; subjectId: string }): Promise<AuditCiphertextBundle>
@@ -475,7 +476,7 @@ export interface ProtocolClient {
   createBroker(input: { vaultId: string; brokerEncryptionKeyId: string; brokerEncryptionKey: string; brokerDebtCeiling: string; possessionProof: PreparedProof }): Promise<ActionReceipt>
   depositExternal(input: { amount: string; depositId: string }): Promise<ActionReceipt>
   depositToVault(input: { claimId: string; vaultId: string; amount: string; minShares: string; expiresAt: number }): Promise<ActionReceipt>
-  redeemShares(input: { vaultId: string; shares: string; minAmount: string; expiresAt: number; soleShareholderWaiver?: boolean; burnWorthless?: boolean }): Promise<ActionReceipt>
+  redeemShares(input: { vaultId: string; shares: string; minAmount: string; expiresAt: number; soleShareholderWaiver?: boolean; burnWorthless?: boolean; brokerZeroProofs?: PreparedProof[] }): Promise<ActionReceipt>
   transferShares(input: { vaultId: string; receiverId: string; shares: string }): Promise<ActionReceipt>
   requestPayout(input: { claimId: string; operationId: string; recipientId: string }): Promise<ActionReceipt>
   shield(input: { claimId: string; amount: string; proof: PreparedProof }): Promise<ActionReceipt>

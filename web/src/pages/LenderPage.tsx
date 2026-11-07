@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useAppContext } from '../App'
 import { ActionFeedback, Button, Card, EmptyState, Field, Metric, Mono, Money, Notice, SectionHeading, SelectInput, StatusBadge, Table, TextInput } from '../components/ui'
 import { useAction } from '../lib/actionState'
+import { readBrokerZeroProof, type BrokerZeroProofPackage } from '../lib/brokerZeroProof'
 import { parseAmount, parseNonNegativeAmount, randomUint64Decimal, unixSecondsNow } from '../lib/money'
 import type { PublicClaim, VaultSummary } from '../lib/types'
 import { AmountCell, ConnectionGate, EmptyRow, IdLabel, PageHeader, PublicPrivateNotice, StateFreshness } from './shared'
@@ -128,8 +129,21 @@ function RedeemCard({ vaults, decimals, selectedVaultId }: { vaults: VaultSummar
   const [minAmount, setMinAmount] = useState('')
   const [soleShareholderWaiver, setSoleShareholderWaiver] = useState(false)
   const [burnWorthless, setBurnWorthless] = useState(false)
+  const [brokerProofs, setBrokerProofs] = useState<BrokerZeroProofPackage[]>([])
   const [error, setError] = useState('')
   const action = useAction()
+  const importBrokerProofs = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || [])
+    if (!files.length) return
+    setError('')
+    try {
+      const imported = await Promise.all(files.map((file) => readBrokerZeroProof(file)))
+      const merged = [...brokerProofs, ...imported]
+      if (new Set(merged.map((item) => item.brokerId)).size !== merged.length) throw new Error('Each broker may contribute only one zero-state proof.')
+      setBrokerProofs(merged)
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Broker zero-proof import failed.') }
+    event.target.value = ''
+  }
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
     setError('')
@@ -138,17 +152,35 @@ function RedeemCard({ vaults, decimals, selectedVaultId }: { vaults: VaultSummar
       const vault = vaults.find((item) => item.vaultId === vaultId)
       const shareUnits = parseAmount(shares, vault?.shareScale ?? decimals)
       const minAmountUnits = parseNonNegativeAmount(minAmount || '0', decimals)
-      const receipt = await action.run('Redeem shares', () => adapters.protocol.redeemShares({ vaultId, shares: shareUnits, minAmount: minAmountUnits, expiresAt: unixSecondsNow() + 900, soleShareholderWaiver, burnWorthless }))
+      const finalRedemption = shareUnits === vault?.sharesSupply
+      let finalProofs: import('../lib/types').PreparedProof[] | undefined
+      if (finalRedemption) {
+        const brokerIds = await adapters.protocol.getVaultBrokerIds(vaultId)
+        if (brokerProofs.length !== brokerIds.length) throw new Error(`Final redemption requires one current zero-state proof for each associated broker (${brokerIds.length} required).`)
+        const expectedProfile = adapters.protocol.config.cryptoProfileHash.toLowerCase()
+        const expectedArtifact = adapters.protocol.config.cryptoArtifactHash?.toLowerCase()
+        const byBroker = new Map(brokerProofs.map((item) => [item.brokerId, item]))
+        for (const brokerId of brokerIds) {
+          const packageValue = byBroker.get(brokerId)
+          if (!packageValue) throw new Error(`Missing zero-state proof for broker ${brokerId}.`)
+          if (packageValue.vaultId !== vaultId) throw new Error(`Broker ${brokerId} proof belongs to a different vault.`)
+          if (packageValue.profileHash !== expectedProfile) throw new Error(`Broker ${brokerId} proof uses a different crypto profile.`)
+          if (expectedArtifact && packageValue.artifactHash !== expectedArtifact) throw new Error(`Broker ${brokerId} proof uses a different artifact manifest.`)
+        }
+        finalProofs = brokerIds.map((brokerId) => byBroker.get(brokerId)!.proof)
+      }
+      const receipt = await action.run('Redeem shares', () => adapters.protocol.redeemShares({ vaultId, shares: shareUnits, minAmount: minAmountUnits, expiresAt: unixSecondsNow() + 900, soleShareholderWaiver, burnWorthless, brokerZeroProofs: finalProofs }))
       if (receipt) {
         setShares('')
         setMinAmount('')
+        setBrokerProofs([])
         void refresh()
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Enter a valid share amount.')
     }
   }
-  return <Card className="form-card"><SectionHeading eyebrow="Share exit" title="Redeem shares" description="A successful redemption burns shares and creates a public claim. External payout is intentionally separate." /><form onSubmit={submit} className="form-stack"><Field label="Vault" htmlFor="redeem-vault"><SelectInput id="redeem-vault" value={vaultId} onChange={(event) => setVaultId(event.target.value)}><option value="">Select a vault</option>{vaults.map((vault) => <option key={vault.vaultId} value={vault.vaultId}>{vault.vaultId} · {vault.phase}</option>)}</SelectInput></Field><Field label="Shares" htmlFor="redeem-shares"><TextInput id="redeem-shares" inputMode="decimal" value={shares} onChange={(event) => setShares(event.target.value)} placeholder="0" /></Field><Field label="Minimum claim" htmlFor="redeem-min-amount" hint="Slippage guard, in asset units."><TextInput id="redeem-min-amount" inputMode="decimal" value={minAmount} onChange={(event) => setMinAmount(event.target.value)} placeholder="0" /></Field><label className="checkbox-field"><input type="checkbox" checked={soleShareholderWaiver} onChange={(event) => setSoleShareholderWaiver(event.target.checked)} /> <span>Last-shareholder waiver (only if Core allows)</span></label><label className="checkbox-field"><input type="checkbox" checked={burnWorthless} onChange={(event) => setBurnWorthless(event.target.checked)} /> <span>Burn worthless zero-NAV shares (explicit)</span></label>{error ? <p className="field-error" role="alert">{error}</p> : null}<Button type="submit" variant="secondary" disabled={!vaults.length} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Redeem shares</Button><ActionFeedback state={action.state} /></form></Card>
+  return <Card className="form-card"><SectionHeading eyebrow="Share exit" title="Redeem shares" description="A successful redemption burns shares and creates a public claim. External payout is intentionally separate." /><form onSubmit={submit} className="form-stack"><Field label="Vault" htmlFor="redeem-vault"><SelectInput id="redeem-vault" value={vaultId} onChange={(event) => { setVaultId(event.target.value); setBrokerProofs([]) }}><option value="">Select a vault</option>{vaults.map((vault) => <option key={vault.vaultId} value={vault.vaultId}>{vault.vaultId} · {vault.phase}</option>)}</SelectInput></Field><Field label="Shares" htmlFor="redeem-shares"><TextInput id="redeem-shares" inputMode="decimal" value={shares} onChange={(event) => setShares(event.target.value)} placeholder="0" /></Field><Field label="Minimum claim" htmlFor="redeem-min-amount" hint="Slippage guard, in asset units."><TextInput id="redeem-min-amount" inputMode="decimal" value={minAmount} onChange={(event) => setMinAmount(event.target.value)} placeholder="0" /></Field><label className="checkbox-field"><input type="checkbox" checked={soleShareholderWaiver} onChange={(event) => setSoleShareholderWaiver(event.target.checked)} /> <span>Last-shareholder waiver (only if Core allows)</span></label><label className="checkbox-field"><input type="checkbox" checked={burnWorthless} onChange={(event) => setBurnWorthless(event.target.checked)} /> <span>Burn worthless zero-NAV shares (explicit)</span></label><Field label="Broker closure proofs" hint="Final redemption requires one current zero-balance proof from every associated live broker. Broker owners can export these from their maintenance workspace; proofs contain no private keys or plaintext amounts."><input className="file-input" type="file" accept="application/json,.json" multiple onChange={(event) => void importBrokerProofs(event)} />{brokerProofs.length ? <div className="readonly-field"><span>Imported broker proofs</span>{brokerProofs.map((item) => <Mono key={item.brokerId}>broker {item.brokerId} · vault {item.vaultId}</Mono>)}</div> : <span className="field-hint">No broker closure proofs imported. Partial redemptions do not require them.</span>}</Field>{error ? <p className="field-error" role="alert">{error}</p> : null}<Button type="submit" variant="secondary" disabled={!vaults.length} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Redeem shares</Button><ActionFeedback state={action.state} /></form></Card>
 }
 
 function ClaimsPage() {

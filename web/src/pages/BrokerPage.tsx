@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useAppContext } from '../App'
 import { ActionFeedback, Button, Card, EmptyState, Field, Metric, Mono, Money, Notice, SectionHeading, SelectInput, StatusBadge, Table, TextInput } from '../components/ui'
 import { requireFinalized, useAction } from '../lib/actionState'
+import { downloadBrokerZeroProof, makeBrokerZeroProofPackage } from '../lib/brokerZeroProof'
 import { parseAmount, parseNonNegativeAmount, unixSecondsNow } from '../lib/money'
 import { CORE_MAX_PAYMENT_COUNT, ProtocolError, type AgreementDraft, type BrokerKeyPreparation, type BrokerSummary, type KeeperGrant, type LoanSummary } from '../lib/types'
 import { downloadProposalPackage, makeProposalPackage } from '../lib/proposalPackage'
@@ -412,19 +413,36 @@ function ReconcileCard({ brokers }: { brokers: BrokerSummary[] }) {
 function BrokerClosureCard({ brokers }: { brokers: BrokerSummary[] }) {
   const { adapters, refresh } = useAppContext()
   const [brokerId, setBrokerId] = useState('')
+  const [preparedProof, setPreparedProof] = useState<import('../lib/types').PreparedProof | null>(null)
   const [error, setError] = useState('')
   const action = useAction()
   const broker = brokers.find((item) => item.brokerId === brokerId)
+  const prepare = async () => {
+    setError('')
+    try {
+      if (!broker) throw new Error('Choose a broker.')
+      setPreparedProof(await adapters.crypto.prepareBrokerClosure({ brokerId }))
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Broker closure proof preparation failed.') }
+  }
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); setError('')
     try {
       if (!broker) throw new Error('Choose a broker.')
-      const proof = await adapters.crypto.prepareBrokerClosure({ brokerId })
+      const proof = preparedProof || await adapters.crypto.prepareBrokerClosure({ brokerId })
       const receipt = await action.run('Close broker account', () => adapters.protocol.deleteBroker({ brokerId, proof }))
-      if (receipt) { setBrokerId(''); void refresh() }
+      if (receipt) { setBrokerId(''); setPreparedProof(null); void refresh() }
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Broker closure proof preparation failed.') }
   }
-  return <Card className="form-card"><SectionHeading eyebrow="Book maintenance" title="Close a broker account" description="Core accepts closure only after all confidential balances, inbox, active principal and impaired principal are proven zero, with no open obligations or pending accounting." /><form onSubmit={submit} className="form-stack"><Field label="Broker" htmlFor="close-broker"><SelectInput id="close-broker" value={brokerId} onChange={(event) => setBrokerId(event.target.value)}><option value="">Select broker</option>{brokers.map((item) => <option key={item.brokerId} value={item.brokerId}>{item.brokerId} · debt {item.debtTotal}</option>)}</SelectInput></Field>{broker ? <div className="readonly-field"><span>Public debt</span><Mono>{broker.debtTotal}</Mono><span>Accounting</span><StateFreshness status={broker.checkpointStatus} /></div> : null}{error ? <p className="field-error" role="alert">{error}</p> : null}<Button type="submit" variant="danger" disabled={!broker} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Prepare zero-state closure</Button><ActionFeedback state={action.state} /></form></Card>
+  const download = () => {
+    setError('')
+    try {
+      if (!broker || !preparedProof) throw new Error('Prepare the current zero-state proof first.')
+      const value = preparedProof.operationArgs?.zero_proof
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('The worker returned no broker zero-proof envelope.')
+      downloadBrokerZeroProof(makeBrokerZeroProofPackage({ brokerId, vaultId: broker.vaultId, profileHash: preparedProof.profileHash, artifactHash: preparedProof.artifactHash, proof: preparedProof }))
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Broker zero-proof download failed.') }
+  }
+  return <Card className="form-card"><SectionHeading eyebrow="Book maintenance" title="Close a broker account" description="Core accepts closure only after all confidential balances, inbox, active principal and impaired principal are proven zero, with no open obligations or pending accounting." /><form onSubmit={submit} className="form-stack"><Field label="Broker" htmlFor="close-broker"><SelectInput id="close-broker" value={brokerId} onChange={(event) => { setBrokerId(event.target.value); setPreparedProof(null) }}><option value="">Select broker</option>{brokers.map((item) => <option key={item.brokerId} value={item.brokerId}>{item.brokerId} · debt {item.debtTotal}</option>)}</SelectInput></Field>{broker ? <div className="readonly-field"><span>Public debt</span><Mono>{broker.debtTotal}</Mono><span>Accounting</span><StateFreshness status={broker.checkpointStatus} />{preparedProof ? <><span>Zero proof ready</span><Mono>broker {brokerId}</Mono></> : null}</div> : null}{error ? <p className="field-error" role="alert">{error}</p> : null}<div className="review-actions"><Button type="button" variant="secondary" onClick={() => void prepare()} disabled={!broker} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Prepare zero-state proof</Button><Button type="submit" variant="danger" disabled={!broker} busy={['preparing', 'awaiting_wallet'].includes(action.state.phase)}>Close broker account</Button><Button type="button" variant="quiet" onClick={download} disabled={!preparedProof}>Download proof for final vault redemption</Button></div><ActionFeedback state={action.state} /></form></Card>
 }
 
 function KeeperCard({ brokers, grants }: { brokers: BrokerSummary[]; grants: KeeperGrant[] }) {

@@ -349,7 +349,20 @@ async function initialize(configuration: WorkerConfiguration): Promise<void> {
 async function handle(request: WorkerRequest): Promise<unknown> {
   if (request.method === 'initialize') { const configuration = request.payload as WorkerConfiguration; initializing ||= initialize(configuration); await initializing; return { available: true, profileHash: configuration.expectedProfileHash, artifactHash: configuration.expectedManifestHash, wasmVersion: 'wasm-bindings-v1', message: 'Pinned browser crypto runtime is ready.' } }
   if (request.method === 'status') { if (!state?.ready) throw new Error('The pinned browser crypto runtime is not initialized'); return { available: true, profileHash: state.configuration.expectedProfileHash, artifactHash: state.configuration.expectedManifestHash, wasmVersion: 'wasm-bindings-v1', walletKeyCount: state.keyring.exportMaterial().keys.length, draftCount: state.drafts.size, message: 'Pinned browser crypto runtime is ready.' } }
-  if (request.method === 'set_subject') { requireState().subjectId = text(request.payload, 'subject account'); return undefined }
+  if (request.method === 'set_subject') {
+    const current = requireState()
+    const nextSubject = request.payload === undefined ? undefined : text(request.payload, 'subject account')
+    if (current.subjectId !== nextSubject) {
+      // Account changes must not retain a previous holder/broker key set or
+      // agreement randomness.  The user can export an encrypted backup before
+      // switching; the worker itself never carries secrets across identities.
+      current.keyring.clear()
+      current.drafts.clear()
+      current.authKeys.clear()
+    }
+    current.subjectId = nextSubject
+    return undefined
+  }
   const current = requireState(); switch (request.method) {
     case 'export_wallet_material': return backupMaterial(current)
     case 'import_wallet_material': await restoreBackupMaterial(current, request.payload as BackupMaterial); return undefined

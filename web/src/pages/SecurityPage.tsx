@@ -37,6 +37,7 @@ export function SecurityPage() {
       setRegistration(await adapters.crypto.createKeyRegistration())
       setHolderRegistered(false)
       clearEncryptedWalletBackup(backupScope)
+      setBackupConfirmationPending(false)
       setBackupMessage('A new holder key is ready in the worker. Export and confirm an encrypted backup before registering it on-chain.')
     } catch (caught) {
       setBackupError(caught instanceof Error ? caught.message : 'Key generation failed.')
@@ -58,6 +59,7 @@ export function SecurityPage() {
       setAuthorizationRegistration(await adapters.crypto.createAuthorizationKeyRegistration())
       setAuthorizationRegistered(false)
       clearEncryptedWalletBackup(backupScope)
+      setBackupConfirmationPending(false)
       setBackupMessage('A new authorization key is ready in the worker. Export and confirm an encrypted backup before registering it on-chain.')
     } catch (caught) {
       setBackupError(caught instanceof Error ? caught.message : 'Authorization-key generation failed.')
@@ -95,7 +97,8 @@ export function SecurityPage() {
     try {
       const material = await decryptWalletBackup(selectedBackup, importPassphrase)
       await adapters.crypto.importWalletMaterial(material)
-      setBackupMessage('Wallet material restored into the browser crypto worker. Registering it on-chain is a separate action.')
+      setBackupConfirmationPending(true)
+      setBackupMessage('Wallet material restored into the browser crypto worker. Confirm that this encrypted backup is saved before registering keys or funding a broker proposal.')
       setImportPassphrase(''); setSelectedBackup(null)
       if (fileInput.current) fileInput.current.value = ''
     } catch (caught) { setBackupError(caught instanceof Error ? caught.message : 'Backup restore failed.') }
@@ -113,6 +116,25 @@ export function SecurityPage() {
       setBackupMessage(`Keeper backup downloaded for broker${keeperBrokerIds.length === 1 ? '' : 's'} ${keeperBrokerIds.join(', ')}. It contains only the selected broker encryption keys; no holder, auditor, or agreement draft material.`)
     } catch (caught) { setBackupError(caught instanceof Error ? caught.message : 'Keeper backup export failed.') }
   }
+  useEffect(() => {
+    // A wallet account change must not leave a prepared key, draft, or keeper
+    // selection visible for the next account. The worker clears its private
+    // material separately; this resets the browser-side authorization state.
+    setRegistration(null)
+    setAuthorizationRegistration(null)
+    setHolderRegistered(false)
+    setAuthorizationRegistered(false)
+    setBackupConfirmationPending(false)
+    setBackupMessage('')
+    setBackupError('')
+    setSelectedBackup(null)
+    setExportPassphrase('')
+    setExportConfirm('')
+    setImportPassphrase('')
+    setKeeperBrokerIds([])
+    setKeeperPassphrase('')
+    setKeeperConfirm('')
+  }, [accountId])
   useEffect(() => () => { setExportPassphrase(''); setExportConfirm(''); setImportPassphrase('') }, [])
   return <>
     <PageHeader eyebrow="Wallet & security" title="Keep the keys close" description="NEAR wallet authorization and browser-local encryption are separate. Backups are encrypted files, never plaintext local storage." />

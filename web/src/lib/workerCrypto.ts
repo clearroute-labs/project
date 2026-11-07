@@ -94,7 +94,6 @@ export class WorkerCryptoProvider implements CryptoProvider {
 
   /** Keep the worker's key references bound to the selected NEAR account. */
   setSubject(accountId: string | undefined): void {
-    if (!accountId) return
     void this.ensureInitialized().then(() => this.call('set_subject', accountId)).catch(() => undefined)
   }
 

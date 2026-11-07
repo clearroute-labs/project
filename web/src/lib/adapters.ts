@@ -65,6 +65,7 @@ class UnavailableProtocolClient implements ProtocolClient {
   getPrivateAccount(_accountId: string): Promise<PrivateAccountView> { return Promise.reject(this.fail()) }
   getHolderEncryptionKey(_accountId: string): Promise<HolderKeyView> { return Promise.reject(this.fail()) }
   getBrokerEncryptionKey(_brokerId: string): Promise<BrokerKeyView> { return Promise.reject(this.fail()) }
+  getVaultBrokerIds(_vaultId: string): Promise<string[]> { return Promise.reject(this.fail()) }
   getBrokerPrivateAccount(_brokerId: string): Promise<PrivateAccountView> { return Promise.reject(this.fail()) }
   getProposal(_proposalId: string): Promise<ProposalSummary> { return Promise.reject(this.fail()) }
   getAuditBundle(_input: { scope: 'loan' | 'token'; subjectId: string }): Promise<AuditCiphertextBundle> { return Promise.reject(this.fail()) }
@@ -75,7 +76,7 @@ class UnavailableProtocolClient implements ProtocolClient {
   createBroker(_input: { vaultId: string; brokerEncryptionKeyId: string; brokerEncryptionKey: string; brokerDebtCeiling: string; possessionProof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   depositExternal(_input: { amount: string; depositId: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   depositToVault(_input: { claimId: string; vaultId: string; amount: string; minShares: string; expiresAt: number }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
-  redeemShares(_input: { vaultId: string; shares: string; minAmount: string; expiresAt: number; soleShareholderWaiver?: boolean; burnWorthless?: boolean }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
+  redeemShares(_input: { vaultId: string; shares: string; minAmount: string; expiresAt: number; soleShareholderWaiver?: boolean; burnWorthless?: boolean; brokerZeroProofs?: PreparedProof[] }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   transferShares(_input: { vaultId: string; receiverId: string; shares: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   requestPayout(_input: { claimId: string; operationId: string; recipientId: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   shield(_input: { claimId: string; amount: string; proof: PreparedProof }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }

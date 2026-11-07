@@ -148,6 +148,42 @@ describe('real Core client mapping', () => {
     expect(JSON.stringify(calls)).not.toContain('plaintext')
   })
 
+  it('passes broker zero proofs for final redemption without inventing an empty proof list', async () => {
+    let captured: { method: string; args: Record<string, unknown> } | undefined
+    const transport: NearContractTransport = {
+      view: async () => { throw new Error('not used') },
+      call: async (method, args) => { captured = { method, args }; return { transactionHash: 'tx', status: 'succeeded', finalized: true } },
+    }
+    const zeroProof: PreparedProof = {
+      ...proof,
+      operationArgs: {
+        zero_proof: {
+          broker_id: '2',
+          combined_proof: { statement: '{}', context: 'aa', proof: 'bb', public_inputs: [], profile_hash: config.cryptoProfileHash },
+        },
+      },
+    }
+    const client = new NearProtocolClient(transport, config)
+    await client.redeemShares({ vaultId: '1', shares: '10', minAmount: '0', expiresAt: 9999999999 })
+    expect(captured?.args).not.toHaveProperty('broker_zero_proofs')
+    await client.redeemShares({ vaultId: '1', shares: '10', minAmount: '0', expiresAt: 9999999999, brokerZeroProofs: [zeroProof] })
+    expect(captured?.args).toMatchObject({ broker_zero_proofs: [{ broker_id: '2', combined_proof: { statement: [123, 125], context: [170], proof: [187] } }] })
+  })
+
+  it('reads the complete finalized broker membership for a vault', async () => {
+    let captured: { method: string; args: Record<string, unknown> } | undefined
+    const transport: NearContractTransport = {
+      view: async <T>(method: string, args?: Record<string, unknown>) => {
+        captured = { method, args: args || {} }
+        return ['2', '9007199254740993'] as T
+      },
+      call: async () => { throw new Error('not used') },
+    }
+    const client = new NearProtocolClient(transport, config)
+    await expect(client.getVaultBrokerIds('7')).resolves.toEqual(['2', '9007199254740993'])
+    expect(captured).toEqual({ method: 'get_vault_broker_ids', args: { vault_id: '7', cursor: '0', limit: 100 } })
+  })
+
   it('maps nested reconciliation proof fields without recursively rewriting Statement JSON', async () => {
     let captured: { method: string; args: Record<string, unknown> } | undefined
     const transport: NearContractTransport = {

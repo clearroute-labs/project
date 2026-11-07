@@ -438,6 +438,12 @@ export class NearProtocolClient implements ProtocolClient {
     throw new ProtocolError({ category: 'UNSUPPORTED_PROFILE', message: 'This Core deployment does not expose the broker encryption public key.' })
   }
 
+  async getVaultBrokerIds(vaultId: string): Promise<string[]> {
+    const values = await this.transport.view<unknown[]>('get_vault_broker_ids', { vault_id: wireId(vaultId), cursor: '0', limit: 100 })
+    if (!Array.isArray(values)) throw new ProtocolError({ category: 'INVALID_ENCODING', message: 'Core returned an invalid vault broker membership list.' })
+    return values.map((value) => decimal(value))
+  }
+
   async getBrokerPrivateAccount(brokerId: string): Promise<PrivateAccountView> {
     const broker = await this.transport.view<RawBroker | null>('get_broker', { broker_id: wireId(brokerId) })
     if (!broker) throw new ProtocolError({ category: 'NOT_REGISTERED', message: 'This broker account is no longer available.' })
@@ -505,8 +511,14 @@ export class NearProtocolClient implements ProtocolClient {
     return this.call('deposit_to_vault', { claim_id: input.claimId, vault_id: input.vaultId, amount: input.amount, min_shares_out: input.minShares, expiry: decimal(input.expiresAt) })
   }
 
-  redeemShares(input: { vaultId: string; shares: string; minAmount: string; expiresAt: number; soleShareholderWaiver?: boolean; burnWorthless?: boolean }): Promise<ActionReceipt> {
-    return this.call('redeem_shares', { vault_id: input.vaultId, shares: input.shares, min_assets_out: input.minAmount, expiry: decimal(input.expiresAt), sole_shareholder_waiver: input.soleShareholderWaiver === true, burn_worthless: input.burnWorthless === true, broker_zero_proofs: [] })
+  redeemShares(input: { vaultId: string; shares: string; minAmount: string; expiresAt: number; soleShareholderWaiver?: boolean; burnWorthless?: boolean; brokerZeroProofs?: PreparedProof[] }): Promise<ActionReceipt> {
+    const args: Record<string, unknown> = { vault_id: input.vaultId, shares: input.shares, min_assets_out: input.minAmount, expiry: decimal(input.expiresAt), sole_shareholder_waiver: input.soleShareholderWaiver === true, burn_worthless: input.burnWorthless === true }
+    if (input.brokerZeroProofs !== undefined) args.broker_zero_proofs = input.brokerZeroProofs.map((proof) => {
+      const mapped = proofArgs(proof).zero_proof
+      if (!mapped || typeof mapped !== 'object' || Array.isArray(mapped)) throw new ProtocolError({ category: 'INVALID_ENCODING', message: 'Broker redemption requires a typed zero-proof envelope.' })
+      return mapped
+    })
+    return this.call('redeem_shares', args)
   }
 
   transferShares(input: { vaultId: string; receiverId: string; shares: string }): Promise<ActionReceipt> {

@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Layout, getRoleFromPath } from './components/Layout'
 import { createBrowserAdapters } from './lib/adapters'
 import { toProtocolError } from './lib/actionState'
@@ -39,6 +39,7 @@ export function App({ adapters: providedAdapters }: { adapters?: AppAdapters }) 
   const [loadError, setLoadError] = useState<ProtocolError | undefined>()
   const [cryptoStatus, setCryptoStatus] = useState<CryptoProviderStatus | null>(null)
   const [, forceWalletUpdate] = useState(0)
+  const refreshSequence = useRef(0)
 
   useEffect(() => adapters.wallet.subscribe(() => forceWalletUpdate((value) => value + 1)), [adapters.wallet])
 
@@ -56,14 +57,29 @@ export function App({ adapters: providedAdapters }: { adapters?: AppAdapters }) 
   const accountId = adapters.wallet.accountId
 
   useEffect(() => {
+    // Do not retain a previous account's public/private dashboard while a new
+    // wallet session is being established. In-flight reads are invalidated by
+    // the sequence guard in refresh below.
+    refreshSequence.current += 1
+    setSnapshot(null)
+    setLoading(false)
+    setCryptoStatus(null)
+    setLoadError(undefined)
+  }, [accountId])
+
+  useEffect(() => {
     const provider = adapters.crypto as typeof adapters.crypto & { setSubject?: (accountId: string | undefined) => void }
     provider.setSubject?.(accountId)
   }, [accountId, adapters.crypto])
 
   const refresh = useCallback(async () => {
+    const sequence = ++refreshSequence.current
     if (!accountId || adapters.wallet.status !== 'connected') {
-      setSnapshot(null)
-      setLoadError(undefined)
+      if (sequence === refreshSequence.current) {
+        setSnapshot(null)
+        setLoading(false)
+        setLoadError(undefined)
+      }
       return
     }
     setLoading(true)
@@ -73,9 +89,11 @@ export function App({ adapters: providedAdapters }: { adapters?: AppAdapters }) 
         adapters.protocol.getDashboard(accountId),
         adapters.crypto.getStatus(),
       ])
+      if (sequence !== refreshSequence.current) return
       setSnapshot(nextSnapshot)
       setCryptoStatus(nextCryptoStatus)
     } catch (error) {
+      if (sequence !== refreshSequence.current) return
       setSnapshot(null)
       setLoadError(toProtocolError(error))
       try {
@@ -84,7 +102,7 @@ export function App({ adapters: providedAdapters }: { adapters?: AppAdapters }) 
         setCryptoStatus(null)
       }
     } finally {
-      setLoading(false)
+      if (sequence === refreshSequence.current) setLoading(false)
     }
   }, [accountId, adapters])
 
@@ -115,7 +133,7 @@ export function App({ adapters: providedAdapters }: { adapters?: AppAdapters }) 
     navigate,
   }), [accountId, adapters, cryptoStatus, loadError, loading, navigate, path, refresh, role, snapshot])
 
-  const page = <PageRouter />
+  const page = <PageRouter key={`${accountId || 'disconnected'}:${role}`} />
   const adapterReady = adapters.wallet.status === 'connected' && Boolean(accountId) && Boolean(adapters.protocol.config.coreAccountId)
 
   return (
