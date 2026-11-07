@@ -59,7 +59,7 @@ view with `authorization_policy`, `confidential_outstanding: U128`, and
 | --- | --- | --- | --- |
 | 'storage_deposit' | optional self account | account | Records NEAR storage budget |
 | 'register_holder' | key ID, public key, possession proof; one aggregate zero proof when rotating | holder | Registers an encryption/authorization epoch |
-| 'register_authorization_key' / 'revoke_authorization_key' | application key, or key ID | direct account | Advances public auth epoch and revokes a key without touching encrypted balances |
+| 'register_authorization_key' / 'revoke_authorization_key' | application key, or key ID | direct account (holder optional) | Advances the account-scoped auth epoch and revokes a key without touching encrypted balances |
 | 'create_vault' | asset phase/share/checkpoint policy | caller | Vault ID |
 | 'create_broker' | vault, broker key, debt cap, PoP | vault owner | Broker ID |
 | 'create_proposal' | parties, schedule, encrypted P/O/Q, agreement digest/signatures | broker owner or borrower | Proposal ID |
@@ -134,6 +134,16 @@ resulting `HolderView.recovery_start_sequence` is the holder history count at
 the rotation boundary; clients replay recovery records from that sequence
 with the new key while retaining earlier records for audit.  Rotation
 preserves the holder's freeze state.
+
+Application authorization keys are account-scoped and do not require a
+`HolderBalance`. `register_authorization_key` and
+`revoke_authorization_key` maintain an independent monotonic epoch registry,
+so vault owners, brokers, and other accounts may authorize relayed operations
+before registering an encryption key. If a holder exists, its public
+application epoch advances in parallel; its encryption-key epoch and
+ciphertext domains remain separate. Re-registering a key ID after revocation
+uses a strictly newer epoch, and other key records remain intact. These
+maintenance calls remain available while the account is controller-frozen.
 
 'Regular' repayment requires the proof to establish 'Q <= X < O' and more
 than one installment remaining. 'Full' repayment requires 'X = O', clears all
@@ -228,7 +238,11 @@ reservation, failure restores the exact original claim, and an unresolved
 'InFlight' operation remains locked. A runtime 'PromiseError::TooLong' is
 treated as successful token transfer and records a fixed hash of the outcome
 marker/observed length; only 'PromiseError::Failed' restores the claim. There
-is no timeout refund or resend.
+is no timeout refund or resend. The immutable callback `call_hash` is the
+SHA-256/Borsh digest of the fixed `payout-nep141-call-v1` tuple
+`(token_account, "ft_transfer", recipient, amount,
+Some("core-payout:<operation_id>"), operation_id, attempt)`; the method and
+memo are not caller-selected and are the same values sent to the token.
 
 ## Read APIs
 
@@ -236,6 +250,7 @@ is no timeout refund or resend.
 'get_broker_tombstone',
 'get_holder', 'get_holder_key', 'get_broker_key', 'get_loan', 'get_archived_loan',
 'get_loan_tombstone', 'get_proposal', 'get_claim', 'get_payout',
+'get_authorization_key', 'get_authorization_epoch',
 'get_checkpoint', 'get_deposit_receipt', 'get_vault_broker_ids(vault_id, cursor, limit)',
 'get_share_balance', 'list_vaults', 'list_brokers', 'list_loans',
 'list_claims', 'list_payouts', 'get_counters', and 'public_totals' expose public

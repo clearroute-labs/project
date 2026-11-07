@@ -167,6 +167,7 @@ enum StorageKey {
     RecoverySubjectCounts,
     BookNodes,
     FrozenAccounts,
+    AuthorizationEpochs,
 }
 
 fn manifest_sha256(value: &str) -> Option<Vec<u8>> {
@@ -378,6 +379,11 @@ pub struct Core {
     pub custody_total: u128,
     pub storage_deposits: LookupMap<AccountId, u128>,
     pub authorization_keys: LookupMap<Vec<u8>, AuthorizationKey>,
+    /// Monotonic application-authorization epoch per account.  This registry
+    /// is independent of holder/encryption registration so vault owners,
+    /// brokers, and other accounts can authorize relayed operations before
+    /// opening a confidential balance.
+    pub authorization_epochs: LookupMap<AccountId, u64>,
     pub verifier_keys: LookupMap<u8, VerifierKeyRecord>,
     pub recovery_sequence: u64,
     pub recovery_records: UnorderedMap<u64, RecoveryRecord>,
@@ -488,6 +494,7 @@ impl Core {
             custody_total: 0,
             storage_deposits: LookupMap::new(StorageKey::StorageDeposits),
             authorization_keys: LookupMap::new(StorageKey::AuthorizationKeys),
+            authorization_epochs: LookupMap::new(StorageKey::AuthorizationEpochs),
             verifier_keys: LookupMap::new(StorageKey::VerifierKeys),
             recovery_sequence: 0,
             recovery_records: UnorderedMap::new(StorageKey::RecoveryRecords),
@@ -754,10 +761,12 @@ impl Core {
             require!(args.zero_proofs.is_empty(), ERR_INVALID_ENCODING);
         }
         require!(!args.proof_of_possession.proof.is_empty(), ERR_BAD_PROOF);
-        let old_epoch = existing
+        let holder_epoch = existing
             .as_ref()
             .map(|h| h.authorization_epoch)
             .unwrap_or(0);
+        let registry_epoch = self.authorization_epochs.get(&owner).unwrap_or(0);
+        let old_epoch = holder_epoch.max(registry_epoch);
         let existing_open_loan_count = existing.as_ref().map(|h| h.open_loan_count).unwrap_or(0);
         require!(existing_open_loan_count == 0, ERR_HAS_OBLIGATIONS);
         let key = EncryptionKey {
@@ -874,6 +883,7 @@ impl Core {
                 frozen,
             },
         );
+        self.authorization_epochs.insert(&owner, &key_epoch);
         self.emit(
             "HolderRegistered",
             json!({"account_id": owner, "authorization_epoch": (old_epoch + 1).to_string()}),
@@ -889,9 +899,14 @@ impl Core {
             ERR_INVALID_ENCODING
         );
         require!(args.public_key.len() == 32, ERR_INVALID_ENCODING);
-        let holder = self.holder_or_panic(&owner);
-        let epoch = holder
-            .authorization_epoch
+        let holder = self.holders.get(&owner);
+        let holder_epoch = holder
+            .as_ref()
+            .map(|holder| holder.authorization_epoch)
+            .unwrap_or(0);
+        let registry_epoch = self.authorization_epochs.get(&owner).unwrap_or(0);
+        let epoch = holder_epoch
+            .max(registry_epoch)
             .checked_add(1)
             .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         let key = AuthorizationKey {
@@ -902,9 +917,11 @@ impl Core {
             nonce: 0,
             revoked: false,
         };
-        let mut updated_holder = holder;
-        updated_holder.authorization_epoch = epoch;
-        self.holders.insert(&owner, &updated_holder);
+        if let Some(mut updated_holder) = holder {
+            updated_holder.authorization_epoch = epoch;
+            self.holders.insert(&owner, &updated_holder);
+        }
+        self.authorization_epochs.insert(&owner, &epoch);
         self.authorization_keys
             .insert(&authorization_key(&owner, args.key_id), &key);
         self.emit(
@@ -924,16 +941,24 @@ impl Core {
             .get(&key_id_bytes)
             .unwrap_or_else(|| env::panic_str(ERR_NOT_FOUND));
         require!(key.owner == owner && !key.revoked, ERR_REPLAY);
-        let mut holder = self.holder_or_panic(&owner);
-        let epoch = holder
-            .authorization_epoch
+        let holder = self.holders.get(&owner);
+        let holder_epoch = holder
+            .as_ref()
+            .map(|holder| holder.authorization_epoch)
+            .unwrap_or(0);
+        let registry_epoch = self.authorization_epochs.get(&owner).unwrap_or(0);
+        let epoch = holder_epoch
+            .max(registry_epoch)
             .checked_add(1)
             .unwrap_or_else(|| env::panic_str(ERR_STALE_STATE));
         key.revoked = true;
         key.epoch = epoch;
-        holder.authorization_epoch = epoch;
+        if let Some(mut updated_holder) = holder {
+            updated_holder.authorization_epoch = epoch;
+            self.holders.insert(&owner, &updated_holder);
+        }
+        self.authorization_epochs.insert(&owner, &epoch);
         self.authorization_keys.insert(&key_id_bytes, &key);
-        self.holders.insert(&owner, &holder);
         self.emit(
             "AuthorizationKeyRevoked",
             json!({"account_id": owner, "key_id": key_id.to_string(), "epoch": epoch.to_string()}),
@@ -944,6 +969,15 @@ impl Core {
     pub fn get_authorization_key(&self, owner: AccountId, key_id: U64) -> Option<AuthorizationKey> {
         self.authorization_keys
             .get(&authorization_key(&owner, key_id.0))
+    }
+
+    pub fn get_authorization_epoch(&self, owner: AccountId) -> U64 {
+        U64(self.authorization_epochs.get(&owner).unwrap_or_else(|| {
+            self.holders
+                .get(&owner)
+                .map(|holder| holder.authorization_epoch)
+                .unwrap_or(0)
+        }))
     }
 
     pub fn create_vault(&mut self, args: CreateVaultArgs) -> U64 {
@@ -5460,13 +5494,17 @@ impl Core {
             ERR_UNAUTHORIZED
         );
         require!(claim.amount > 0, ERR_INVALID_AMOUNT);
-        let call_hash = hash_bytes(&(
-            self.asset.token_account.clone(),
-            args.recipient.clone(),
+        let transfer_method = "ft_transfer";
+        let transfer_memo = format!("core-payout:{}", args.operation_id);
+        let call_hash = payout_call_hash(
+            &self.asset.token_account,
+            transfer_method,
+            &args.recipient,
             claim.amount,
+            Some(&transfer_memo),
             args.operation_id,
-            1u32,
-        ));
+            1,
+        );
         claim.reserved_by = Some(args.operation_id);
         let operation = PayoutOperation {
             operation_id: args.operation_id,
@@ -5498,11 +5536,7 @@ impl Core {
         ext_ft::ext(self.asset.token_account.clone())
             .with_attached_deposit(NearToken::from_yoctonear(1))
             .with_static_gas(PAYOUT_GAS)
-            .ft_transfer(
-                args.recipient,
-                U128(claim.amount),
-                Some(format!("core-payout:{}", args.operation_id)),
-            )
+            .ft_transfer(args.recipient, U128(claim.amount), Some(transfer_memo))
             .then(
                 ext_self::ext(env::current_account_id())
                     .with_static_gas(PAYOUT_GAS)
@@ -7907,6 +7941,31 @@ fn hash_bytes<T: BorshSerialize>(value: &T) -> Vec<u8> {
     Sha256::digest(encoded).to_vec()
 }
 
+/// Hash the exact NEP-141 call Core dispatches for a payout.  The method and
+/// memo are protocol constants at the callsite, but remain explicit in the
+/// digest so a callback cannot be confused with a transfer using a different
+/// method or message.
+fn payout_call_hash(
+    token_account: &AccountId,
+    method: &str,
+    recipient: &AccountId,
+    amount: u128,
+    memo: Option<&str>,
+    operation_id: u64,
+    attempt: u32,
+) -> Vec<u8> {
+    hash_bytes(&(
+        b"payout-nep141-call-v1".to_vec(),
+        token_account.clone(),
+        method.to_string(),
+        recipient.clone(),
+        amount,
+        memo.map(str::to_string),
+        operation_id,
+        attempt,
+    ))
+}
+
 fn recovery_subject_index_key(subject: &str, sequence: u64) -> Vec<u8> {
     hash_bytes(&(
         b"recovery-subject-v1".to_vec(),
@@ -9280,6 +9339,45 @@ mod tests {
     }
 
     #[test]
+    fn payout_call_hash_binds_method_and_message() {
+        let token = account("token.testnet");
+        let recipient = account("recipient.testnet");
+        let expected = payout_call_hash(
+            &token,
+            "ft_transfer",
+            &recipient,
+            10,
+            Some("core-payout:42"),
+            42,
+            1,
+        );
+        assert_ne!(
+            expected,
+            payout_call_hash(
+                &token,
+                "ft_transfer_call",
+                &recipient,
+                10,
+                Some("core-payout:42"),
+                42,
+                1,
+            )
+        );
+        assert_ne!(
+            expected,
+            payout_call_hash(
+                &token,
+                "ft_transfer",
+                &recipient,
+                10,
+                Some("core-payout:43"),
+                42,
+                1,
+            )
+        );
+    }
+
+    #[test]
     fn authorization_epoch_and_nonce_reject_stale_relays() {
         let _guard = test_guard();
         let mut core = init();
@@ -9313,6 +9411,55 @@ mod tests {
             validate_authorization_nonce(&core, &owner, Some(8), 3, 2)
         }));
         assert!(revoked.is_err());
+    }
+
+    #[test]
+    fn authorization_epoch_registry_supports_accounts_without_holders() {
+        let _guard = test_guard();
+        let mut core = init();
+        let owner = account("owner.testnet");
+        let issuer = account("issuer.testnet");
+        testing_env!(
+            VMContextBuilder::new()
+                .current_account_id(account("core.testnet"))
+                .predecessor_account_id(issuer)
+                .build()
+        );
+        core.set_holder_frozen(owner.clone(), true);
+        testing_env!(
+            VMContextBuilder::new()
+                .current_account_id(account("core.testnet"))
+                .predecessor_account_id(owner.clone())
+                .build()
+        );
+        core.register_authorization_key(RegisterAuthorizationKeyArgs {
+            key_id: 7,
+            public_key: vec![7; 32],
+            proof: None,
+        });
+        core.register_authorization_key(RegisterAuthorizationKeyArgs {
+            key_id: 8,
+            public_key: vec![8; 32],
+            proof: None,
+        });
+        core.revoke_authorization_key(U64(8));
+        core.register_authorization_key(RegisterAuthorizationKeyArgs {
+            key_id: 8,
+            public_key: vec![9; 32],
+            proof: None,
+        });
+
+        assert!(core.holders.get(&owner).is_none());
+        assert_eq!(core.authorization_epochs.get(&owner), Some(4));
+        assert_eq!(core.get_authorization_epoch(owner.clone()), U64(4));
+        let first = core.get_authorization_key(owner.clone(), U64(7)).unwrap();
+        assert_eq!(first.epoch, 1);
+        assert!(!first.revoked);
+        let current = core.get_authorization_key(owner.clone(), U64(8)).unwrap();
+        assert_eq!(current.epoch, 4);
+        assert_eq!(current.public_key, vec![9; 32]);
+        assert!(!current.revoked);
+        assert!(core.get_freeze_status(Some(owner)).holder_frozen);
     }
 
     #[test]
