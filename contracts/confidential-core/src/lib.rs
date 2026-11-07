@@ -6409,7 +6409,7 @@ impl Core {
                         post_accounting_version,
                         broker.book_version,
                         checkpoint_id,
-                        broker.accounting_version,
+                        checkpoint.accounting_version,
                         0,
                         0,
                         0,
@@ -7477,10 +7477,10 @@ fn validate_loan_schedule(
         .checked_mul(u64::from(payment_count))
         .and_then(|offset| offset.checked_add(grace_period))
         .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
+    let schedule_end = start
+        .checked_add(scheduled_offset)
+        .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
     if let (VaultKind::ClosedEnded, Some(phases)) = (&vault.kind, &vault.phase_times) {
-        let schedule_end = start
-            .checked_add(scheduled_offset)
-            .unwrap_or_else(|| env::panic_str(ERR_INVALID_AMOUNT));
         let latest_due = phases
             .redemption_start
             .checked_sub(phases.redemption_buffer)
@@ -8518,6 +8518,14 @@ mod tests {
             validate_loan_schedule(&vault, 250, u64::MAX, 2, 0);
         }));
         assert!(arithmetic_overflow.is_err());
+
+        let mut open_vault = vault.clone();
+        open_vault.kind = VaultKind::OpenEnded;
+        open_vault.phase_times = None;
+        let open_schedule_overflow = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            validate_loan_schedule(&open_vault, u64::MAX - 1, 2, 1, 0);
+        }));
+        assert!(open_schedule_overflow.is_err());
     }
 
     #[test]
@@ -8563,13 +8571,24 @@ mod tests {
 
         // Once the risk snapshot is reconciled, a positive provision is not a
         // new pending boundary.  The inline keeper context must therefore be
-        // immediately eligible and derive the next high-water checkpoint ID.
+        // immediately eligible and may reuse a current checkpoint.
         let mut settled = core.brokers.get(&7).unwrap();
         settled.accounting_pending = false;
         settled.accounting_pending_since = 0;
         settled.impairment_provision = 5;
-        settled.reconciliation_checkpoint_id = None;
+        // An otherwise valid checkpoint may predate a later accounting-only
+        // update.  Inline context must retain its checkpoint accounting slot,
+        // matching settle's mutation context rather than the newer broker
+        // accounting version.
+        settled.accounting_version = 1;
+        settled.reconciliation_checkpoint_id = Some(2);
         core.brokers.insert(&7, &settled);
+        testing_env!(
+            VMContextBuilder::new()
+                .predecessor_account_id(owner)
+                .block_timestamp(120_000_000_000)
+                .build()
+        );
         let context = core
             .get_proof_context(ProofContextArgs {
                 operation: "settle-reconcile".to_string(),
@@ -8583,7 +8602,10 @@ mod tests {
                 amount: Some(U128(1)),
             })
             .unwrap();
-        assert_eq!(context.ids, vec![7, 3]);
+        assert_eq!(context.ids, vec![7, 2]);
+        let operation_context: OperationContext =
+            serde_json::from_slice(&context.operation_context).unwrap();
+        assert_eq!(operation_context.expected_versions[4], 0);
     }
 
     #[test]
