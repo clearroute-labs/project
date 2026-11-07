@@ -91,12 +91,12 @@ export function ActionFeedback({ state }: { state: ActionState }) {
     )
   }
   const copy: Record<string, string> = {
-    preparing: 'Preparing a proof-bound operation…',
+    preparing: 'Preparing a secure operation…',
     awaiting_wallet: 'Awaiting wallet authorization…',
     submitted: 'Submitted; waiting for finality…',
     pending: 'Submitted; the operation remains pending on-chain.',
   }
-  return <div className="action-feedback action-pending" role="status"><span className="button-spinner" aria-hidden="true" /><div><strong>{state.label || 'Action'}</strong><p>{copy[state.phase] || 'Working…'} No success is shown until the adapter reports finality.</p></div></div>
+  return <div className="action-feedback action-pending" role="status"><span className="button-spinner" aria-hidden="true" /><div><strong>{state.label || 'Action'}</strong><p>{copy[state.phase] || 'Working…'} Status updates after the network confirms the operation.</p></div></div>
 }
 
 export function Notice({ tone = 'info', title, children }: { tone?: 'info' | 'warning' | 'danger' | 'success'; title?: string; children: ReactNode }) {

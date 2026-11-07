@@ -68,7 +68,7 @@ class UnavailableProtocolClient implements ProtocolClient {
   getVaultBrokerIds(_vaultId: string): Promise<string[]> { return Promise.reject(this.fail()) }
   getBrokerPrivateAccount(_brokerId: string): Promise<PrivateAccountView> { return Promise.reject(this.fail()) }
   getProposal(_proposalId: string): Promise<ProposalSummary> { return Promise.reject(this.fail()) }
-  getAuditBundle(_input: { scope: 'loan' | 'token'; subjectId: string }): Promise<AuditCiphertextBundle> { return Promise.reject(this.fail()) }
+  getAuditBundle(_input: { scope: 'loan' | 'token'; subjectId: string; readerRole?: 'issuer' | 'token_auditor' }): Promise<AuditCiphertextBundle> { return Promise.reject(this.fail()) }
   registerHolder(_input: KeyRegistration): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   registerAuthorizationKey(_input: AuthorizationKeyRegistration): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
   revokeAuthorizationKey(_input: { keyId: string }): Promise<ActionReceipt> { return Promise.reject(this.fail()) }
@@ -133,12 +133,12 @@ class UnavailableCryptoProvider implements CryptoProvider {
     return {
       available: false,
       profileHash: this.config.cryptoProfileHash || undefined,
-      message: 'The browser crypto worker and pinned profile artifacts are not loaded.',
+      message: 'Secure account features are unavailable in this deployment.',
     }
   }
 
   private fail(): never {
-    throw unavailable('The browser crypto worker is unavailable. No private operation was submitted.')
+    throw unavailable('Secure account features are unavailable. No private operation was submitted.')
   }
 
   exportWalletMaterial(): Promise<never> { return Promise.reject(this.fail()) }

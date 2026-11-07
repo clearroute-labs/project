@@ -42,7 +42,10 @@ function proofArguments(operation: ProvenOperation): Record<string, unknown> {
     context: proofBytes(operation.envelope.context_digest, 'proof context'),
     proof: proofBytes(operation.envelope.proof, 'proof'),
     statement_kind: kind,
-    public_inputs: operation.envelope.public_inputs.map((value, index) => proofBytes(value, `public_inputs[${index}]`)),
+    // Core derives the public-input slots from the canonical statement and
+    // deployment profile. Repeating them in the call payload only inflates
+    // transactions and creates a second source of truth.
+    public_inputs: [],
     verifying_key_hash: proofBytes(operation.envelope.verifying_key_hash, 'verifying key hash'),
     profile_hash: proofBytes(operation.envelope.profile_hash, 'profile hash'),
   };

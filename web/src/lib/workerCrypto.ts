@@ -43,7 +43,7 @@ export class WorkerCryptoProvider implements CryptoProvider {
   constructor(worker: Worker, options: WorkerCryptoOptions) {
     this.worker = worker
     this.options = options
-    this.status = { available: false, profileHash: options.expectedProfileHash, artifactHash: options.expectedArtifactHash, message: 'Pinned browser crypto runtime is loading.' }
+    this.status = { available: false, profileHash: options.expectedProfileHash, artifactHash: options.expectedArtifactHash, message: 'Secure account protection is loading.' }
     worker.addEventListener('message', (event: MessageEvent<WorkerResponse>) => this.onMessage(event.data))
     worker.addEventListener('error', () => {
       for (const pending of this.pending.values()) pending.reject(new Error('Crypto worker stopped unexpectedly.'))
@@ -105,7 +105,7 @@ export class WorkerCryptoProvider implements CryptoProvider {
         Object.assign(this.status, { ...status, available: false, message: 'Crypto profile or manifest hash mismatch.' })
       } else Object.assign(this.status, status)
     } catch (error) {
-      Object.assign(this.status, { available: false, message: error instanceof Error ? error.message : 'Pinned browser crypto runtime is unavailable.' })
+      Object.assign(this.status, { available: false, message: error instanceof Error ? error.message : 'Secure account protection is unavailable.' })
     }
     return { ...this.status }
   }

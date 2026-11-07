@@ -98,8 +98,8 @@ export function Layout({ role, path, onNavigate, onRoleChange, wallet, children,
           })}
         </nav>
         <div className="sidebar-footer">
-          <div className="security-note"><span className="lock-mark">⌁</span><div><strong>Private by design</strong><p>Amounts stay encrypted; proofs bind every state change.</p></div></div>
-          <p className="sidebar-version">Protocol UI · profile-aware</p>
+          <div className="security-note"><span className="lock-mark">⌁</span><div><strong>Private by design</strong><p>Amounts stay encrypted; actions use current protocol state.</p></div></div>
+          <p className="sidebar-version">Confidential credit workspace</p>
         </div>
       </aside>
       <div className="main-column">
@@ -114,7 +114,7 @@ export function Layout({ role, path, onNavigate, onRoleChange, wallet, children,
           </div>
         </header>
         <main className="main-content">
-          {!adapterReady ? <Notice tone="warning" title="Connect a real NEAR wallet to continue.">This workspace is read-only while disconnected. No balances, claims, proofs or transaction results are simulated.</Notice> : null}
+          {!adapterReady ? <Notice tone="warning" title="Connect your NEAR wallet to continue.">Connect a wallet to view balances, loans and claims and authorize actions.</Notice> : null}
           {walletError ? <Notice tone="danger" title="Wallet connection unavailable">{walletError}</Notice> : null}
           {notice ? <Notice tone="info">{notice}</Notice> : null}
           {children}

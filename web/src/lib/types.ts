@@ -261,6 +261,9 @@ export interface AuditCiphertextBundle {
   scope: 'loan' | 'token'
   subjectId: string
   auditorKeyId: string
+  /** Token audits recover one registered account/broker through a declared mirror reader. */
+  subjectKind?: 'holder' | 'broker'
+  readerRole?: 'issuer' | 'token_auditor'
   cryptoProfileHash: string
   ciphertexts: Record<string, string>
   commitments: Record<string, string>
@@ -460,7 +463,7 @@ export interface ProtocolClient {
   getVaultBrokerIds(vaultId: string): Promise<string[]>
   getBrokerPrivateAccount(brokerId: string): Promise<PrivateAccountView>
   getProposal(proposalId: string): Promise<ProposalSummary>
-  getAuditBundle(input: { scope: 'loan' | 'token'; subjectId: string }): Promise<AuditCiphertextBundle>
+  getAuditBundle(input: { scope: 'loan' | 'token'; subjectId: string; readerRole?: 'issuer' | 'token_auditor' }): Promise<AuditCiphertextBundle>
   registerHolder(input: KeyRegistration): Promise<ActionReceipt>
   registerAuthorizationKey(input: AuthorizationKeyRegistration): Promise<ActionReceipt>
   revokeAuthorizationKey(input: { keyId: string }): Promise<ActionReceipt>

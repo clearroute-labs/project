@@ -11,7 +11,7 @@ export function PageHeader({ eyebrow, title, description, action }: { eyebrow: s
 export function ConnectionGate({ role, children }: { role: Role; children: ReactNode }) {
   const { accountId, adapters, loading, loadError, refresh } = useAppContext()
   if (!accountId || adapters.wallet.status !== 'connected') {
-    return <><PageHeader eyebrow={role} title="Your workspace is ready" description="Connect a NEAR wallet to read finalized protocol state and authorize actions." /><Card><EmptyState icon="⌁" title="Wallet not connected" description="No balances or activity are shown until a real wallet session is active. This keeps disconnected demos honest." action={<Button onClick={() => void adapters.wallet.connect()}>Connect NEAR wallet</Button>} /></Card></>
+    return <><PageHeader eyebrow={role} title="Your workspace is ready" description="Connect a NEAR wallet to view finalized account state and authorize actions." /><Card><EmptyState icon="⌁" title="Connect your NEAR wallet" description="Connect a wallet to view balances, loans and activity." action={<Button onClick={() => void adapters.wallet.connect()}>Connect NEAR wallet</Button>} /></Card></>
   }
   if (loading) return <LoadingState label="Reading finalized Core state…" />
   if (loadError) return <ErrorState error={loadError} onRetry={() => void refresh()} />

@@ -44,6 +44,17 @@ describe('real Core client mapping', () => {
     expect(JSON.stringify(captured?.args)).not.toContain('plaintext')
   })
 
+  it('lets Core derive public-input slots instead of duplicating them in call arguments', async () => {
+    let captured: { method: string; args: Record<string, unknown> } | undefined
+    const transport: NearContractTransport = {
+      view: async () => { throw new Error('not used') },
+      call: async (method, args) => { captured = { method, args }; return { transactionHash: 'tx', status: 'succeeded', finalized: true } },
+    }
+    const client = new NearProtocolClient(transport, config)
+    await client.confidentialSend({ senderAccountId: 'alice.testnet', destinationAccountId: 'bob.testnet', expectedSpendingVersion: '4', proof: { ...proof, publicInputs: ['cc'] } })
+    expect((captured?.args.proof as Record<string, unknown>).public_inputs).toEqual([])
+  })
+
   it('uses the Core API names and finality status for public actions', async () => {
     const calls: string[] = []
     const argsByMethod = new Map<string, Record<string, unknown>>()
@@ -111,14 +122,13 @@ describe('real Core client mapping', () => {
     let captured: { method: string; args: Record<string, unknown> } | undefined
     const transport: NearContractTransport = {
       view: async <T>(method: string) => {
-        if (method === 'get_broker') return { authorization_epoch: '11' } as T
         if (method === 'get_holder') return { authorization_epoch: '12' } as T
         throw new Error(`unexpected view ${method}`)
       },
       call: async (method, args) => { captured = { method, args }; return { transactionHash: 'tx', status: 'succeeded', finalized: true } },
     }
     await new NearProtocolClient(transport, config).createProposal({ brokerId: '2', borrowerId: 'borrower.testnet', vaultId: '1', borrowerKeyId: '3', brokerKeyId: '4', auditorKeyId: '5', auditorPublicKey: 'aa'.repeat(32), paymentCount: 4, paymentIntervalSeconds: 60, gracePeriodSeconds: 30, encryptedPrincipal: ['aa', 'bb', 'cc', 'dd', 'ee'], encryptedOwed: ['ff', '11', '22'], encryptedPayment: ['33', '44', '55'], principalCommitment: '66', owedCommitment: '77', paymentCommitment: '88', encryptedAgreement: '99', termsDigest: '', brokerSignature: '', borrowerSignature: '', expiresAt: 9999999999 })
-    expect(captured).toEqual({ method: 'create_proposal', args: expect.objectContaining({ broker_authorization_epoch: '11', borrower_authorization_epoch: '12', broker_authorization_nonce: '0', borrower_authorization_nonce: '0' }) })
+    expect(captured).toEqual({ method: 'create_proposal', args: expect.objectContaining({ broker_authorization_epoch: '0', borrower_authorization_epoch: '12', broker_authorization_nonce: '0', borrower_authorization_nonce: '0' }) })
     expect(captured?.args).not.toHaveProperty('broker_authorization_key_id')
     expect(captured?.args).not.toHaveProperty('borrower_authorization_key_id')
   })
@@ -243,6 +253,44 @@ describe('real Core client mapping', () => {
     const client = new NearProtocolClient(transport, config)
     await expect(client.getProposal('12')).rejects.toThrow(/proposal/i)
     expect(captured).toEqual({ method: 'get_proposal', args: { proposal_id: '12' } })
+  })
+
+  it('maps a scoped holder token-audit subject to finalized Core reads', async () => {
+    const calls: Array<{ method: string; args: Record<string, unknown> }> = []
+    const transport: NearContractTransport = {
+      view: async <T>(method: string, args?: Record<string, unknown>) => {
+        calls.push({ method, args: args || {} })
+        if (method === 'get_asset_profile') return { token_account: 'token.testnet', decimals: 6, controller_account: 'issuer.testnet', crypto_profile_hash: Array(32).fill(1), token_trust_policy: 'fixed', issuer_key: { key_id: '4', public_key: [1] }, token_auditor_key: { key_id: '5', public_key: [2] } } as T
+        if (method === 'get_holder') return { owner: 'alice.testnet', spending_version: '7' } as T
+        throw new Error(`unexpected view ${method}`)
+      },
+      call: async () => { throw new Error('not used') },
+    }
+    const bundle = await new NearProtocolClient(transport, config).getAuditBundle({ scope: 'token', subjectId: 'holder:alice.testnet', readerRole: 'token_auditor' })
+    expect(bundle).toMatchObject({ scope: 'token', subjectId: 'alice.testnet', subjectKind: 'holder', readerRole: 'token_auditor', auditorKeyId: '5', versions: { spending: '7' } })
+    expect(calls).toEqual([
+      { method: 'get_asset_profile', args: {} },
+      { method: 'get_holder', args: { owner: 'alice.testnet' } },
+    ])
+  })
+
+  it('keeps broker token-audit IDs canonical and never lists unbounded subjects', async () => {
+    const calls: Array<{ method: string; args: Record<string, unknown> }> = []
+    const transport: NearContractTransport = {
+      view: async <T>(method: string, args?: Record<string, unknown>) => {
+        calls.push({ method, args: args || {} })
+        if (method === 'get_asset_profile') return { token_account: 'token.testnet', decimals: 6, controller_account: 'issuer.testnet', crypto_profile_hash: Array(32).fill(1), token_trust_policy: 'fixed', issuer_key: { key_id: '4', public_key: [1] }, token_auditor_key: { key_id: '5', public_key: [2] } } as T
+        if (method === 'get_broker') return { broker_id: '9', spending_version: '12' } as T
+        throw new Error(`unexpected view ${method}`)
+      },
+      call: async () => { throw new Error('not used') },
+    }
+    const bundle = await new NearProtocolClient(transport, config).getAuditBundle({ scope: 'token', subjectId: 'broker:9', readerRole: 'issuer' })
+    expect(bundle).toMatchObject({ scope: 'token', subjectId: '9', subjectKind: 'broker', readerRole: 'issuer', auditorKeyId: '4', versions: { spending: '12' } })
+    expect(calls).toEqual([
+      { method: 'get_asset_profile', args: {} },
+      { method: 'get_broker', args: { broker_id: '9' } },
+    ])
   })
 })
 

@@ -260,7 +260,8 @@ td small { display: block; color: var(--muted-2); font-size: .66rem; margin-top:
   .app-shell { display: block; }
   .sidebar { width: 100%; height: auto; position: static; border-right: 0; border-bottom: 1px solid var(--line); padding: 14px 18px 11px; display: block; }
   .sidebar .brand { display: none; }
-  .sidebar-role { display: none; }
+  .sidebar-role { display: block; padding: 0 0 10px; }
+  .sidebar-role .role-description { display: none; }
   .primary-nav { display: flex; overflow-x: auto; gap: 3px; scrollbar-width: none; }
   .primary-nav::-webkit-scrollbar { display: none; }
   .nav-item { white-space: nowrap; padding: 8px 10px; font-size: .73rem; }

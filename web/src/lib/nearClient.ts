@@ -77,7 +77,9 @@ function proofArgs(proof: PreparedProof): Record<string, unknown> {
       context: hexToBytes(proof.context),
       proof: hexToBytes(proof.proof),
       ...(proof.statementKind === undefined ? {} : { statement_kind: proof.statementKind }),
-      public_inputs: proof.publicInputs.map(hexToBytes),
+      // Core derives public-input slots from the canonical statement/profile;
+      // do not resend the envelope copy in signed call arguments.
+      public_inputs: [],
       verifying_key_hash: verifyingKeyHash ? hexToBytes(verifyingKeyHash) : [],
       profile_hash: hexToBytes(proof.profileHash),
     },
@@ -148,7 +150,8 @@ function encodeProofEnvelope(value: unknown): Record<string, unknown> {
     context: hexToBytes(candidate.context),
     proof: hexToBytes(candidate.proof),
     ...(candidate.statement_kind === undefined ? {} : { statement_kind: candidate.statement_kind }),
-    public_inputs: publicInputs.map((item) => hexToBytes(item)),
+    // Nested envelopes follow the same Core-derived public-input rule.
+    public_inputs: [],
     verifying_key_hash: candidate.verifying_key_hash === undefined ? [] : hexToBytes(String(candidate.verifying_key_hash)),
     profile_hash: candidate.profile_hash === undefined ? [] : hexToBytes(String(candidate.profile_hash)),
   }
@@ -208,6 +211,29 @@ function wireId(value: string): string {
   if (!/^\d+$/.test(value)) throw new TypeError('Core IDs must be canonical decimal strings')
   if (value.length > 1 && value.startsWith('0')) throw new TypeError('Core IDs must be canonical decimal strings')
   return value
+}
+
+type TokenAuditReaderRole = 'issuer' | 'token_auditor'
+type TokenAuditSubject = { kind: 'holder' | 'broker'; id: string }
+
+/**
+ * Token-auditor recovery is scoped to one registered subject.  Core has no
+ * unbounded token-audit listing endpoint, so the UI carries an explicit
+ * `holder:<account>` or `broker:<decimal-id>` subject selector.  Keeping the
+ * discriminator in the value prevents an account ID from being confused with
+ * a broker ID and keeps all Core IDs canonical at the RPC boundary.
+ */
+function parseTokenAuditSubject(value: string): TokenAuditSubject {
+  const separator = value.indexOf(':')
+  if (separator <= 0 || separator === value.length - 1) throw new ProtocolError({ category: 'INVALID_ENCODING', message: 'Choose a holder account or broker ID for token audit.' })
+  const kind = value.slice(0, separator)
+  const id = value.slice(separator + 1)
+  if (kind === 'holder') {
+    if (id.length > 128 || /[\u0000-\u001f\u007f]/.test(id)) throw new ProtocolError({ category: 'INVALID_ENCODING', message: 'The holder account identifier is invalid.' })
+    return { kind, id }
+  }
+  if (kind === 'broker') return { kind, id: wireId(id) }
+  throw new ProtocolError({ category: 'INVALID_ENCODING', message: 'Token audit subjects must be a holder account or broker ID.' })
 }
 
 function safeNumber(value: unknown, label: string): number {
@@ -456,8 +482,33 @@ export class NearProtocolClient implements ProtocolClient {
     return mapProposal(proposal)
   }
 
-  async getAuditBundle(input: { scope: 'loan' | 'token'; subjectId: string }): Promise<AuditCiphertextBundle> {
-    if (input.scope !== 'loan') throw new ProtocolError({ category: 'UNSUPPORTED_PROFILE', message: 'Token-auditor ciphertext views require the configured audit service; Core exposes no token audit listing view.' })
+  async getAuditBundle(input: { scope: 'loan' | 'token'; subjectId: string; readerRole?: TokenAuditReaderRole }): Promise<AuditCiphertextBundle> {
+    if (input.scope === 'token') {
+      const subject = parseTokenAuditSubject(input.subjectId)
+      const asset = await this.getAssetProfile()
+      const readerRole: TokenAuditReaderRole = input.readerRole ?? 'token_auditor'
+      const record = subject.kind === 'holder'
+        ? await this.transport.view<RawHolder | null>('get_holder', { owner: subject.id })
+        : await this.transport.view<RawBroker | null>('get_broker', { broker_id: subject.id })
+      if (!record) throw new ProtocolError({ category: 'NOT_REGISTERED', message: `The selected ${subject.kind === 'holder' ? 'holder account' : 'broker'} is not registered.` })
+      const readerKeyId = readerRole === 'issuer' ? asset.issuerKeyId : asset.tokenAuditorKeyId
+      const spendingVersion = decimal(record.spending_version)
+      return {
+        scope: 'token',
+        subjectId: subject.id,
+        subjectKind: subject.kind,
+        readerRole,
+        auditorKeyId: readerKeyId,
+        cryptoProfileHash: this.config.cryptoProfileHash,
+        // Mirror ciphertexts are recovered from the finalized history by the
+        // browser wallet. Do not copy them into a generic audit bundle or
+        // expose a second, unverified decryption path in the UI.
+        ciphertexts: {},
+        commitments: {},
+        versions: { spending: spendingVersion },
+        fetchedAt: Date.now(),
+      }
+    }
     const loan = await this.transport.view<RawLoan | null>('get_loan', { loan_id: wireId(input.subjectId) })
     if (!loan) throw new ProtocolError({ category: 'LOAN_CLOSED', message: 'The requested loan is not available.' })
     const ciphertexts: Record<string, string> = {}
@@ -559,16 +610,20 @@ export class NearProtocolClient implements ProtocolClient {
   }
 
   async createProposal(input: { brokerId: string; borrowerId: string; vaultId: string; borrowerKeyId: string; brokerKeyId: string; borrowerAuthorizationKeyId?: string; brokerAuthorizationKeyId?: string; auditorKeyId: string; auditorPublicKey: string; paymentCount: number; paymentIntervalSeconds: number; gracePeriodSeconds: number; encryptedPrincipal: string[]; encryptedOwed: string[]; encryptedPayment: string[]; principalCommitment: string; owedCommitment: string; paymentCommitment: string; encryptedAgreement: string; termsDigest: string; brokerSignature: string; borrowerSignature: string; brokerAuthorizationEpoch?: string; borrowerAuthorizationEpoch?: string; brokerAuthorizationNonce?: string; borrowerAuthorizationNonce?: string; expiresAt: number }): Promise<ActionReceipt> {
-    let brokerEpoch = input.brokerAuthorizationEpoch
+    // A broker without an application authorization key uses direct owner
+    // authorization, whose epoch is defined as zero. The broker's encryption
+    // key epoch must never be substituted for this value.
+    let brokerEpoch = input.brokerAuthorizationKeyId ? input.brokerAuthorizationEpoch : '0'
     let borrowerEpoch = input.borrowerAuthorizationEpoch
-    if (!brokerEpoch || !borrowerEpoch) {
-      const [broker, borrower] = await Promise.all([
-        this.transport.view<RawBroker | null>('get_broker', { broker_id: wireId(input.brokerId) }),
-        this.transport.view<RawHolder | null>('get_holder', { owner: input.borrowerId }),
-      ])
-      if (!broker || broker.authorization_epoch === undefined || !borrower || borrower.authorization_epoch === undefined) throw new ProtocolError({ category: 'STALE_STATE', message: 'Registered authorization epochs could not be read from finalized Core state.' })
-      brokerEpoch = decimal(broker.authorization_epoch)
+    if (!borrowerEpoch) {
+      const borrower = await this.transport.view<RawHolder | null>('get_holder', { owner: input.borrowerId })
+      if (!borrower || borrower.authorization_epoch === undefined) throw new ProtocolError({ category: 'STALE_STATE', message: 'The borrower authorization epoch could not be read from finalized Core state.' })
       borrowerEpoch = decimal(borrower.authorization_epoch)
+    }
+    if (input.brokerAuthorizationKeyId && !brokerEpoch) {
+      const broker = await this.transport.view<RawBroker | null>('get_broker', { broker_id: wireId(input.brokerId) })
+      if (!broker || broker.authorization_epoch === undefined) throw new ProtocolError({ category: 'STALE_STATE', message: 'The broker authorization epoch could not be read from finalized Core state.' })
+      brokerEpoch = decimal(broker.authorization_epoch)
     }
     return this.call('create_proposal', { borrower: input.borrowerId, broker_id: input.brokerId, vault_id: input.vaultId, borrower_key_id: input.borrowerKeyId, broker_key_id: input.brokerKeyId, ...(input.brokerAuthorizationKeyId ? { broker_authorization_key_id: input.brokerAuthorizationKeyId } : {}), ...(input.borrowerAuthorizationKeyId ? { borrower_authorization_key_id: input.borrowerAuthorizationKeyId } : {}), loan_auditor_key_id: input.auditorKeyId, loan_auditor_public_key: hexToBytes(input.auditorPublicKey), payment_count: input.paymentCount, payment_interval: decimal(input.paymentIntervalSeconds), grace_period: decimal(input.gracePeriodSeconds), expiry: decimal(input.expiresAt), principal_ciphertexts: input.encryptedPrincipal.map(hexToBytes), initial_owed_ciphertexts: input.encryptedOwed.map(hexToBytes), periodic_payment_ciphertexts: input.encryptedPayment.map(hexToBytes), principal_commitment: hexToBytes(input.principalCommitment), owed_commitment: hexToBytes(input.owedCommitment), payment_commitment: hexToBytes(input.paymentCommitment), agreement_digest: input.termsDigest.trim() ? hexToBytes(input.termsDigest) : [], broker_signature: optionalHexToBytes(input.brokerSignature), borrower_signature: optionalHexToBytes(input.borrowerSignature), broker_authorization_epoch: brokerEpoch, borrower_authorization_epoch: borrowerEpoch, broker_authorization_nonce: input.brokerAuthorizationNonce || '0', borrower_authorization_nonce: input.borrowerAuthorizationNonce || '0' })
   }
