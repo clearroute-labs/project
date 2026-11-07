@@ -86,6 +86,44 @@ async function inspectOptionalCredentialFlow(page) {
   }
 }
 
+function finalizedHash(text, action) {
+  const match = text.match(/Transaction\s+([A-Za-z0-9]+)\.?/)
+  if (!match) throw new Error(`${action} did not expose a finalized transaction hash.`)
+  return match[1]
+}
+
+async function waitForFinalizedAction(page, action) {
+  const feedback = page.locator('.action-feedback').filter({ hasText: /finalized/i }).last()
+  await visible(feedback, `${action} must report a finalized action state.`)
+  return finalizedHash(await feedback.innerText(), action)
+}
+
+/** Optional connected sandbox flow using only rendered product forms. */
+async function inspectConnectedPublicFlow(page) {
+  if (process.env.UI_RUN_PUBLIC_FLOW !== '1') return
+  const evidence = { baseUrl, generatedAt: new Date().toISOString(), actions: [] }
+  const record = (name, txHash) => evidence.actions.push({ name, txHash, expected: 'finalized' })
+  await visible(page.getByRole('button', { name: 'Vaults', exact: true }), 'Connected lender navigation should expose vault actions.')
+  await page.getByRole('button', { name: 'Vaults', exact: true }).click()
+  await page.getByLabel('Token amount (6 decimals)').fill(process.env.UI_PUBLIC_DEPOSIT_AMOUNT || '0.0001')
+  await page.getByRole('button', { name: 'Send token & create claim', exact: true }).click()
+  record('token ingress → public claim', await waitForFinalizedAction(page, 'Token ingress'))
+  await page.getByLabel('Public claim').selectOption({ index: 1 })
+  await page.locator('#deposit-vault').selectOption({ index: 1 })
+  await page.getByLabel(/Claim amount \(6 decimals\)/).fill(process.env.UI_PUBLIC_DEPOSIT_AMOUNT || '0.0001')
+  await page.getByLabel('Minimum shares').fill('0')
+  await page.getByRole('button', { name: 'Deposit claim', exact: true }).click()
+  record('public claim → vault shares', await waitForFinalizedAction(page, 'Claim deposit'))
+  await page.getByRole('button', { name: 'Claims & payouts', exact: true }).click()
+  await page.getByLabel('Claim').selectOption({ index: 1 })
+  await page.getByLabel('Recipient account').fill(process.env.UI_PAYOUT_RECIPIENT || 'recipient.test.near')
+  await page.getByRole('button', { name: 'Reserve payout', exact: true }).click()
+  record('claim payout reservation', await waitForFinalizedAction(page, 'Payout reservation'))
+  fs.mkdirSync(screenshotDir, { recursive: true })
+  fs.writeFileSync(path.join(screenshotDir, 'connected-public-flow.json'), `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o644 })
+  console.log(`Connected public flow passed at ${baseUrl}; public evidence: ${path.join(screenshotDir, 'connected-public-flow.json')}`)
+}
+
 const browser = await chromium.launch({ channel: process.env.UI_BROWSER_CHANNEL || 'chromium', headless: !headed })
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
 const pageErrors = []
@@ -96,6 +134,7 @@ try {
   await inspectViewport(page, { width: 1440, height: 900 }, 'harness-desktop.png')
   await inspectViewport(page, { width: 390, height: 844 }, 'harness-mobile.png')
   await inspectOptionalCredentialFlow(page)
+  await inspectConnectedPublicFlow(page)
   check(pageErrors.length === 0, `Browser page errors: ${pageErrors.join('; ')}`)
   console.log(`UI smoke flow passed at ${baseUrl}`)
   console.log(`Screenshots: ${path.join(screenshotDir, 'harness-desktop.png')}, ${path.join(screenshotDir, 'harness-mobile.png')}`)
