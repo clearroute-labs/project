@@ -26,25 +26,13 @@ import {
   type WalletAdapter,
 } from './types'
 import { createRpcProtocolClient } from './nearClient'
-import { isSandboxCredentialDeployment, NearWalletSelectorSession, SandboxCredentialWallet } from './nearWallet'
+import { isSandboxCredentialDeployment, SandboxCredentialWallet } from './nearWallet'
+import { NearConnectWallet } from './nearConnectWallet'
+import { privyConfiguration, privyWalletManifest } from './privyConfig'
 import { createWorkerCryptoProvider } from './workerCrypto'
 
-export function deploymentConfigFromEnv(): DeploymentConfig {
-  return {
-    networkId: import.meta.env.VITE_NETWORK_ID || 'testnet',
-    coreAccountId: import.meta.env.VITE_CORE_ACCOUNT_ID || '',
-    tokenAccountId: import.meta.env.VITE_TOKEN_ACCOUNT_ID || '',
-    rpcUrl: import.meta.env.VITE_RPC_URL || 'https://rpc.testnet.near.org',
-    allowInsecureLocalhost: import.meta.env.VITE_ALLOW_INSECURE_LOCALHOST === 'true',
-    cryptoProfileHash: import.meta.env.VITE_CRYPTO_PROFILE_HASH || '',
-    cryptoArtifactHash: import.meta.env.VITE_CRYPTO_ARTIFACT_HASH || undefined,
-    cryptoManifestUrl: import.meta.env.VITE_CRYPTO_MANIFEST_URL || '/crypto/manifest.json',
-    cryptoArtifactBaseUrl: import.meta.env.VITE_CRYPTO_ARTIFACT_BASE_URL || undefined,
-    cryptoFunded: import.meta.env.VITE_FUNDED_DEPLOYMENT === 'true',
-    assetDecimals: Number.parseInt(import.meta.env.VITE_ASSET_DECIMALS || '', 10),
-    assetSymbol: import.meta.env.VITE_ASSET_SYMBOL || 'ASSET',
-  }
-}
+import { deploymentConfigFromEnv } from './deploymentConfig'
+export { deploymentConfigFromEnv } from './deploymentConfig'
 
 function unavailable(message: string): ProtocolError {
   return new ProtocolError({ category: 'ADAPTER_UNAVAILABLE', message, retryable: true })
@@ -115,7 +103,7 @@ class UnavailableWalletAdapter implements WalletAdapter {
   private readonly listeners = new Set<() => void>()
 
   async connect(): Promise<void> {
-    throw unavailable('No wallet selector adapter is installed. Connect a supported NEAR wallet to continue.')
+    throw unavailable('Wallet connection is unavailable. Configure the NEAR deployment first.')
   }
 
   async disconnect(): Promise<void> {
@@ -198,9 +186,10 @@ export function createBrowserAdapters(config = deploymentConfigFromEnv()): AppAd
   const configured = Boolean(config.coreAccountId && config.tokenAccountId && config.cryptoProfileHash && /^[a-f\d]{64}$/i.test(config.cryptoProfileHash) && config.cryptoArtifactHash && /^[a-f\d]{64}$/i.test(config.cryptoArtifactHash) && Number.isInteger(config.assetDecimals) && config.assetDecimals >= 0 && config.assetDecimals <= 38)
   if (!injected?.protocol && !injected?.wallet && configured) {
     try {
+      const privy = typeof window !== 'undefined' ? privyConfiguration(config, window.location.origin) : undefined
       const wallet = isSandboxCredentialDeployment(config)
         ? new SandboxCredentialWallet(config)
-        : new NearWalletSelectorSession(config)
+        : new NearConnectWallet(config, { additionalWallets: privy ? [privyWalletManifest(privy)] : [] })
       const { protocol } = createRpcProtocolClient(config, wallet)
       let crypto = injected?.crypto
       if (!crypto && config.cryptoArtifactHash && typeof Worker !== 'undefined') {

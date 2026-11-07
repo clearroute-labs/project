@@ -1,5 +1,21 @@
 # Confidential lending on NEAR
 
+## Current task: NEAR Connect and configurable Privy support
+
+User requested a feature branch and PR, then selected NEAR Connect to support Privy alongside ecosystem wallets. No Privy application exists yet; implement configurable support and explicitly document that live social login requires public deployment IDs.
+
+- [x] Inspect current connector and Privy SDK APIs and define the session/signing boundary.
+- [x] Replace Wallet Selector with NEAR Connect, preserving sandbox mode and private-key session boundaries.
+- [x] Add optional configured Privy wallet registration and its login/signing page.
+- [x] Verify wallet switching, rejected/unknown outcomes, signing parameters, configuration and browser flows.
+- [ ] Document setup and verification, commit/push the feature branch, and open a PR.
+
+### Review
+
+Implemented on `feat/near-connect-privy`. NEAR Connect retains its ecosystem registry and registers an optional app-hosted Privy executor. Login uses pinned React Auth/JS Core versions, creates a NEAR wallet only on request, and reviews a network/account/contract-bound request before signing. The local sandbox signer and encrypted-backup requirement remain in place. Account switching invalidates stale security reads; disconnect/reconnect and late popup cleanup preserve the newer session.
+
+Verification: strict workspace typecheck, full TypeScript suite, production build and peer-dependency checks; Chromium desktop/mobile checks with real sandbox credentials; real NEAR Connect selector with seven testnet wallet entries, cancellation/retry, local executor and unconfigured signing-page popup. Mocked authentication tests and the real pinned executor test cover approval and delayed-login handshakes. Live email/Google login and Privy-signed testnet transactions remain unverified because no Privy application IDs were supplied. Setup is documented in [WALLETS.md](../docs/WALLETS.md).
+
 ## Current task: implement the whole specification
 
 The user authorized full implementation after approving `SPEC.md`. Earlier research-only and specification-only scope statements below are historical, not current restrictions. The active implementation checklist and verification results are in [implementation.md](implementation.md); unresolved review findings are in [implementation-review.md](implementation-review.md).

@@ -20,6 +20,9 @@ export interface DeploymentConfig {
   cryptoArtifactBaseUrl?: string
   /** Development manifests are unfunded; production deployments must opt in explicitly. */
   cryptoFunded?: boolean
+  /** Public Privy application identifiers; both are required to offer social login. */
+  privyAppId?: string
+  privyClientId?: string
   assetDecimals: number
   assetSymbol: string
 }

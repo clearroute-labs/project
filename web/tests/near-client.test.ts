@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { mapTransactionStatus, NearProtocolClient, type NearContractTransport } from '../src/lib/nearClient'
 import { createBrowserAdapters } from '../src/lib/adapters'
 import { createRpcProtocolClient, type NearWalletSession } from '../src/lib/nearClient'
-import { NearWalletSelectorSession } from '../src/lib/nearWallet'
+import { NearConnectWallet } from '../src/lib/nearConnectWallet'
 import { ProtocolError, type DeploymentConfig, type PreparedProof } from '../src/lib/types'
 import { TransactionFailure } from '@confidential-lending/client'
 
@@ -565,7 +565,7 @@ describe('real Core client mapping', () => {
 
 describe('wallet initialization', () => {
   it('starts disconnected without a funded or hardcoded identity', () => {
-    const wallet = new NearWalletSelectorSession(config)
+    const wallet = new NearConnectWallet(config)
     expect(wallet.status).toBe('disconnected')
     expect(wallet.accountId).toBeUndefined()
     expect(wallet.networkId).toBe('testnet')
