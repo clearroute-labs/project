@@ -8,13 +8,13 @@ User requested a feature branch and PR, then selected NEAR Connect to support Pr
 - [x] Replace Wallet Selector with NEAR Connect, preserving sandbox mode and private-key session boundaries.
 - [x] Add optional configured Privy wallet registration and its login/signing page.
 - [x] Verify wallet switching, rejected/unknown outcomes, signing parameters, configuration and browser flows.
-- [ ] Document setup and verification, commit/push the feature branch, and open a PR.
+- [x] Document setup and verification, commit/push the feature branch, and open a PR.
 
 ### Review
 
-Implemented on `feat/near-connect-privy`. NEAR Connect retains its ecosystem registry and registers an optional app-hosted Privy executor. Login uses pinned React Auth/JS Core versions, creates a NEAR wallet only on request, and reviews a network/account/contract-bound request before signing. The local sandbox signer and encrypted-backup requirement remain in place. Account switching invalidates stale security reads; disconnect/reconnect and late popup cleanup preserve the newer session.
+Implemented on `feat/near-connect-privy` in [PR #1](https://github.com/clearroute-labs/project/pull/1). NEAR Connect retains its ecosystem registry and registers an optional app-hosted Privy executor. Login uses pinned React Auth/JS Core versions, creates a NEAR wallet only on request, and reviews a network/account/contract-bound request before signing. The local sandbox signer and encrypted-backup requirement remain in place. Account switching invalidates stale security reads; disconnect/reconnect and late popup cleanup preserve the newer session.
 
-Verification: strict workspace typecheck, full TypeScript suite, production build and peer-dependency checks; Chromium desktop/mobile checks with real sandbox credentials; real NEAR Connect selector with seven testnet wallet entries, cancellation/retry, local executor and unconfigured signing-page popup. Mocked authentication tests and the real pinned executor test cover approval and delayed-login handshakes. Live email/Google login and Privy-signed testnet transactions remain unverified because no Privy application IDs were supplied. Setup is documented in [WALLETS.md](../docs/WALLETS.md).
+Verification: strict workspace typecheck, 151 TypeScript tests, production build and peer-dependency checks; Chromium desktop/mobile checks with real sandbox credentials; real NEAR Connect selector with seven testnet wallet entries, cancellation/retry, local executor and unconfigured signing-page popup; production signing-page bundle loaded in Chromium. Mocked authentication tests and the real pinned executor test cover approval and delayed-login handshakes. Live email/Google login and Privy-signed testnet transactions remain unverified because no Privy application IDs were supplied. Setup is documented in [WALLETS.md](../docs/WALLETS.md).
 
 ## Current task: implement the whole specification
 
