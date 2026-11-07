@@ -198,6 +198,9 @@ pub struct AssetProfile {
     pub crypto_profile_hash: Vec<u8>,
     pub network_id: String,
     pub token_trust_policy: String,
+    /// Immutable declaration of whether holder operations are permissionless
+    /// or require explicit application authorization.
+    pub authorization_policy: String,
     pub freeze_policy: String,
     pub custody_cap: u128,
 }
@@ -216,8 +219,10 @@ pub struct AssetProfileView {
     pub crypto_profile_hash: Vec<u8>,
     pub network_id: String,
     pub token_trust_policy: String,
+    pub authorization_policy: String,
     pub freeze_policy: String,
     pub custody_cap: U128,
+    pub confidential_outstanding: U128,
 }
 
 #[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -367,8 +372,10 @@ pub struct Broker {
     pub loan_book_root: Vec<u8>,
     #[serde(with = "u64_string")]
     pub book_version: u64,
+    /// Homomorphic H+I active principal (healthy plus impaired), not H alone.
     pub active_principal_ciphertext: Vec<u8>,
     pub impaired_principal_ciphertext: Vec<u8>,
+    /// Commitment to the H+I active principal aggregate.
     pub active_principal_commitment: Vec<u8>,
     pub impaired_principal_commitment: Vec<u8>,
     pub impairment_provision: u128,
@@ -468,6 +475,16 @@ pub struct Loan {
     #[serde(default)]
     pub principal_remaining_commitment: Vec<u8>,
     pub cumulative_repaid_ciphertexts: Vec<Vec<u8>>,
+    /// Immutable proposal commitments and digest retained in the loan record
+    /// so authenticated-book leaves remain complete after proposal archival.
+    #[serde(default)]
+    pub principal_commitment: Vec<u8>,
+    #[serde(default)]
+    pub owed_commitment: Vec<u8>,
+    #[serde(default)]
+    pub payment_commitment: Vec<u8>,
+    #[serde(default)]
+    pub agreement_digest: Vec<u8>,
     pub accounting_leaf: Vec<u8>,
     pub tombstoned: bool,
 }
@@ -722,6 +739,7 @@ pub struct InitArgs {
     pub crypto_profile_hash: Vec<u8>,
     pub network_id: String,
     pub token_trust_policy: String,
+    pub authorization_policy: String,
     pub freeze_policy: String,
     pub custody_cap: U128,
     #[serde(default)]
@@ -830,9 +848,9 @@ pub struct CreateProposalArgs {
     pub broker_authorization_nonce: u64,
     #[serde(with = "u64_string")]
     pub borrower_authorization_nonce: u64,
-    #[serde(default)]
+    #[serde(default, with = "option_u64_string")]
     pub broker_authorization_key_id: Option<u64>,
-    #[serde(default)]
+    #[serde(default, with = "option_u64_string")]
     pub borrower_authorization_key_id: Option<u64>,
 }
 
@@ -889,6 +907,23 @@ pub struct RedeemSharesArgs {
     pub sole_shareholder_waiver: bool,
     #[serde(default)]
     pub burn_worthless: bool,
+    #[serde(default)]
+    pub broker_zero_proofs: Vec<BrokerZeroProofArgs>,
+}
+
+/// Redeem a public asset amount instead of selecting a share quantity. Core
+/// computes the required shares with checked 256-bit ceil arithmetic and
+/// rejects the call when it exceeds `max_shares_in`.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(crate = "serde")]
+pub struct RedeemAmountArgs {
+    #[serde(with = "u64_string")]
+    pub vault_id: u64,
+    pub assets_out: U128,
+    pub max_shares_in: U128,
+    #[serde(with = "u64_string")]
+    pub expiry: u64,
+    pub sole_shareholder_waiver: bool,
     #[serde(default)]
     pub broker_zero_proofs: Vec<BrokerZeroProofArgs>,
 }
@@ -1297,6 +1332,10 @@ pub struct BrokerView {
     pub active_principal_commitment: Vec<u8>,
     pub impaired_principal_commitment: Vec<u8>,
     pub impairment_provision: U128,
+    pub cumulative_draws: U128,
+    pub cumulative_settlements: U128,
+    pub cumulative_yield: U128,
+    pub cumulative_realized_losses: U128,
     #[serde(with = "u64_string")]
     pub accounting_version: u64,
     #[serde(with = "u64_string")]
@@ -1382,6 +1421,10 @@ pub struct LoanView {
     pub principal_remaining_ciphertexts: Vec<Vec<u8>>,
     pub principal_remaining_commitment: Vec<u8>,
     pub cumulative_repaid_ciphertexts: Vec<Vec<u8>>,
+    pub principal_commitment: Vec<u8>,
+    pub owed_commitment: Vec<u8>,
+    pub payment_commitment: Vec<u8>,
+    pub agreement_digest: Vec<u8>,
     pub accounting_leaf: Vec<u8>,
 }
 

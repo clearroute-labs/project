@@ -10,7 +10,7 @@ is accepted as a plaintext argument or returned by a view.
 
 'new(InitArgs)' is the only deployment initializer. The configured NEP-141
 token account, decimals, controller, network ID, asset encryption keys,
-'crypto_profile_hash', verifier manifest hash, and canonical manifest JSON are
+'crypto_profile_hash', authorization policy (`permissionless-v1`), verifier manifest hash, and canonical manifest JSON are
 immutable. `InitArgs.verifier_manifest_json` must be the compact canonical JSON
 whose fields are, in order, `schema`, `profileHash`, `networkId`,
 `coreAccountId`, `setup`, and an alphabetically ordered `artifacts` object.
@@ -38,7 +38,8 @@ versions are serialized as canonical decimal strings (no JSON numbers, leading
 zeroes, or '+' prefix). Scalar ID/cursor arguments use near-sdk 'U64' and have
 the same string wire form. A browser should carry them as strings to avoid
 JavaScript precision loss. The JSON-facing `AssetProfile` is returned as a
-view with `custody_cap: U128`; the native storage record is not exposed.
+view with `authorization_policy`, `confidential_outstanding: U128`, and
+`custody_cap: U128`; the native storage record is not exposed.
 
 ## Public lifecycle methods
 
@@ -54,6 +55,7 @@ view with `custody_cap: U128`; the native storage record is not exposed.
 | 'revoke_proposal' | proposal ID | proposal party | Permanent proposal tombstone |
 | 'deposit_to_vault' | claim ID, vault, amount, slippage, expiry | claim owner | Burns claim and mints shares |
 | 'redeem_shares' | vault, shares, slippage, expiry, sole-shareholder flag | share owner | Burns shares and returns a PublicClaim ID |
+| 'redeem_amount' | vault, `assets_out`, `max_shares_in`, expiry, sole-shareholder flag | share owner | Computes ceil shares with checked 256-bit arithmetic and burns them for exactly the requested amount |
 | 'transfer_shares' | vault, receiver, shares | share owner | Transfers public shares if enabled |
 | 'shield' | claim, public amount, typed proof | claim owner | Moves claim to holder inbox |
 | 'unshield' | amount, expected spending version, typed proof | holder | Creates a PublicClaim |
@@ -70,6 +72,12 @@ view with `custody_cap: U128`; the native storage record is not exposed.
 | 'grant_keeper' / 'revoke_keeper' | broker scope/limits/expiry or delegate | broker owner | Changes settlement/merge grant epoch |
 | 'delete_loan' | closed loan ID and evidence | borrower or broker owner | Removes display entry; retains leaf tombstone |
 | 'delete_broker' | broker ID | broker owner | Removes only an entirely closed broker |
+
+`storage_deposit` charges the measured first `StorageDeposits` map entry from
+the attached NEAR before returning the remaining budget; a top-up of an
+existing entry is credited in full. Every mutating method charges any further
+persistent bytes to the caller's recorded budget and rolls back atomically when
+that budget is insufficient.
 
 `register_holder` is a key rotation when the account already has a holder
 record.  The rotation request must use a fresh `key_id` and public key and
@@ -88,7 +96,10 @@ than one installment remaining. 'Full' repayment requires 'X = O', clears all
 owed ciphertexts and principal remaining, sets 'Paid', and sets
 'payment_remaining'/'next_due' to zero. The encrypted principal allocation and
 aggregate 'C/H/I' updates are part of the same proof; the caller cannot submit
-a public repayment amount.
+a public repayment amount. `BrokerView.active_principal_*` is the homomorphic
+H+I aggregate (healthy plus impaired), while `impaired_principal_*` is I;
+repayment always reduces active and additionally reduces impaired when the
+loan is impaired.
 
 'manage_loan(Default)' requires 'now > next_due + grace' (exclusive deadline).
 Default is terminal. Impairment is allowed only after the next due date, and
@@ -99,7 +110,10 @@ accounting remains pending until the current authenticated book is reconciled.
 broker spending, inbox, active-principal and impaired-principal ciphertexts,
 reducing closure verification to one bounded ZeroBalance proof. The four
 per-field proof members remain optional compatibility fields; callers must
-provide either the combined proof or all four legacy proofs.
+provide either the combined proof or all four legacy proofs. Final redemption
+rejects a vault with more than four still-live brokers before any zero-proof
+verification; close brokers sequentially first so the per-call proof path
+remains within the contract gas budget.
 
 `merge_broker_inbox` accepts `broker_id` plus `{ expected_spending_version,
 new_spending_ciphertext }`; the new ciphertext must equal the homomorphic sum
@@ -210,6 +224,12 @@ accounting version and the derived checkpoint ID. It is the only context a
 keeper needs for the bundled path; no keeper authority is granted for
 `prepare_reconciliation` or arbitrary reconciliation.
 
+Mutation events include a decimal-string `recovery_event_id` whenever the
+transition appends a recovery record. Settlement additionally exposes
+`reconciliation_recovery_event_id` when it consumes a bundled checkpoint;
+these IDs resolve to the immutable bounded history pages rather than to
+caller-supplied ciphertext mirrors.
+
 Proposal `broker_authorization_epoch`/`broker_authorization_nonce` refer to
 the broker owner's registered application authorization key, when one is
 provided; they never refer to the broker encryption key epoch. A direct
@@ -237,6 +257,13 @@ homomorphically updated from verified proof deltas; caller-supplied replacement
 commitments are rejected. Events contain IDs, versions,
 ciphertext references, and public lifecycle/accounting outputs; they never
 contain decrypted witnesses or private plaintext amounts.
+
+For credit-mode shield/draw proofs, Core authenticates the public amount,
+reader keys, and encrypted delta but does not require the statement's
+`spending_before` to equal the current recipient inbox. It homomorphically adds
+the proof-bound delta to the current inbox, so an unrelated incoming credit
+does not invalidate a prepared proof. Debit-mode unshield proofs remain bound
+to the exact current spending ciphertext and version.
 
 ## Proof context
 
@@ -277,8 +304,14 @@ Each broker has a domain-separated sparse Merkle loan book with depth 64 over
 loan IDs. Origination, repayment, impairment/unimpairment/default and deletion
 update exactly one authenticated path after checking the stored root and
 expected leaf. Closed-loan leaves become tombstones in Core storage, and the
-root is never accepted from a caller. This keeps membership and omission
-checks bounded even when a broker has many historical loans.
+root is never accepted from a caller. Each leaf commits schedule dates,
+payment counts, impairment/status/version, key IDs and auditor key, agreement
+digest, all P/O/Q/R ciphertexts, cumulative repayment ciphertexts, and all
+principal/owed/payment commitments. Tombstone leaves additionally commit the
+terminal record marker. This keeps membership and omission checks bounded even
+when a broker has many historical loans. Reconciliation contexts include the
+authoritative current book-root digest in their operation subject without
+adding a circuit input.
 
 ## Stable error categories
 

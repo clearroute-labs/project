@@ -21,7 +21,6 @@ authenticated-book = { path = "../../crates/authenticated-book" }
 lending-math = { path = "../../crates/lending-math" }
 
 [features]
-gas-profiling = []
 unit-testing = ["near-sdk/unit-testing"]
 
 [dev-dependencies]
