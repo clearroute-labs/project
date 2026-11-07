@@ -7,7 +7,7 @@ use ark_crypto_primitives::sponge::{
 };
 use ark_ec::twisted_edwards::TECurveConfig;
 use ark_ec::{AffineRepr, CurveGroup};
-use ark_ed_on_bn254::{EdwardsConfig, constraints::FqVar};
+use ark_ed_on_bn254::{EdwardsConfig, Fr as EdFr, constraints::FqVar};
 use ark_ff::{BigInteger, Field, PrimeField, Zero};
 use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey, prepare_verifying_key};
 use ark_r1cs_std::{
@@ -517,24 +517,8 @@ pub fn verify(
     envelope: &ProofEnvelope,
     artifacts: &ArtifactSet,
 ) -> Result<(), CryptoError> {
-    if envelope.profile_id != PROFILE_ID
-        || envelope.profile_hash != hex::encode(PROFILE_HASH)
-        || envelope.statement_kind != statement.kind()
-    {
-        return Err(CryptoError::ProfileMismatch);
-    }
     let slots = statement.public_slots()?;
-    if envelope.context_digest != slots.digest_wire() {
-        return Err(CryptoError::ContextMismatch);
-    }
-    let expected_inputs = slots
-        .public_inputs()
-        .into_iter()
-        .map(FieldHex::from)
-        .collect::<Vec<_>>();
-    if envelope.public_inputs != expected_inputs {
-        return Err(CryptoError::ContextMismatch);
-    }
+    validate_envelope_metadata(statement, envelope, &slots)?;
     let artifact = artifacts.get(statement.kind())?;
     verify_with_verifying_key_and_slots(envelope, &artifact.verifying_key, &slots)
 }
@@ -549,7 +533,33 @@ pub fn verify_with_vk_bytes(
 ) -> Result<(), CryptoError> {
     let verifying_key = deserialize_verifying_key(verifying_key_bytes)?;
     let slots = statement.public_slots()?;
+    validate_envelope_metadata(statement, envelope, &slots)?;
     verify_with_verifying_key_and_slots(envelope, &verifying_key, &slots)
+}
+
+fn validate_envelope_metadata(
+    statement: &Statement,
+    envelope: &ProofEnvelope,
+    slots: &crate::context::PublicSlots,
+) -> Result<(), CryptoError> {
+    if envelope.profile_id != PROFILE_ID
+        || envelope.profile_hash != hex::encode(PROFILE_HASH)
+        || envelope.statement_kind != statement.kind()
+    {
+        return Err(CryptoError::ProfileMismatch);
+    }
+    if envelope.context_digest != slots.digest_wire() {
+        return Err(CryptoError::ContextMismatch);
+    }
+    let expected_inputs = slots
+        .public_inputs()
+        .into_iter()
+        .map(FieldHex::from)
+        .collect::<Vec<_>>();
+    if envelope.public_inputs != expected_inputs {
+        return Err(CryptoError::ContextMismatch);
+    }
+    Ok(())
 }
 
 fn verify_with_verifying_key_and_slots(
@@ -808,8 +818,11 @@ impl ConstraintSynthesizer<Fr> for LendingCircuit {
                 let owner_key = cursor.key(&slots)?;
                 let spending_before = cursor.cipher(&slots)?;
                 let spending_after = cursor.cipher(&slots)?;
+                let reader_keys = (0..LOAN_READER_COUNT)
+                    .map(|_| cursor.key(&slots))
+                    .collect::<Result<Vec<_>, _>>()?;
                 let views = (0..LOAN_READER_COUNT)
-                    .map(|_| cursor.view(&slots))
+                    .map(|_| cursor.cipher(&slots))
                     .collect::<Result<Vec<_>, _>>()?;
                 let amount = cursor.u64(&slots);
                 let mode = cursor.u64(&slots);
@@ -831,11 +844,13 @@ impl ConstraintSynthesizer<Fr> for LendingCircuit {
                 enforce_le(&amount, &private_balance, 63)?
                     .conditional_enforce_equal(&Boolean::TRUE, &mode_bit)?;
                 let credit_total = private_balance.clone() + amount.clone();
-                enforce_le(&credit_total, &FpVar::constant(Fr::from(MAX_AMOUNT)), 63)?
+                enforce_le(&credit_total, &FpVar::constant(Fr::from(MAX_AMOUNT)), 64)?
                     .conditional_enforce_equal(&Boolean::TRUE, &(!&mode_bit))?;
                 let delta = scalar_witness_hex(&cs, &w.delta_randomness)?;
+                enforce_nonzero(&delta, EdFr::MODULUS_BIT_SIZE as usize)?;
                 let base = PointVar::constant(encryption_base());
                 let delta_point = point_scalar_mul(&base, &delta, 254)?;
+                enforce_nonidentity(&delta_point)?;
                 let amount_point = point_scalar_mul(&base, &amount, 63)?;
                 let key_delta = point_scalar_mul(&owner_key, &delta, 254)?;
                 let credit_mode = !&mode_bit;
@@ -849,10 +864,14 @@ impl ConstraintSynthesizer<Fr> for LendingCircuit {
                     .conditional_enforce_equal(&spending_before.0, &mode_bit)?;
                 (spending_after.1.clone() + amount_point + key_delta)
                     .conditional_enforce_equal(&spending_before.1, &mode_bit)?;
-                for (view, randomness) in views.iter().zip(w.randomness.iter()) {
+                for ((reader_key, view), randomness) in reader_keys
+                    .iter()
+                    .zip(views.iter())
+                    .zip(w.randomness.iter())
+                {
                     enforce_encryption(
-                        &view.0,
-                        &view.1,
+                        reader_key,
+                        view,
                         &amount,
                         &scalar_witness_hex(&cs, randomness)?,
                         63,
@@ -881,6 +900,8 @@ impl ConstraintSynthesizer<Fr> for LendingCircuit {
                 enforce_decrypt(&pk, &ciphertext, &sk, &amount, 63)?;
                 if self.kind == StatementKind::ZeroBalance {
                     amount.enforce_equal(&FpVar::zero())?;
+                } else {
+                    enforce_nonzero(&amount, 63)?;
                 }
             }
             _ => return Err(SynthesisError::Unsatisfiable),
@@ -924,11 +945,13 @@ impl SlotCursor {
         self.field(slots)
     }
 
-    fn u128(&mut self, slots: &[FpVar<Fr>]) -> FpVar<Fr> {
+    fn u128(&mut self, slots: &[FpVar<Fr>]) -> Result<FpVar<Fr>, SynthesisError> {
         let low = self.field(slots);
         let high = self.field(slots);
+        enforce_range(&low, 64)?;
+        enforce_range(&high, 64)?;
         let two_64 = Fr::from(2u64).pow([64]);
-        &low + &(high * two_64)
+        Ok(&low + &(high * two_64))
     }
 
     fn point(&mut self, slots: &[FpVar<Fr>]) -> Result<PointVar, SynthesisError> {
@@ -976,13 +999,6 @@ impl SlotCursor {
     fn commit(&mut self, slots: &[FpVar<Fr>]) -> Result<PointVar, SynthesisError> {
         self.point(slots)
     }
-
-    fn view(
-        &mut self,
-        slots: &[FpVar<Fr>],
-    ) -> Result<(PointVar, (PointVar, PointVar)), SynthesisError> {
-        Ok((self.key(slots)?, self.cipher(slots)?))
-    }
 }
 
 fn enforce_on_curve(point: &PointVar) -> Result<(), SynthesisError> {
@@ -995,7 +1011,7 @@ fn enforce_on_curve(point: &PointVar) -> Result<(), SynthesisError> {
 
 fn scalar_witness(cs: &ConstraintSystemRef<Fr>, scalar: Fr) -> Result<FpVar<Fr>, SynthesisError> {
     let value = FpVar::new_witness(ark_relations::ns!(cs, "scalar"), || Ok(scalar))?;
-    enforce_range(&value, 254)?;
+    enforce_canonical_scalar(&value)?;
     Ok(value)
 }
 
@@ -1011,6 +1027,19 @@ fn scalar_witness_hex(
 
 fn ed_to_circuit(value: ark_ed_on_bn254::Fr) -> Fr {
     Fr::from_le_bytes_mod_order(&value.into_bigint().to_bytes_le())
+}
+
+fn enforce_canonical_scalar(value: &FpVar<Fr>) -> Result<(), SynthesisError> {
+    // Circuit fields use BN254 Fr, while Edwards scalars use the distinct
+    // 251-bit subgroup order. Enforcing only a 254-bit field range would let
+    // a malicious witness provide the Edwards modulus as a nonzero BN254 Fr;
+    // its scalar multiplication is the identity and its commitment blinding
+    // would reveal the amount. The strict comparison below binds every scalar
+    // witness to the canonical Edwards representative 0 <= r < q_ed.
+    let bits = EdFr::MODULUS_BIT_SIZE as usize;
+    enforce_range(value, bits)?;
+    let modulus = Fr::from_le_bytes_mod_order(&EdFr::MODULUS.to_bytes_le());
+    enforce_lt(value, &FpVar::constant(modulus), bits)?.enforce_equal(&Boolean::TRUE)
 }
 
 fn amount_witness(cs: &ConstraintSystemRef<Fr>, amount: u64) -> Result<FpVar<Fr>, SynthesisError> {
@@ -1047,6 +1076,12 @@ fn point_scalar_mul(
         .map_err(|_| SynthesisError::Unsatisfiable)
 }
 
+fn enforce_nonidentity(point: &PointVar) -> Result<(), SynthesisError> {
+    let x_zero = point.x.is_eq(&FpVar::zero())?;
+    let y_one = point.y.is_eq(&FpVar::constant(Fr::ONE))?;
+    (x_zero & y_one).enforce_equal(&Boolean::FALSE)
+}
+
 fn enforce_key_possession(pk: &PointVar, secret: FpVar<Fr>) -> Result<(), SynthesisError> {
     enforce_range(&secret, 254)?;
     let base = PointVar::constant(encryption_base());
@@ -1063,9 +1098,11 @@ fn enforce_encryption(
 ) -> Result<(), SynthesisError> {
     enforce_range(amount, amount_bits)?;
     enforce_range(randomness, 254)?;
+    enforce_nonzero(randomness, 254)?;
     let base = PointVar::constant(encryption_base());
     let ephemeral = point_scalar_mul(&base, randomness, 254)?;
     ephemeral.enforce_equal(&ciphertext.0)?;
+    enforce_nonidentity(&ephemeral)?;
     let amount_point = point_scalar_mul(&base, amount, amount_bits)?;
     let random_point = point_scalar_mul(pk, randomness, 254)?;
     let message = amount_point + random_point;
@@ -1109,6 +1146,7 @@ fn enforce_decrypt(
     amount: &FpVar<Fr>,
     amount_bits: usize,
 ) -> Result<(), SynthesisError> {
+    enforce_range(amount, amount_bits)?;
     let base = PointVar::constant(encryption_base());
     let shared = point_scalar_mul(&ciphertext.0, secret, 254)?;
     let recovered = ciphertext.1.clone() - shared;
@@ -1149,7 +1187,10 @@ fn enforce_transfer_delta(
     credit: bool,
 ) -> Result<(), SynthesisError> {
     let base = PointVar::constant(encryption_base());
+    enforce_range(delta, 254)?;
+    enforce_nonzero(delta, 254)?;
     let delta_point = point_scalar_mul(&base, delta, 254)?;
+    enforce_nonidentity(&delta_point)?;
     let amount_point = point_scalar_mul(&base, amount, 63)?;
     let key_delta = point_scalar_mul(key, delta, 254)?;
     if credit {
@@ -1171,9 +1212,12 @@ fn synth_transfer(
     let recipient_key = cursor.key(slots)?;
     let sender_before = cursor.cipher(slots)?;
     let sender_after = cursor.cipher(slots)?;
+    let reader_keys = (0..TRANSFER_VIEW_COUNT)
+        .map(|_| cursor.key(slots))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut views = Vec::with_capacity(TRANSFER_VIEW_COUNT);
     for _ in 0..TRANSFER_VIEW_COUNT {
-        views.push(cursor.view(slots)?);
+        views.push(cursor.cipher(slots)?);
     }
     let mut recovery = Vec::with_capacity(TRANSFER_VIEW_COUNT);
     for _ in 0..TRANSFER_VIEW_COUNT {
@@ -1205,19 +1249,38 @@ fn synth_transfer(
     )?;
     // Reader slot one is the destination key.  The destination inbox is
     // intentionally absent: Core homomorphically credits its current inbox.
-    views[1].0.enforce_equal(&recipient_key)?;
-    for (view, randomness) in views.iter().zip(witness.transfer_randomness.iter()) {
-        let randomness = scalar_witness_hex(cs, randomness)?;
-        enforce_encryption(&view.0, &view.1, &amount, &randomness, 63)?;
-    }
-    for ((view, pair), randomness) in views
+    reader_keys[1].enforce_equal(&recipient_key)?;
+    let view_randomness = witness
+        .transfer_randomness
         .iter()
-        .zip(recovery.iter())
-        .zip(witness.transfer_recovery_randomness.iter())
+        .map(|randomness| scalar_witness_hex(cs, randomness))
+        .collect::<Result<Vec<_>, _>>()?;
+    let recovery_randomness = witness
+        .transfer_recovery_randomness
+        .iter()
+        .map(|randomness| {
+            Ok::<_, SynthesisError>([
+                scalar_witness_hex(cs, &randomness[0])?,
+                scalar_witness_hex(cs, &randomness[1])?,
+            ])
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for ((reader_key, view), randomness) in reader_keys
+        .iter()
+        .zip(views.iter())
+        .zip(view_randomness.iter())
     {
-        let low_randomness = scalar_witness_hex(cs, &randomness[0])?;
-        let high_randomness = scalar_witness_hex(cs, &randomness[1])?;
-        enforce_recovery_pair(&view.0, pair, &amount, &low_randomness, &high_randomness)?;
+        enforce_encryption(reader_key, view, &amount, randomness, 63)?;
+    }
+    for (index, (((reader_key, _view), pair), randomness)) in reader_keys
+        .iter()
+        .zip(views.iter())
+        .zip(recovery.iter())
+        .zip(recovery_randomness.iter())
+        .enumerate()
+    {
+        enforce_distinct_scalars(&[&view_randomness[index], &randomness[0], &randomness[1]])?;
+        enforce_recovery_pair(reader_key, pair, &amount, &randomness[0], &randomness[1])?;
     }
     let blind = scalar_witness_hex(cs, &witness.commitment_blinding)?;
     enforce_commitment(&commitment, &amount, &blind, 63)
@@ -1233,26 +1296,32 @@ fn synth_origination(
     let borrower_key = cursor.key(slots)?;
     let broker_before = cursor.cipher(slots)?;
     let broker_after = cursor.cipher(slots)?;
+    let transfer_keys = (0..TRANSFER_VIEW_COUNT)
+        .map(|_| cursor.key(slots))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut transfer_views = Vec::with_capacity(TRANSFER_VIEW_COUNT);
     for _ in 0..TRANSFER_VIEW_COUNT {
-        transfer_views.push(cursor.view(slots)?);
+        transfer_views.push(cursor.cipher(slots)?);
     }
     let mut transfer_recovery = Vec::with_capacity(TRANSFER_VIEW_COUNT);
     for _ in 0..TRANSFER_VIEW_COUNT {
         transfer_recovery.push(cursor.recovery(slots)?);
     }
     let principal_commitment = cursor.commit(slots)?;
+    let loan_keys = (0..LOAN_READER_COUNT)
+        .map(|_| cursor.key(slots))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut owed_views = Vec::with_capacity(LOAN_READER_COUNT);
     let mut payment_views = Vec::with_capacity(LOAN_READER_COUNT);
     for _ in 0..LOAN_READER_COUNT {
-        owed_views.push(cursor.view(slots)?);
+        owed_views.push(cursor.cipher(slots)?);
     }
     let mut owed_recovery = Vec::with_capacity(LOAN_READER_COUNT);
     for _ in 0..LOAN_READER_COUNT {
         owed_recovery.push(cursor.recovery(slots)?);
     }
     for _ in 0..LOAN_READER_COUNT {
-        payment_views.push(cursor.view(slots)?);
+        payment_views.push(cursor.cipher(slots)?);
     }
     let mut payment_recovery = Vec::with_capacity(LOAN_READER_COUNT);
     for _ in 0..LOAN_READER_COUNT {
@@ -1298,26 +1367,28 @@ fn synth_origination(
         &broker_delta,
         false,
     )?;
-    transfer_views[1].0.enforce_equal(&borrower_key)?;
-    for (view, randomness) in transfer_views
+    transfer_keys[1].enforce_equal(&borrower_key)?;
+    for ((reader_key, view), randomness) in transfer_keys
         .iter()
+        .zip(transfer_views.iter())
         .zip(witness.transfer_randomness.iter())
     {
         enforce_encryption(
-            &view.0,
-            &view.1,
+            reader_key,
+            view,
             &principal,
             &scalar_witness_hex(cs, randomness)?,
             63,
         )?;
     }
-    for ((view, pair), randomness) in transfer_views
+    for (((reader_key, _view), pair), randomness) in transfer_keys
         .iter()
+        .zip(transfer_views.iter())
         .zip(transfer_recovery.iter())
         .zip(witness.transfer_recovery_randomness.iter())
     {
         enforce_recovery_pair(
-            &view.0,
+            reader_key,
             pair,
             &principal,
             &scalar_witness_hex(cs, &randomness[0])?,
@@ -1326,44 +1397,101 @@ fn synth_origination(
     }
     let principal_blinding = scalar_witness_hex(cs, &witness.principal_blinding)?;
     enforce_commitment(&principal_commitment, &principal, &principal_blinding, 63)?;
-    for (view, randomness) in owed_views.iter().zip(witness.owed_randomness.iter()) {
+    for i in 0..TRANSFER_VIEW_COUNT {
+        let main = scalar_witness_hex(cs, &witness.transfer_randomness[i])?;
+        let low = scalar_witness_hex(cs, &witness.transfer_recovery_randomness[i][0])?;
+        let high = scalar_witness_hex(cs, &witness.transfer_recovery_randomness[i][1])?;
+        enforce_distinct_scalars(&[&main, &low, &high])?;
+    }
+    for i in 0..LOAN_READER_COUNT {
+        let owed_main = scalar_witness_hex(cs, &witness.owed_randomness[i])?;
+        let owed_low = scalar_witness_hex(cs, &witness.owed_recovery_randomness[i][0])?;
+        let owed_high = scalar_witness_hex(cs, &witness.owed_recovery_randomness[i][1])?;
+        let payment_main = scalar_witness_hex(cs, &witness.payment_randomness[i])?;
+        let payment_low = scalar_witness_hex(cs, &witness.payment_recovery_randomness[i][0])?;
+        let payment_high = scalar_witness_hex(cs, &witness.payment_recovery_randomness[i][1])?;
+        enforce_distinct_scalars(&[
+            &owed_main,
+            &owed_low,
+            &owed_high,
+            &payment_main,
+            &payment_low,
+            &payment_high,
+        ])?;
+    }
+    // P, O, and Q can share a reader key in the typed statement. If they do,
+    // every fresh ciphertext/recovery randomizer for that reader must differ;
+    // unrelated reader views are intentionally not compared.
+    for (transfer_index, transfer_key) in transfer_keys.iter().enumerate() {
+        let transfer_scalars = [
+            scalar_witness_hex(cs, &witness.transfer_randomness[transfer_index])?,
+            scalar_witness_hex(cs, &witness.transfer_recovery_randomness[transfer_index][0])?,
+            scalar_witness_hex(cs, &witness.transfer_recovery_randomness[transfer_index][1])?,
+        ];
+        for (loan_index, loan_key) in loan_keys.iter().enumerate() {
+            let loan_scalars = [
+                scalar_witness_hex(cs, &witness.owed_randomness[loan_index])?,
+                scalar_witness_hex(cs, &witness.owed_recovery_randomness[loan_index][0])?,
+                scalar_witness_hex(cs, &witness.owed_recovery_randomness[loan_index][1])?,
+                scalar_witness_hex(cs, &witness.payment_randomness[loan_index])?,
+                scalar_witness_hex(cs, &witness.payment_recovery_randomness[loan_index][0])?,
+                scalar_witness_hex(cs, &witness.payment_recovery_randomness[loan_index][1])?,
+            ];
+            for left in &transfer_scalars {
+                for right in &loan_scalars {
+                    enforce_distinct_for_equal_keys(transfer_key, loan_key, left, right)?;
+                }
+            }
+        }
+    }
+    for ((reader_key, view), randomness) in loan_keys
+        .iter()
+        .zip(owed_views.iter())
+        .zip(witness.owed_randomness.iter())
+    {
         enforce_encryption(
-            &view.0,
-            &view.1,
+            reader_key,
+            view,
             &owed,
             &scalar_witness_hex(cs, randomness)?,
             63,
         )?;
     }
-    for ((view, pair), randomness) in owed_views
+    for (((reader_key, _view), pair), randomness) in loan_keys
         .iter()
+        .zip(owed_views.iter())
         .zip(owed_recovery.iter())
         .zip(witness.owed_recovery_randomness.iter())
     {
         enforce_recovery_pair(
-            &view.0,
+            reader_key,
             pair,
             &owed,
             &scalar_witness_hex(cs, &randomness[0])?,
             &scalar_witness_hex(cs, &randomness[1])?,
         )?;
     }
-    for (view, randomness) in payment_views.iter().zip(witness.payment_randomness.iter()) {
+    for ((reader_key, view), randomness) in loan_keys
+        .iter()
+        .zip(payment_views.iter())
+        .zip(witness.payment_randomness.iter())
+    {
         enforce_encryption(
-            &view.0,
-            &view.1,
+            reader_key,
+            view,
             &periodic,
             &scalar_witness_hex(cs, randomness)?,
             63,
         )?;
     }
-    for ((view, pair), randomness) in payment_views
+    for (((reader_key, _view), pair), randomness) in loan_keys
         .iter()
+        .zip(payment_views.iter())
         .zip(payment_recovery.iter())
         .zip(witness.payment_recovery_randomness.iter())
     {
         enforce_recovery_pair(
-            &view.0,
+            reader_key,
             pair,
             &periodic,
             &scalar_witness_hex(cs, &randomness[0])?,
@@ -1372,6 +1500,7 @@ fn synth_origination(
     }
     let owed_blinding = scalar_witness_hex(cs, &witness.owed_blinding)?;
     let payment_blinding = scalar_witness_hex(cs, &witness.payment_blinding)?;
+    enforce_distinct_scalars(&[&principal_blinding, &owed_blinding, &payment_blinding])?;
     enforce_commitment(&owed_commitment, &owed, &owed_blinding, 63)?;
     enforce_commitment(&payment_commitment, &periodic, &payment_blinding, 63)
 }
@@ -1386,14 +1515,20 @@ fn synth_repayment(
     let broker_key = cursor.key(slots)?;
     let borrower_before = cursor.cipher(slots)?;
     let borrower_after = cursor.cipher(slots)?;
+    let transfer_keys = (0..TRANSFER_VIEW_COUNT)
+        .map(|_| cursor.key(slots))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut transfer_views = Vec::with_capacity(TRANSFER_VIEW_COUNT);
     for _ in 0..TRANSFER_VIEW_COUNT {
-        transfer_views.push(cursor.view(slots)?);
+        transfer_views.push(cursor.cipher(slots)?);
     }
     let mut transfer_recovery = Vec::with_capacity(TRANSFER_VIEW_COUNT);
     for _ in 0..TRANSFER_VIEW_COUNT {
         transfer_recovery.push(cursor.recovery(slots)?);
     }
+    let loan_keys = (0..LOAN_READER_COUNT)
+        .map(|_| cursor.key(slots))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut owed_before = Vec::with_capacity(LOAN_READER_COUNT);
     let mut owed_after = Vec::with_capacity(LOAN_READER_COUNT);
     let mut owed_delta = Vec::with_capacity(LOAN_READER_COUNT);
@@ -1402,28 +1537,28 @@ fn synth_repayment(
     let mut principal_after = Vec::with_capacity(LOAN_READER_COUNT);
     let mut principal_delta = Vec::with_capacity(LOAN_READER_COUNT);
     for _ in 0..LOAN_READER_COUNT {
-        owed_before.push(cursor.view(slots)?);
+        owed_before.push(cursor.cipher(slots)?);
     }
     for _ in 0..LOAN_READER_COUNT {
-        owed_after.push(cursor.view(slots)?);
+        owed_after.push(cursor.cipher(slots)?);
     }
     let mut owed_delta_recovery = Vec::with_capacity(LOAN_READER_COUNT);
     for _ in 0..LOAN_READER_COUNT {
-        owed_delta.push(cursor.view(slots)?);
+        owed_delta.push(cursor.cipher(slots)?);
         owed_delta_recovery.push(cursor.recovery(slots)?);
     }
     for _ in 0..LOAN_READER_COUNT {
-        periodic_views.push(cursor.view(slots)?);
+        periodic_views.push(cursor.cipher(slots)?);
     }
     for _ in 0..LOAN_READER_COUNT {
-        principal_before.push(cursor.view(slots)?);
+        principal_before.push(cursor.cipher(slots)?);
     }
     for _ in 0..LOAN_READER_COUNT {
-        principal_after.push(cursor.view(slots)?);
+        principal_after.push(cursor.cipher(slots)?);
     }
     let mut principal_delta_recovery = Vec::with_capacity(LOAN_READER_COUNT);
     for _ in 0..LOAN_READER_COUNT {
-        principal_delta.push(cursor.view(slots)?);
+        principal_delta.push(cursor.cipher(slots)?);
         principal_delta_recovery.push(cursor.recovery(slots)?);
     }
     let principal_commitment = cursor.commit(slots)?;
@@ -1436,6 +1571,7 @@ fn synth_repayment(
     enforce_range(&mode, 1)?;
     enforce_range(&remaining_before, 32)?;
     enforce_range(&remaining_after, 32)?;
+    enforce_nonzero(&remaining_before, 32)?;
     enforce_range(&loan_version_before, 64)?;
     enforce_range(&loan_version_after, 64)?;
     let payment = amount_witness(cs, witness.payment)?;
@@ -1492,6 +1628,61 @@ fn synth_repayment(
     selected.enforce_equal(&principal_paid)?;
     let principal_after_value = principal.clone() - principal_paid.clone();
     enforce_range(&principal_after_value, 63)?;
+    enforce_le(&principal_after_value, &new_owed, 63)?.enforce_equal(&Boolean::TRUE)?;
+    for i in 0..TRANSFER_VIEW_COUNT {
+        let main = scalar_witness_hex(cs, &witness.transfer_randomness[i])?;
+        let low = scalar_witness_hex(cs, &witness.transfer_recovery_randomness[i][0])?;
+        let high = scalar_witness_hex(cs, &witness.transfer_recovery_randomness[i][1])?;
+        enforce_distinct_scalars(&[&main, &low, &high])?;
+    }
+    for i in 0..LOAN_READER_COUNT {
+        let owed_main = scalar_witness_hex(cs, &witness.owed_delta_randomness[i])?;
+        let owed_low = scalar_witness_hex(cs, &witness.owed_delta_recovery_randomness[i][0])?;
+        let owed_high = scalar_witness_hex(cs, &witness.owed_delta_recovery_randomness[i][1])?;
+        let principal_main = scalar_witness_hex(cs, &witness.principal_delta_randomness[i])?;
+        let principal_low =
+            scalar_witness_hex(cs, &witness.principal_delta_recovery_randomness[i][0])?;
+        let principal_high =
+            scalar_witness_hex(cs, &witness.principal_delta_recovery_randomness[i][1])?;
+        enforce_distinct_scalars(&[
+            &owed_main,
+            &owed_low,
+            &owed_high,
+            &principal_main,
+            &principal_low,
+            &principal_high,
+        ])?;
+    }
+    // The payment transfer and the O/P deltas may share a reader key. Apply
+    // the same conditional non-reuse rule without coupling unrelated readers.
+    for (transfer_index, transfer_key) in transfer_keys.iter().enumerate() {
+        let transfer_scalars = [
+            scalar_witness_hex(cs, &witness.transfer_randomness[transfer_index])?,
+            scalar_witness_hex(cs, &witness.transfer_recovery_randomness[transfer_index][0])?,
+            scalar_witness_hex(cs, &witness.transfer_recovery_randomness[transfer_index][1])?,
+        ];
+        for (loan_index, loan_key) in loan_keys.iter().enumerate() {
+            let loan_scalars = [
+                scalar_witness_hex(cs, &witness.owed_delta_randomness[loan_index])?,
+                scalar_witness_hex(cs, &witness.owed_delta_recovery_randomness[loan_index][0])?,
+                scalar_witness_hex(cs, &witness.owed_delta_recovery_randomness[loan_index][1])?,
+                scalar_witness_hex(cs, &witness.principal_delta_randomness[loan_index])?,
+                scalar_witness_hex(
+                    cs,
+                    &witness.principal_delta_recovery_randomness[loan_index][0],
+                )?,
+                scalar_witness_hex(
+                    cs,
+                    &witness.principal_delta_recovery_randomness[loan_index][1],
+                )?,
+            ];
+            for left in &transfer_scalars {
+                for right in &loan_scalars {
+                    enforce_distinct_for_equal_keys(transfer_key, loan_key, left, right)?;
+                }
+            }
+        }
+    }
     let base_delta = scalar_witness_hex(cs, &witness.borrower_delta_randomness)?;
     enforce_transfer_delta(
         &borrower_before,
@@ -1501,26 +1692,28 @@ fn synth_repayment(
         &base_delta,
         false,
     )?;
-    transfer_views[1].0.enforce_equal(&broker_key)?;
-    for (view, randomness) in transfer_views
+    transfer_keys[1].enforce_equal(&broker_key)?;
+    for ((reader_key, view), randomness) in transfer_keys
         .iter()
+        .zip(transfer_views.iter())
         .zip(witness.transfer_randomness.iter())
     {
         enforce_encryption(
-            &view.0,
-            &view.1,
+            reader_key,
+            view,
             &payment,
             &scalar_witness_hex(cs, randomness)?,
             63,
         )?;
     }
-    for ((view, pair), randomness) in transfer_views
+    for (((reader_key, _view), pair), randomness) in transfer_keys
         .iter()
+        .zip(transfer_views.iter())
         .zip(transfer_recovery.iter())
         .zip(witness.transfer_recovery_randomness.iter())
     {
         enforce_recovery_pair(
-            &view.0,
+            reader_key,
             pair,
             &payment,
             &scalar_witness_hex(cs, &randomness[0])?,
@@ -1530,35 +1723,29 @@ fn synth_repayment(
     for i in 0..LOAN_READER_COUNT {
         let owed_delta_r = scalar_witness_hex(cs, &witness.owed_delta_randomness[i])?;
         let principal_delta_r = scalar_witness_hex(cs, &witness.principal_delta_randomness[i])?;
-        enforce_ciphertext_delta(&owed_before[i].1, &owed_after[i].1, &owed_delta[i].1)?;
-        enforce_encryption(
-            &owed_delta[i].0,
-            &owed_delta[i].1,
-            &payment,
-            &owed_delta_r,
-            63,
-        )?;
+        enforce_ciphertext_delta(&owed_before[i], &owed_after[i], &owed_delta[i])?;
+        enforce_encryption(&loan_keys[i], &owed_delta[i], &payment, &owed_delta_r, 63)?;
         enforce_recovery_pair(
-            &owed_delta[i].0,
+            &loan_keys[i],
             &owed_delta_recovery[i],
             &payment,
             &scalar_witness_hex(cs, &witness.owed_delta_recovery_randomness[i][0])?,
             &scalar_witness_hex(cs, &witness.owed_delta_recovery_randomness[i][1])?,
         )?;
         enforce_ciphertext_delta(
-            &principal_before[i].1,
-            &principal_after[i].1,
-            &principal_delta[i].1,
+            &principal_before[i],
+            &principal_after[i],
+            &principal_delta[i],
         )?;
         enforce_encryption(
-            &principal_delta[i].0,
-            &principal_delta[i].1,
+            &loan_keys[i],
+            &principal_delta[i],
             &principal_paid,
             &principal_delta_r,
             63,
         )?;
         enforce_recovery_pair(
-            &principal_delta[i].0,
+            &loan_keys[i],
             &principal_delta_recovery[i],
             &principal_paid,
             &scalar_witness_hex(cs, &witness.principal_delta_recovery_randomness[i][0])?,
@@ -1568,26 +1755,18 @@ fn synth_repayment(
     // Reader index zero is fixed to the borrower key.  Its pre-state values
     // are opened with the borrower secret; the remaining reader ciphertexts
     // are carried by the inductive homomorphic delta relation above.
-    owed_before[0].0.enforce_equal(&borrower_key)?;
-    periodic_views[0].0.enforce_equal(&borrower_key)?;
-    principal_before[0].0.enforce_equal(&borrower_key)?;
+    loan_keys[0].enforce_equal(&borrower_key)?;
+    enforce_decrypt(&borrower_key, &owed_before[0], &borrower_secret, &owed, 63)?;
     enforce_decrypt(
         &borrower_key,
-        &owed_before[0].1,
-        &borrower_secret,
-        &owed,
-        63,
-    )?;
-    enforce_decrypt(
-        &borrower_key,
-        &periodic_views[0].1,
+        &periodic_views[0],
         &borrower_secret,
         &periodic,
         63,
     )?;
     enforce_decrypt(
         &borrower_key,
-        &principal_before[0].1,
+        &principal_before[0],
         &borrower_secret,
         &principal,
         63,
@@ -1609,15 +1788,15 @@ fn synth_reconciliation(
     let cash_commitment = cursor.commit(slots)?;
     let active_commitment = cursor.commit(slots)?;
     let impaired_commitment = cursor.commit(slots)?;
-    let debt_before = cursor.u128(slots);
-    let debt_after = cursor.u128(slots);
-    let vault_before = cursor.u128(slots);
-    let vault_after = cursor.u128(slots);
-    let vault_provision_before = cursor.u128(slots);
-    let vault_provision_after = cursor.u128(slots);
-    let provision_before = cursor.u128(slots);
-    let provision_after = cursor.u128(slots);
-    let loss = cursor.u128(slots);
+    let debt_before = cursor.u128(slots)?;
+    let debt_after = cursor.u128(slots)?;
+    let vault_before = cursor.u128(slots)?;
+    let vault_after = cursor.u128(slots)?;
+    let vault_provision_before = cursor.u128(slots)?;
+    let vault_provision_after = cursor.u128(slots)?;
+    let provision_before = cursor.u128(slots)?;
+    let provision_after = cursor.u128(slots)?;
+    let loss = cursor.u128(slots)?;
     let _book_version = cursor.u64(slots);
     let _accounting_version = cursor.u64(slots);
     for value in [
@@ -1650,6 +1829,7 @@ fn synth_reconciliation(
     let cash_blind = scalar_witness_hex(cs, &witness.cash_blinding)?;
     let active_blind = scalar_witness_hex(cs, &witness.active_principal_blinding)?;
     let impaired_blind = scalar_witness_hex(cs, &witness.impaired_principal_blinding)?;
+    enforce_distinct_scalars(&[&cash_blind, &active_blind, &impaired_blind])?;
     enforce_commitment(&cash_commitment, &cash, &cash_blind, 128)?;
     enforce_commitment(&active_commitment, &active, &active_blind, 128)?;
     enforce_commitment(&impaired_commitment, &impaired, &impaired_blind, 128)?;
@@ -1719,6 +1899,31 @@ fn enforce_nonzero(value: &FpVar<Fr>, bits: usize) -> Result<(), SynthesisError>
     Boolean::kary_or(bounded)?.enforce_equal(&Boolean::TRUE)
 }
 
+fn enforce_distinct(left: &FpVar<Fr>, right: &FpVar<Fr>) -> Result<(), SynthesisError> {
+    left.is_eq(right)?.enforce_equal(&Boolean::FALSE)
+}
+
+fn enforce_distinct_for_equal_keys(
+    left_key: &PointVar,
+    right_key: &PointVar,
+    left: &FpVar<Fr>,
+    right: &FpVar<Fr>,
+) -> Result<(), SynthesisError> {
+    let same_x = left_key.x.is_eq(&right_key.x)?;
+    let same_y = left_key.y.is_eq(&right_key.y)?;
+    let same_scalar = left.is_eq(right)?;
+    (same_x & same_y & same_scalar).enforce_equal(&Boolean::FALSE)
+}
+
+fn enforce_distinct_scalars(values: &[&FpVar<Fr>]) -> Result<(), SynthesisError> {
+    for (index, left) in values.iter().enumerate() {
+        for right in values.iter().skip(index + 1) {
+            enforce_distinct(left, right)?;
+        }
+    }
+    Ok(())
+}
+
 fn enforce_le(a: &FpVar<Fr>, b: &FpVar<Fr>, bits: usize) -> Result<Boolean<Fr>, SynthesisError> {
     let a_bits = a.to_bits_le()?;
     let b_bits = b.to_bits_le()?;
@@ -1762,6 +1967,7 @@ fn field_to_u128(value: Fr) -> Result<u128, SynthesisError> {
 
 fn validate_host_relation(statement: &Statement, witness: &Witness) -> Result<(), CryptoError> {
     statement.context().validate()?;
+    statement.validate_reader_layout()?;
     match (statement, witness) {
         (Statement::KeyPossession(s), Witness::KeyPossession(w)) => {
             if !s.public_key.verify_possession(&w.secret_key) {
@@ -1872,6 +2078,38 @@ fn check_encryption(
     Ok(())
 }
 
+fn check_distinct_scalars(values: &[&ScalarHex]) -> Result<(), CryptoError> {
+    let parsed = values
+        .iter()
+        .map(|value| witness_scalar(value))
+        .collect::<Result<Vec<_>, _>>()?;
+    if parsed.iter().any(|value| value.is_zero()) {
+        return Err(CryptoError::ZeroScalar);
+    }
+    for (index, left) in parsed.iter().enumerate() {
+        if parsed.iter().skip(index + 1).any(|right| left == right) {
+            return Err(CryptoError::InvalidIntegerRelation);
+        }
+    }
+    Ok(())
+}
+
+fn check_distinct_for_equal_keys(
+    left_key: &PublicKey,
+    right_key: &PublicKey,
+    left: &[&ScalarHex],
+    right: &[&ScalarHex],
+) -> Result<(), CryptoError> {
+    if left_key == right_key {
+        for left_scalar in left {
+            for right_scalar in right {
+                check_distinct_scalars(&[*left_scalar, *right_scalar])?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn check_recovery_pair(
     key: &PublicKey,
     pair: &RecoveryPair,
@@ -1921,7 +2159,11 @@ fn check_commitment_u64(
     amount: u64,
     blinding: &ScalarHex,
 ) -> Result<(), CryptoError> {
-    if !commitment.verify(amount, witness_scalar(blinding)?)? {
+    let blinding = witness_scalar(blinding)?;
+    if blinding.is_zero() {
+        return Err(CryptoError::ZeroScalar);
+    }
+    if !commitment.verify(amount, blinding)? {
         return Err(CryptoError::InvalidCommitment);
     }
     Ok(())
@@ -1932,7 +2174,11 @@ fn check_commitment_u128(
     amount: u128,
     blinding: &ScalarHex,
 ) -> Result<(), CryptoError> {
-    if Commitment::commit_u128_with_blinding(amount, witness_scalar(blinding)?)? != *commitment {
+    let blinding = witness_scalar(blinding)?;
+    if blinding.is_zero() {
+        return Err(CryptoError::ZeroScalar);
+    }
+    if Commitment::commit_u128_with_blinding(amount, blinding)? != *commitment {
         return Err(CryptoError::InvalidCommitment);
     }
     Ok(())
@@ -1947,6 +2193,9 @@ fn check_delta(
     debit: bool,
 ) -> Result<(), CryptoError> {
     let d = witness_scalar(randomness)?;
+    if d.is_zero() {
+        return Err(CryptoError::ZeroScalar);
+    }
     let (be, bm) = before.to_points()?;
     let (ae, am) = after.to_points()?;
     let base = encryption_base();
@@ -2004,6 +2253,13 @@ fn check_transfer(
         &w.sender_delta_randomness,
         true,
     )?;
+    for i in 0..TRANSFER_VIEW_COUNT {
+        check_distinct_scalars(&[
+            &w.transfer_randomness[i],
+            &w.transfer_recovery_randomness[i][0],
+            &w.transfer_recovery_randomness[i][1],
+        ])?;
+    }
     if s.transfer_views[1].reader_key != s.recipient_key {
         return Err(CryptoError::InvalidKey);
     }
@@ -2061,6 +2317,50 @@ fn check_origination(s: &OriginationStatement, w: &OriginationWitness) -> Result
         &w.broker_delta_randomness,
         true,
     )?;
+    for i in 0..TRANSFER_VIEW_COUNT {
+        check_distinct_scalars(&[
+            &w.transfer_randomness[i],
+            &w.transfer_recovery_randomness[i][0],
+            &w.transfer_recovery_randomness[i][1],
+        ])?;
+    }
+    for i in 0..LOAN_READER_COUNT {
+        check_distinct_scalars(&[
+            &w.owed_randomness[i],
+            &w.owed_recovery_randomness[i][0],
+            &w.owed_recovery_randomness[i][1],
+        ])?;
+        check_distinct_scalars(&[
+            &w.payment_randomness[i],
+            &w.payment_recovery_randomness[i][0],
+            &w.payment_recovery_randomness[i][1],
+        ])?;
+        check_distinct_scalars(&[&w.owed_randomness[i], &w.payment_randomness[i]])?;
+    }
+    check_distinct_scalars(&[&w.principal_blinding, &w.owed_blinding, &w.payment_blinding])?;
+    for (transfer_index, transfer_view) in s.transfer_views.iter().enumerate() {
+        for loan_index in 0..LOAN_READER_COUNT {
+            let transfer_randomness = [
+                &w.transfer_randomness[transfer_index],
+                &w.transfer_recovery_randomness[transfer_index][0],
+                &w.transfer_recovery_randomness[transfer_index][1],
+            ];
+            let loan_randomness = [
+                &w.owed_randomness[loan_index],
+                &w.owed_recovery_randomness[loan_index][0],
+                &w.owed_recovery_randomness[loan_index][1],
+                &w.payment_randomness[loan_index],
+                &w.payment_recovery_randomness[loan_index][0],
+                &w.payment_recovery_randomness[loan_index][1],
+            ];
+            check_distinct_for_equal_keys(
+                &transfer_view.reader_key,
+                &s.owed_views[loan_index].reader_key,
+                &transfer_randomness,
+                &loan_randomness,
+            )?;
+        }
+    }
     if s.transfer_views[1].reader_key != s.borrower_key {
         return Err(CryptoError::InvalidKey);
     }
@@ -2157,7 +2457,10 @@ fn check_repayment(s: &RepaymentStatement, w: &RepaymentWitness) -> Result<(), C
             }
         }
         PaymentMode::Full => {
-            if w.payment != w.owed_before || s.payment_remaining_after != 0 {
+            if s.payment_remaining_before == 0
+                || w.payment != w.owed_before
+                || s.payment_remaining_after != 0
+            {
                 return Err(CryptoError::InvalidIntegerRelation);
             }
         }
@@ -2173,6 +2476,17 @@ fn check_repayment(s: &RepaymentStatement, w: &RepaymentWitness) -> Result<(), C
     if w.principal_paid != expected_principal {
         return Err(CryptoError::InvalidIntegerRelation);
     }
+    let principal_after = w
+        .principal_before
+        .checked_sub(w.principal_paid)
+        .ok_or(CryptoError::InvalidIntegerRelation)?;
+    let owed_after = w
+        .owed_before
+        .checked_sub(w.payment)
+        .ok_or(CryptoError::InvalidIntegerRelation)?;
+    if principal_after > owed_after {
+        return Err(CryptoError::InvalidIntegerRelation);
+    }
     check_delta(
         &s.borrower_spending_before,
         &s.borrower_spending_after,
@@ -2181,6 +2495,52 @@ fn check_repayment(s: &RepaymentStatement, w: &RepaymentWitness) -> Result<(), C
         &w.borrower_delta_randomness,
         true,
     )?;
+    for i in 0..TRANSFER_VIEW_COUNT {
+        check_distinct_scalars(&[
+            &w.transfer_randomness[i],
+            &w.transfer_recovery_randomness[i][0],
+            &w.transfer_recovery_randomness[i][1],
+        ])?;
+    }
+    for i in 0..LOAN_READER_COUNT {
+        check_distinct_scalars(&[
+            &w.owed_delta_randomness[i],
+            &w.owed_delta_recovery_randomness[i][0],
+            &w.owed_delta_recovery_randomness[i][1],
+        ])?;
+        check_distinct_scalars(&[
+            &w.principal_delta_randomness[i],
+            &w.principal_delta_recovery_randomness[i][0],
+            &w.principal_delta_recovery_randomness[i][1],
+        ])?;
+        check_distinct_scalars(&[
+            &w.owed_delta_randomness[i],
+            &w.principal_delta_randomness[i],
+        ])?;
+    }
+    for (transfer_index, transfer_view) in s.transfer_views.iter().enumerate() {
+        for loan_index in 0..LOAN_READER_COUNT {
+            let transfer_randomness = [
+                &w.transfer_randomness[transfer_index],
+                &w.transfer_recovery_randomness[transfer_index][0],
+                &w.transfer_recovery_randomness[transfer_index][1],
+            ];
+            let loan_randomness = [
+                &w.owed_delta_randomness[loan_index],
+                &w.owed_delta_recovery_randomness[loan_index][0],
+                &w.owed_delta_recovery_randomness[loan_index][1],
+                &w.principal_delta_randomness[loan_index],
+                &w.principal_delta_recovery_randomness[loan_index][0],
+                &w.principal_delta_recovery_randomness[loan_index][1],
+            ];
+            check_distinct_for_equal_keys(
+                &transfer_view.reader_key,
+                &s.owed_delta[loan_index].reader_key,
+                &transfer_randomness,
+                &loan_randomness,
+            )?;
+        }
+    }
     for (view, randomness) in s.transfer_views.iter().zip(w.transfer_randomness.iter()) {
         check_encryption(&view.reader_key, &view.ciphertext, w.payment, randomness)?;
     }
@@ -2304,6 +2664,11 @@ fn check_reconciliation(
         &w.broker_secret,
         w.impaired_principal,
     )?;
+    check_distinct_scalars(&[
+        &w.cash_blinding,
+        &w.active_principal_blinding,
+        &w.impaired_principal_blinding,
+    ])?;
     check_commitment_u128(&s.cash_commitment, w.cash, &w.cash_blinding)?;
     check_commitment_u128(
         &s.active_principal_commitment,
@@ -2401,6 +2766,31 @@ mod smoke_tests {
         let witness = Witness::KeyPossession(KeyPossessionWitness { secret_key: secret });
         let envelope = prove(&statement, &witness, &artifacts, &mut rng).unwrap();
         verify(&statement, &envelope, &artifacts).unwrap();
+        let verifying_key_bytes = artifacts
+            .get(StatementKind::KeyPossession)
+            .unwrap()
+            .verifying_key_bytes()
+            .unwrap();
+        verify_with_vk_bytes(&statement, &envelope, &verifying_key_bytes).unwrap();
+
+        let mut wrong_profile = envelope.clone();
+        wrong_profile.profile_id.push_str("-wrong");
+        assert!(matches!(
+            verify_with_vk_bytes(&statement, &wrong_profile, &verifying_key_bytes),
+            Err(CryptoError::ProfileMismatch)
+        ));
+        let mut wrong_digest = envelope.clone();
+        wrong_digest.context_digest.0.push('0');
+        assert!(matches!(
+            verify_with_vk_bytes(&statement, &wrong_digest, &verifying_key_bytes),
+            Err(CryptoError::ContextMismatch)
+        ));
+        let mut wrong_inputs = envelope.clone();
+        wrong_inputs.public_inputs[0] = FieldHex::from(Fr::from(1u64));
+        assert!(matches!(
+            verify_with_vk_bytes(&statement, &wrong_inputs, &verifying_key_bytes),
+            Err(CryptoError::ContextMismatch)
+        ));
 
         // Every context field is part of the Poseidon input inside the
         // circuit. Mutating any one after proof generation must fail even
@@ -2570,9 +2960,9 @@ mod smoke_tests {
         let (owed_recovery, owed_recovery_randomness) =
             recovery_pairs(term_keys.clone(), initial_owed, 97);
         let (payment_views, payment_randomness) =
-            reader_views(term_keys.clone(), periodic_payment, 103);
+            reader_views(term_keys.clone(), periodic_payment, 143);
         let (payment_recovery, payment_recovery_randomness) =
-            recovery_pairs(term_keys, periodic_payment, 109);
+            recovery_pairs(term_keys, periodic_payment, 151);
         let principal_blinding = EdFr::from(113u64);
         let owed_blinding = EdFr::from(127u64);
         let payment_blinding = EdFr::from(131u64);
@@ -2652,6 +3042,25 @@ mod smoke_tests {
     }
 
     #[test]
+    fn duplicate_loan_reader_keys_are_rejected_before_slot_derivation() {
+        let (mut origination, _) = origination_fixture();
+        if let Statement::Origination(value) = &mut origination {
+            value.payment_views[1].reader_key = crate::SecretKey::from_scalar(EdFr::from(149u64))
+                .unwrap()
+                .public_key();
+        }
+        assert!(origination.public_slots_without_hash().is_err());
+
+        let (mut repayment, _) = repayment_regular_fixture();
+        if let Statement::Repayment(value) = &mut repayment {
+            value.principal_after[2].reader_key = crate::SecretKey::from_scalar(EdFr::from(151u64))
+                .unwrap()
+                .public_key();
+        }
+        assert!(repayment.public_slots_without_hash().is_err());
+    }
+
+    #[test]
     fn conversion_credit_zero_balance_is_satisfied_and_debit_solvent_check_is_gated() {
         let (credit, credit_witness) = conversion_fixture(ConversionMode::Credit, 0, 25);
         let slots = credit.public_slots().unwrap();
@@ -2696,6 +3105,75 @@ mod smoke_tests {
         let (debit_insolvent, debit_insolvent_witness) =
             conversion_fixture(ConversionMode::Debit, 25, 26);
         assert_direct_unsatisfied(&debit_insolvent, &debit_insolvent_witness);
+
+        let (mut credit_overflow, mut credit_overflow_witness) =
+            conversion_fixture(ConversionMode::Credit, MAX_AMOUNT - 1, 1);
+        if let Statement::PublicConversion(statement) = &mut credit_overflow {
+            statement.spending_before = Ciphertext::encrypt_with_randomness(
+                &statement.owner_key,
+                MAX_AMOUNT,
+                EdFr::from(101u64),
+            )
+            .unwrap();
+            statement.spending_after = Ciphertext::encrypt_u128_with_randomness(
+                &statement.owner_key,
+                MAX_AMOUNT as u128 + 1,
+                EdFr::from(103u64),
+            )
+            .unwrap();
+        }
+        if let Witness::PublicConversion(witness) = &mut credit_overflow_witness {
+            witness.private_balance = MAX_AMOUNT;
+        }
+        assert_direct_unsatisfied(&credit_overflow, &credit_overflow_witness);
+
+        let mut zero_delta = debit_exact_witness.clone();
+        if let Witness::PublicConversion(witness) = &mut zero_delta {
+            witness.delta_randomness = ScalarHex::from(EdFr::from(0u64));
+        }
+        assert_direct_unsatisfied(&debit_exact, &zero_delta);
+    }
+
+    #[test]
+    fn scalar_group_order_equivalent_zero_is_rejected_directly() {
+        let cs = ConstraintSystem::new_ref();
+        let modulus = Fr::from_le_bytes_mod_order(&EdFr::MODULUS.to_bytes_le());
+        let scalar =
+            FpVar::<Fr>::new_input(ark_relations::ns!(cs, "scalar"), || Ok(modulus)).unwrap();
+        enforce_canonical_scalar(&scalar).unwrap();
+        assert!(!cs.is_satisfied().unwrap());
+    }
+
+    #[test]
+    fn ownership_amount_range_and_nonzero_are_directly_constrained() {
+        let owner = crate::SecretKey::from_scalar(EdFr::from(73u64)).unwrap();
+        let ciphertext =
+            Ciphertext::encrypt_with_randomness(&owner.public_key(), 4, EdFr::from(79u64)).unwrap();
+        let make = |expected_amount| {
+            (
+                Statement::Ownership(BalanceAssertionStatement {
+                    context: crate::OperationContext::default(),
+                    owner_key: owner.public_key(),
+                    ciphertext: ciphertext.clone(),
+                    expected_amount,
+                    spending_version: 1,
+                }),
+                Witness::Balance(BalanceAssertionWitness {
+                    secret_key: owner.clone(),
+                }),
+            )
+        };
+
+        let (valid, valid_witness) = make(4);
+        assert_direct_satisfied(&valid, &valid_witness);
+
+        // The low 63 bits of MAX_AMOUNT + 5 equal four. A verifier must
+        // reject the high-bit public amount instead of silently truncating it.
+        let (out_of_range, out_of_range_witness) = make(MAX_AMOUNT + 5);
+        assert_direct_unsatisfied(&out_of_range, &out_of_range_witness);
+
+        let (zero, zero_witness) = make(0);
+        assert_direct_unsatisfied(&zero, &zero_witness);
     }
 
     #[test]
@@ -2802,6 +3280,31 @@ mod smoke_tests {
             value.amount = 0;
         }
         assert_direct_unsatisfied(&statement, &zero_amount);
+
+        let mut zero_recovery_randomness = witness.clone();
+        if let Witness::ConfidentialTransfer(ref mut value) = zero_recovery_randomness {
+            value.transfer_recovery_randomness[0][0] = ScalarHex::from(EdFr::from(0u64));
+        }
+        assert_direct_unsatisfied(&statement, &zero_recovery_randomness);
+
+        let mut zero_delta_randomness = witness.clone();
+        if let Witness::ConfidentialTransfer(ref mut value) = zero_delta_randomness {
+            value.sender_delta_randomness = ScalarHex::from(EdFr::from(0u64));
+        }
+        assert_direct_unsatisfied(&statement, &zero_delta_randomness);
+
+        let mut zero_commitment_blinding = witness.clone();
+        if let Witness::ConfidentialTransfer(ref mut value) = zero_commitment_blinding {
+            value.commitment_blinding = ScalarHex::from(EdFr::from(0u64));
+        }
+        assert_direct_unsatisfied(&statement, &zero_commitment_blinding);
+        assert!(validate_host_relation(&statement, &zero_commitment_blinding).is_err());
+
+        let mut identity_ephemeral = statement.clone();
+        if let Statement::ConfidentialTransfer(ref mut value) = identity_ephemeral {
+            value.transfer_recovery[0].low_limb = Ciphertext::zero();
+        }
+        assert_direct_unsatisfied(&identity_ephemeral, &witness);
     }
 
     fn reconciliation_fixture() -> (Statement, Witness) {
@@ -3014,9 +3517,9 @@ mod smoke_tests {
             recovery_pairs(term_keys.clone(), payment, 137);
         let (periodic_views, _) = reader_views(term_keys.clone(), periodic, 149);
         let (principal_before, _) = reader_views(term_keys.clone(), principal, 263);
-        let (principal_after, _) = reader_views(term_keys.clone(), principal - principal_paid, 163);
+        let (principal_after, _) = reader_views(term_keys.clone(), principal - principal_paid, 143);
         let (principal_delta, principal_delta_randomness) =
-            reader_views(term_keys.clone(), principal_paid, 99);
+            reader_views(term_keys.clone(), principal_paid, 119);
         let (principal_delta_recovery, principal_delta_recovery_randomness) =
             recovery_pairs(term_keys, principal_paid, 191);
         let principal_paid_blinding = EdFr::from(197u64);
@@ -3114,6 +3617,19 @@ mod smoke_tests {
             value.broker_secret = crate::SecretKey::from_scalar(EdFr::from(149u64)).unwrap();
         }
         assert_direct_unsatisfied(&statement, &wrong_secret);
+    }
+
+    #[test]
+    fn reconciliation_u128_limbs_are_each_bounded_to_64_bits() {
+        let cs = ConstraintSystem::new_ref();
+        let low =
+            FpVar::<Fr>::new_input(ark_relations::ns!(cs, "low"), || Ok(Fr::from(1u64))).unwrap();
+        let high_value = Fr::from(2u64).pow([64]);
+        let high =
+            FpVar::<Fr>::new_input(ark_relations::ns!(cs, "high"), || Ok(high_value)).unwrap();
+        let mut cursor = SlotCursor { pos: 0 };
+        let _ = cursor.u128(&[low, high]).unwrap();
+        assert!(!cs.is_satisfied().unwrap());
     }
 
     #[test]

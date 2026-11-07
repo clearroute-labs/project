@@ -57,8 +57,9 @@ impl StatementKind {
                     + 8
                     + TRANSFER_VIEW_COUNT * 14
                     + 2
-                    + LOAN_READER_COUNT * 14
-                    + LOAN_READER_COUNT * 14
+                    + LOAN_READER_COUNT * 2
+                    + LOAN_READER_COUNT * 2 * 4
+                    + LOAN_READER_COUNT * 2 * 8
                     + 2
                     + 2
                     + 4
@@ -68,13 +69,9 @@ impl StatementKind {
                     + 4
                     + 8
                     + TRANSFER_VIEW_COUNT * 14
-                    + LOAN_READER_COUNT * 6
-                    + LOAN_READER_COUNT * 6
-                    + LOAN_READER_COUNT * 14
-                    + LOAN_READER_COUNT * 6
-                    + LOAN_READER_COUNT * 6
-                    + LOAN_READER_COUNT * 6
-                    + LOAN_READER_COUNT * 14
+                    + LOAN_READER_COUNT * 2
+                    + LOAN_READER_COUNT * 5 * 4
+                    + LOAN_READER_COUNT * 2 * 12
                     + 2
                     + 6
             }
@@ -407,6 +404,41 @@ fn promote_recovery_pair(pair: &RecoveryPair) -> Result<(), CryptoError> {
 }
 
 impl Statement {
+    /// Every loan-reader array uses one canonical key list. The wire structs
+    /// retain reader keys for explicit state comparison, but the fixed public
+    /// slots encode each role key once and all duplicate fields must match it.
+    pub(crate) fn validate_reader_layout(&self) -> Result<(), CryptoError> {
+        fn same_reader_keys(
+            expected: &[ReaderView],
+            actual: &[ReaderView],
+        ) -> Result<(), CryptoError> {
+            if expected.len() != actual.len()
+                || expected
+                    .iter()
+                    .zip(actual)
+                    .any(|(left, right)| left.reader_key != right.reader_key)
+            {
+                return Err(CryptoError::InvalidKey);
+            }
+            Ok(())
+        }
+
+        match self {
+            Self::Origination(statement) => {
+                same_reader_keys(&statement.owed_views, &statement.payment_views)
+            }
+            Self::Repayment(statement) => {
+                same_reader_keys(&statement.owed_before, &statement.owed_after)?;
+                same_reader_keys(&statement.owed_before, &statement.owed_delta)?;
+                same_reader_keys(&statement.owed_before, &statement.periodic_payment)?;
+                same_reader_keys(&statement.owed_before, &statement.principal_before)?;
+                same_reader_keys(&statement.owed_before, &statement.principal_after)?;
+                same_reader_keys(&statement.owed_before, &statement.principal_delta)
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Promote only the point fields of this exact statement after its
     /// complete Groth16 proof has verified. The proof's fixed circuit checks
     /// the prime-subgroup relation for every point, allowing Core to apply
@@ -549,6 +581,7 @@ impl Statement {
 
     fn build_slot_values(&self) -> Result<Vec<Fr>, CryptoError> {
         let mut b = SlotBuilder::new(self.context(), self.kind())?;
+        self.validate_reader_layout()?;
         match self {
             Self::KeyPossession(s) => {
                 b.push_public_key(&s.public_key)?;
@@ -559,6 +592,8 @@ impl Statement {
                 b.push_ciphertext(&s.spending_after)?;
                 for view in &s.views {
                     b.push_public_key(&view.reader_key)?;
+                }
+                for view in &s.views {
                     b.push_ciphertext(&view.ciphertext)?;
                 }
                 b.push_u64(s.public_amount);
@@ -572,6 +607,8 @@ impl Statement {
                 b.push_ciphertext(&s.sender_spending_after)?;
                 for view in &s.transfer_views {
                     b.push_public_key(&view.reader_key)?;
+                }
+                for view in &s.transfer_views {
                     b.push_ciphertext(&view.ciphertext)?;
                 }
                 for pair in &s.transfer_recovery {
@@ -587,6 +624,8 @@ impl Statement {
                 b.push_ciphertext(&s.broker_spending_after)?;
                 for view in &s.transfer_views {
                     b.push_public_key(&view.reader_key)?;
+                }
+                for view in &s.transfer_views {
                     b.push_ciphertext(&view.ciphertext)?;
                 }
                 for pair in &s.transfer_recovery {
@@ -595,13 +634,14 @@ impl Statement {
                 b.push_commitment(&s.principal_commitment)?;
                 for view in &s.owed_views {
                     b.push_public_key(&view.reader_key)?;
+                }
+                for view in &s.owed_views {
                     b.push_ciphertext(&view.ciphertext)?;
                 }
                 for pair in &s.owed_recovery {
                     b.push_recovery_pair(pair)?;
                 }
                 for view in &s.payment_views {
-                    b.push_public_key(&view.reader_key)?;
                     b.push_ciphertext(&view.ciphertext)?;
                 }
                 for pair in &s.payment_recovery {
@@ -621,6 +661,8 @@ impl Statement {
                 b.push_ciphertext(&s.borrower_spending_after)?;
                 for view in &s.transfer_views {
                     b.push_public_key(&view.reader_key)?;
+                }
+                for view in &s.transfer_views {
                     b.push_ciphertext(&view.ciphertext)?;
                 }
                 for pair in &s.transfer_recovery {
@@ -628,27 +670,24 @@ impl Statement {
                 }
                 for view in &s.owed_before {
                     b.push_public_key(&view.reader_key)?;
+                }
+                for view in &s.owed_before {
                     b.push_ciphertext(&view.ciphertext)?;
                 }
                 for view in &s.owed_after {
-                    b.push_public_key(&view.reader_key)?;
                     b.push_ciphertext(&view.ciphertext)?;
                 }
                 for (view, pair) in s.owed_delta.iter().zip(s.owed_delta_recovery.iter()) {
-                    b.push_public_key(&view.reader_key)?;
                     b.push_ciphertext(&view.ciphertext)?;
                     b.push_recovery_pair(pair)?;
                 }
                 for view in &s.periodic_payment {
-                    b.push_public_key(&view.reader_key)?;
                     b.push_ciphertext(&view.ciphertext)?;
                 }
                 for view in &s.principal_before {
-                    b.push_public_key(&view.reader_key)?;
                     b.push_ciphertext(&view.ciphertext)?;
                 }
                 for view in &s.principal_after {
-                    b.push_public_key(&view.reader_key)?;
                     b.push_ciphertext(&view.ciphertext)?;
                 }
                 for (view, pair) in s
@@ -656,7 +695,6 @@ impl Statement {
                     .iter()
                     .zip(s.principal_delta_recovery.iter())
                 {
-                    b.push_public_key(&view.reader_key)?;
                     b.push_ciphertext(&view.ciphertext)?;
                     b.push_recovery_pair(pair)?;
                 }
@@ -757,8 +795,8 @@ mod tests {
             (StatementKind::KeyPossession, 48),
             (StatementKind::PublicConversion, 77),
             (StatementKind::ConfidentialTransfer, 131),
-            (StatementKind::Origination, 222),
-            (StatementKind::Repayment, 310),
+            (StatementKind::Origination, 216),
+            (StatementKind::Repayment, 274),
             (StatementKind::Reconciliation, 86),
             (StatementKind::ZeroBalance, 54),
             (StatementKind::Ownership, 54),

@@ -8,19 +8,22 @@ setup command is not suitable for a funded release.
 ## Suite identity
 
 The suite identifier is
-`near-confidential-lending-bn254-edwards-groth16-v3` and the profile version
-is `3`. `profile_hash()` returns the SHA-256 digest of the following exact
+`near-confidential-lending-bn254-edwards-groth16-v4` and the profile version
+is `4`. `profile_hash()` returns the SHA-256 digest of the following exact
 UTF-8 manifest, including the final newline:
 
 ```text
-near-confidential-lending-bn254-edwards-groth16-v3
-version=3
+near-confidential-lending-bn254-edwards-groth16-v4
+version=4
 curve=ark-ed-on-bn254;subgroup=prime-order;encoding=compressed-32-byte-lower-hex
 elgamal=C=(rG,mG+rPK);pedersen=mG+rH;H=NEAR-CONFIDENTIAL-LENDING/PEDERSEN-H/v1:sha256-try-and-increment:cofactor8
 proof=arkworks-groth16-bn254;proof-compressed=canonical;field-input=canonical-le32
 poseidon=width3;rate2;capacity1;alpha5;full8;partial57;grain-skip0
 transcript=domain-field+slot-count+all-fixed-kind-slots;poseidon-field-output
 point-membership=statement-on-curve-plus-private-cofactor-preimage-[8]Q=P;generic-points=strict-prime-subgroup
+amount-randomness=scalar-0<r<EdFr::MODULUS;nonidentity-ephemeral;within-statement-same-reader-fresh-events-pairwise-distinct
+commitment-blinding=scalar-0<r<EdFr::MODULUS;within-statement-fresh-blinding-scalars-pairwise-distinct
+reader-layout=canonical-transfer-5-and-loan-3-keys;loan-views-reference-one-key-list
 max-amount=9223372036854775807;slot-capacity=320
 transfer-views=5;loan-reader-views=3
 recovery=proof-bound-two-encrypted-u32-limbs;authenticated-records-hints-only
@@ -28,7 +31,7 @@ setup=development-single-party-rejected-funded-release
 ```
 
 The current suite hash is
-`bac68a9fbaefea1228279a3665beeb9f082a520b9886b94c2d9713428122b8db`.
+`a4827cac06c9581120a6b10555397b499568b6ae89fc3d363816167648c80b3d`.
 This is intentionally separate from a deployment artifact-manifest hash. A
 deployment manifest must hash each proving key, verifying key, WASM binary and
 native binary; those artifact hashes are not included in the immutable suite
@@ -64,6 +67,10 @@ canonical/on-curve cache entries are kept separate from the strict
 validated-point cache and are never returned by generic decoding. Cache hits
 still apply the key/non-identity policy, and both caches are bounded per
 thread and are not protocol state.
+Every scalar witness is additionally constrained in-circuit to the canonical
+Edwards scalar interval `0 <= r < EdFr::MODULUS`; a nonzero fresh scalar is
+therefore not an alternate BN254-field representative of the Edwards group
+order. Fresh commitment blinding uses the same canonical interval.
 After the exact statement's Groth16 proof verifies, the verifier may call
 `Statement::promote_after_verified_proof()` to promote only that statement's
 point fields into the strict cache before homomorphic state updates. No
@@ -121,15 +128,37 @@ The fixed public slot counts are:
 | key possession | 48 |
 | public conversion | 77 |
 | confidential transfer | 131 |
-| origination | 222 |
-| repayment | 310 |
+| origination | 216 |
+| repayment | 274 |
 | reconciliation | 86 |
 | zero balance / ownership | 54 |
 
 The global capacity is 320 slots. The public digest is an additional verifier
-input, so the largest Groth16 input vector currently has 311 field elements.
+input, so the largest Groth16 input vector currently has 275 field elements.
 The contract adapter must use the exact vector supplied by the typed statement;
 it must not pad, reorder, or replace fields.
+
+V4 encodes each transfer reader-key list once and each loan reader-key list
+once. Origination and repayment wire arrays retain their reader keys for
+stored-state comparison, but the typed slot builder rejects any loan view
+whose key differs from the canonical three-key list. The circuit uses the
+single encoded key for every corresponding O/Q/R ciphertext and delta. This
+removes duplicate key coordinates without leaving reader identity as
+unconstrained metadata. Public conversion likewise encodes its three keys
+once. Every fresh encryption and transition delta proves a canonical nonzero
+scalar and a nonidentity ephemeral point; fresh commitments require nonzero
+canonical blinding. Homomorphic cancellation outputs may still be identity.
+For fresh events encrypted to the same reader, the circuit also requires the
+main ciphertext randomizer and both recovery-limb randomizers to be pairwise
+distinct; O and Q term randomizers (and repayment O/P delta randomizers) are
+therefore never reused for one reader. Fresh commitment blinding scalars in
+one statement are pairwise distinct; the comparison is over the scalar
+witnesses themselves, not merely over resulting commitment points (which
+would not prove distinct blindings when amounts differ). These are concrete
+within-statement non-reuse predicates, not claims that a Groth16 witness
+proves external RNG entropy; callers must still sample independent
+cryptographic randomness. Randomizers for unrelated reader views, separate
+transactions, and homomorphic derived values are not compared.
 
 Public conversion has two explicit modes. `Credit` proves a public amount is
 added to the owner’s private spending ciphertext; `Debit` proves possession,
