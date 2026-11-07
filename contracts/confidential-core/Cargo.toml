@@ -16,11 +16,12 @@ serde_json.workspace = true
 sha2.workspace = true
 hex.workspace = true
 near-verifier = { path = "../../crates/near-verifier" }
-confidential-crypto = { path = "../../crates/confidential-crypto", default-features = false }
+confidential-crypto = { path = "../../crates/confidential-crypto", default-features = false, features = ["validated-storage"] }
 authenticated-book = { path = "../../crates/authenticated-book" }
 lending-math = { path = "../../crates/lending-math" }
 
 [features]
+gas-profiling = []
 unit-testing = ["near-sdk/unit-testing"]
 
 [dev-dependencies]

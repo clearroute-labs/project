@@ -80,7 +80,7 @@ try {
   await privateFile(join(output, 'public.json'), JSON.stringify({ networkId: 'sandbox', coreAccountId: deployment.core.accountId,
     webUrl: `http://127.0.0.1:${webPort}/`,
     tokenAccountId: deployment.token.accountId, rpcUrl: deployment.rpc.url, manifestHash: deployment.manifestHash,
-    profileHash: deployment.manifest.profileHash, artifactBase, loanAuditorKey,
+    profileHash: deployment.manifest.profileHash, coreWasmHash: deployment.coreWasmHash, artifactBase, loanAuditorKey,
     keeperAuthorization: { keyId: '1', epoch: '2', accountId: deployment.actors.keeper.accountId },
     accounts: Object.fromEntries(Object.entries(deployment.actors).map(([name, account]) => [name, account.accountId])) }, null, 2));
   console.log(`Sandbox ready. Import a signing credential from ${join(output, 'credentials')} in the local wallet. These accounts hold test tokens only.`);

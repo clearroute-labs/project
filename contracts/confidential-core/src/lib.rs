@@ -2877,6 +2877,8 @@ impl Core {
 
     pub fn repay(&mut self, args: RepayArgs) {
         let caller = env::predecessor_account_id();
+        #[cfg(feature = "gas-profiling")]
+        env::log_str(&format!("repay-gas:start:{}", env::used_gas().as_gas()));
         let storage_before = env::storage_usage();
         self.ensure_verifier_active();
         self.ensure_asset_unfrozen();
@@ -2944,28 +2946,37 @@ impl Core {
             0,
             borrower.owner.as_ref(),
         );
+        #[cfg(feature = "gas-profiling")]
+        env::log_str(&format!(
+            "repay-gas:before-proof:{}",
+            env::used_gas().as_gas()
+        ));
         let statement =
             self.verify_typed_statement(&args.proof, StatementKind::Repayment, &context);
         let Statement::Repayment(statement) = statement else {
             env::panic_str(ERR_BAD_PROOF);
         };
-        let borrower_key = crypto_adapter::parse_public_key(&borrower.encryption_key.public_key)
+        #[cfg(feature = "gas-profiling")]
+        env::log_str(&format!("repay-gas:verified:{}", env::used_gas().as_gas()));
+        let borrower_key =
+            crypto_adapter::parse_stored_public_key(&borrower.encryption_key.public_key)
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
+        let broker_key = crypto_adapter::parse_stored_public_key(&broker.encryption_key.public_key)
             .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
-        let broker_key = crypto_adapter::parse_public_key(&broker.encryption_key.public_key)
-            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
-        let loan_auditor_key = crypto_adapter::parse_public_key(&loan.loan_auditor_public_key)
-            .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
+        let loan_auditor_key =
+            crypto_adapter::parse_stored_public_key(&loan.loan_auditor_public_key)
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         require!(statement.borrower_key == borrower_key, ERR_BAD_PROOF);
         require!(statement.broker_key == broker_key, ERR_BAD_PROOF);
         require!(
             statement.borrower_spending_before
-                == crypto_adapter::parse_ciphertext(&borrower.spending_ciphertext)
+                == crypto_adapter::parse_stored_ciphertext(&borrower.spending_ciphertext)
                     .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             ERR_BAD_PROOF
         );
         require!(
             statement.borrower_spending_after
-                != crypto_adapter::parse_ciphertext(&borrower.spending_ciphertext)
+                != crypto_adapter::parse_stored_ciphertext(&borrower.spending_ciphertext)
                     .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             ERR_BAD_PROOF
         );
@@ -2976,9 +2987,9 @@ impl Core {
         let transfer_keys = [
             borrower_key.clone(),
             broker_key.clone(),
-            crypto_adapter::parse_public_key(&self.asset.issuer_key.public_key)
+            crypto_adapter::parse_stored_public_key(&self.asset.issuer_key.public_key)
                 .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
-            crypto_adapter::parse_public_key(&self.asset.token_auditor_key.public_key)
+            crypto_adapter::parse_stored_public_key(&self.asset.token_auditor_key.public_key)
                 .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             loan_auditor_key.clone(),
         ];
@@ -2998,28 +3009,28 @@ impl Core {
             }
         }
         let broker_issuer = crypto_adapter::add_ciphertexts(
-            &crypto_adapter::parse_ciphertext(&broker.issuer_balance_ciphertext)
+            &crypto_adapter::parse_stored_ciphertext(&broker.issuer_balance_ciphertext)
                 .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &statement.transfer_views[2].ciphertext,
         )
         .and_then(|value| crypto_adapter::encode(&value))
         .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let broker_auditor = crypto_adapter::add_ciphertexts(
-            &crypto_adapter::parse_ciphertext(&broker.auditor_balance_ciphertext)
+            &crypto_adapter::parse_stored_ciphertext(&broker.auditor_balance_ciphertext)
                 .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &statement.transfer_views[3].ciphertext,
         )
         .and_then(|value| crypto_adapter::encode(&value))
         .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let borrower_issuer = crypto_adapter::sub_ciphertexts(
-            &crypto_adapter::parse_ciphertext(&borrower.issuer_balance_ciphertext)
+            &crypto_adapter::parse_stored_ciphertext(&borrower.issuer_balance_ciphertext)
                 .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &statement.transfer_views[2].ciphertext,
         )
         .and_then(|value| crypto_adapter::encode(&value))
         .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let borrower_auditor = crypto_adapter::sub_ciphertexts(
-            &crypto_adapter::parse_ciphertext(&borrower.auditor_balance_ciphertext)
+            &crypto_adapter::parse_stored_ciphertext(&borrower.auditor_balance_ciphertext)
                 .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &statement.transfer_views[3].ciphertext,
         )
@@ -3057,17 +3068,21 @@ impl Core {
                 ERR_BAD_PROOF
             );
         }
-        let broker_inbox_after = combine_ciphertexts(
-            &broker.inbox_ciphertext,
-            &crypto_adapter::encode(&statement.transfer_views[1].ciphertext)
-                .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF)),
-        );
+        let broker_inbox_after = crypto_adapter::add_ciphertexts(
+            &crypto_adapter::parse_stored_ciphertext(&broker.inbox_ciphertext)
+                .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
+            &statement.transfer_views[1].ciphertext,
+        )
+        .and_then(|value| crypto_adapter::encode(&value))
+        .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         if !args.broker_inbox_ciphertext.is_empty() {
             require!(
                 args.broker_inbox_ciphertext == broker_inbox_after,
                 ERR_BAD_PROOF
             );
         }
+        #[cfg(feature = "gas-profiling")]
+        env::log_str(&format!("repay-gas:mirrors:{}", env::used_gas().as_gas()));
         let loan_keys = [borrower_key, broker_key, loan_auditor_key];
         for (index, loan_key) in loan_keys.iter().enumerate() {
             require!(
@@ -3082,15 +3097,17 @@ impl Core {
             );
             require!(
                 statement.owed_before[index].ciphertext
-                    == crypto_adapter::parse_ciphertext(&loan.amount_owed_ciphertexts[index])
-                        .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING))
+                    == crypto_adapter::parse_stored_ciphertext(
+                        &loan.amount_owed_ciphertexts[index]
+                    )
+                    .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING))
                     && statement.periodic_payment[index].ciphertext
-                        == crypto_adapter::parse_ciphertext(
+                        == crypto_adapter::parse_stored_ciphertext(
                             &loan.periodic_payment_ciphertexts[index]
                         )
                         .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING))
                     && statement.principal_before[index].ciphertext
-                        == crypto_adapter::parse_ciphertext(
+                        == crypto_adapter::parse_stored_ciphertext(
                             &loan.principal_remaining_ciphertexts[index]
                         )
                         .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
@@ -3145,11 +3162,11 @@ impl Core {
         }
         let principal_delta = &statement.principal_delta[1].ciphertext;
         let expected_active = if loan.impaired {
-            crypto_adapter::parse_ciphertext(&broker.active_principal_ciphertext)
+            crypto_adapter::parse_stored_ciphertext(&broker.active_principal_ciphertext)
                 .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING))
         } else {
             crypto_adapter::sub_ciphertexts(
-                &crypto_adapter::parse_ciphertext(&broker.active_principal_ciphertext)
+                &crypto_adapter::parse_stored_ciphertext(&broker.active_principal_ciphertext)
                     .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                 principal_delta,
             )
@@ -3157,13 +3174,13 @@ impl Core {
         };
         let expected_impaired = if loan.impaired {
             crypto_adapter::sub_ciphertexts(
-                &crypto_adapter::parse_ciphertext(&broker.impaired_principal_ciphertext)
+                &crypto_adapter::parse_stored_ciphertext(&broker.impaired_principal_ciphertext)
                     .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                 principal_delta,
             )
             .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF))
         } else {
-            crypto_adapter::parse_ciphertext(&broker.impaired_principal_ciphertext)
+            crypto_adapter::parse_stored_ciphertext(&broker.impaired_principal_ciphertext)
                 .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING))
         };
         let expected_active_ciphertext = crypto_adapter::encode(&expected_active)
@@ -3200,7 +3217,7 @@ impl Core {
             .zip(loan.cumulative_repaid_ciphertexts.iter())
             .map(|(paid, current)| {
                 crypto_adapter::add_ciphertexts(
-                    &crypto_adapter::parse_ciphertext(current)
+                    &crypto_adapter::parse_stored_ciphertext(current)
                         .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
                     &paid.ciphertext,
                 )
@@ -3214,6 +3231,11 @@ impl Core {
                 ERR_BAD_PROOF
             );
         }
+        #[cfg(feature = "gas-profiling")]
+        env::log_str(&format!(
+            "repay-gas:arithmetic:{}",
+            env::used_gas().as_gas()
+        ));
         self.record_recovery(
             "repay",
             &args.proof.statement,
@@ -3235,19 +3257,21 @@ impl Core {
                 loan.loan_version,
             ],
         );
+        #[cfg(feature = "gas-profiling")]
+        env::log_str(&format!("repay-gas:recovery:{}", env::used_gas().as_gas()));
         let principal_delta_commitment = statement.principal_delta_commitment.clone();
         let expected_loan_commitment = crypto_adapter::sub_commitments(
-            &crypto_adapter::parse_commitment(&loan.principal_remaining_commitment)
+            &crypto_adapter::parse_stored_commitment(&loan.principal_remaining_commitment)
                 .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING)),
             &principal_delta_commitment,
         )
         .and_then(|value| crypto_adapter::encode(&value))
         .unwrap_or_else(|_| env::panic_str(ERR_BAD_PROOF));
         let old_active_commitment =
-            crypto_adapter::parse_commitment(&broker.active_principal_commitment)
+            crypto_adapter::parse_stored_commitment(&broker.active_principal_commitment)
                 .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         let old_impaired_commitment =
-            crypto_adapter::parse_commitment(&broker.impaired_principal_commitment)
+            crypto_adapter::parse_stored_commitment(&broker.impaired_principal_commitment)
                 .unwrap_or_else(|_| env::panic_str(ERR_INVALID_ENCODING));
         let (expected_active_commitment, expected_impaired_commitment) = if loan.impaired {
             (
@@ -3382,6 +3406,11 @@ impl Core {
             &loan.periodic_payment_ciphertexts,
             &expected_loan_commitment,
         );
+        #[cfg(feature = "gas-profiling")]
+        env::log_str(&format!(
+            "repay-gas:before-book:{}",
+            env::used_gas().as_gas()
+        ));
         let expected_root = self.update_loan_book(
             broker.broker_id,
             loan.loan_id,
@@ -3389,6 +3418,8 @@ impl Core {
             Some(&old_loan_leaf),
             Some(&expected_leaf),
         );
+        #[cfg(feature = "gas-profiling")]
+        env::log_str(&format!("repay-gas:book:{}", env::used_gas().as_gas()));
         if !args.accounting_leaf.is_empty() {
             require!(args.accounting_leaf == expected_leaf, ERR_BAD_PROOF);
         }
@@ -3454,6 +3485,8 @@ impl Core {
                 "amount_owed_ciphertexts": loan.amount_owed_ciphertexts,
             }),
         );
+        #[cfg(feature = "gas-profiling")]
+        env::log_str(&format!("repay-gas:stored:{}", env::used_gas().as_gas()));
         self.charge_storage(&caller, storage_before);
     }
 

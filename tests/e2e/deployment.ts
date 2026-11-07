@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { resolve, join } from 'node:path';
 import type { NearAccount, Worker } from 'near-workspaces';
 import { NearRpc, canonicalManifest, verifyManifestPin, type CryptoManifest } from '../../packages/client/src/index.js';
@@ -21,6 +22,7 @@ export interface TestDeployment {
   proofs: ProofBuilder;
   manifest: CryptoManifest;
   manifestHash: string;
+  coreWasmHash: string;
 }
 
 /** Deploys real contracts and real proof keys into an isolated ephemeral chain. No state patching or verifier bypass. */
@@ -47,7 +49,9 @@ export async function deployProtocol(directory = process.env.CRYPTO_ARTIFACT_DIR
     await keys.generate(auditorKey);
     await token.deploy(resolve('.artifacts/contracts/test_token.wasm'));
     await worker.rootAccount.call(token, 'new', { owner_id: worker.rootAccount.accountId });
-    await core.deploy(resolve('.artifacts/contracts/confidential_core.wasm'));
+    const coreWasm = await readFile(resolve('.artifacts/contracts/confidential_core.wasm'));
+    const coreWasmHash = createHash('sha256').update(coreWasm).digest('hex');
+    await core.deploy(coreWasm);
     await worker.rootAccount.call(core, 'new', { args: {
       token_account: token.accountId, decimals: 6, controller_account: actors.issuer.accountId,
       issuer_key_id: '1', issuer_public_key: jsonBytes(keys.publicKey(issuerKey)),
@@ -69,6 +73,6 @@ export async function deployProtocol(directory = process.env.CRYPTO_ARTIFACT_DIR
       if (account !== core) await account.call(core, 'storage_deposit', { account_id: account.accountId }, { attachedDeposit: 20n * near });
     }
     for (const actor of [actors.lender, actors.borrower]) await worker.rootAccount.call(token, 'mint', { receiver_id: actor.accountId, amount: '1000000000' });
-    return { worker, core, token, actors, rpc: new NearRpc(worker.provider.connection.url, { allowInsecureLocalhost: true }), crypto, keys, proofs: new ProofBuilder(crypto, keys), manifest, manifestHash: pin.manifestHash };
+    return { worker, core, token, actors, rpc: new NearRpc(worker.provider.connection.url, { allowInsecureLocalhost: true }), crypto, keys, proofs: new ProofBuilder(crypto, keys), manifest, manifestHash: pin.manifestHash, coreWasmHash };
   } catch (error) { await worker.tearDown(); throw error; }
 }

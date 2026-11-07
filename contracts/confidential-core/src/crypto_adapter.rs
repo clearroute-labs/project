@@ -3,9 +3,10 @@
 //!
 //! Core deliberately does not store arkworks values.  Every encrypted value
 //! crossing this boundary is canonical JSON for one of the crypto crate's
-//! serde wire records.  Parsing therefore performs the crypto crate's point,
-//! subgroup, identity and canonical-encoding checks before a value can be
-//! used in a statement or homomorphic update.  The concrete profile and
+//! serde wire records. Untrusted parsing checks canonical encoding, curve and
+//! subgroup membership, and key identity. The explicitly named stored-state
+//! parsers reuse subgroup membership established before persistence; callers
+//! must never pass transaction arguments to those parsers. The concrete profile and
 //! verifier artifacts are pinned by deployment configuration; this adapter is
 //! not an independent cryptographic review claim.
 
@@ -43,6 +44,38 @@ pub fn parse_ciphertext(bytes: &[u8]) -> Result<Ciphertext, WireError> {
 
 pub fn parse_commitment(bytes: &[u8]) -> Result<Commitment, WireError> {
     parse(bytes)
+}
+
+#[derive(serde::Deserialize)]
+struct StoredPointWire {
+    point: String,
+}
+
+#[derive(serde::Deserialize)]
+struct StoredCiphertextWire {
+    ephemeral: String,
+    message: String,
+}
+
+pub fn parse_stored_public_key(bytes: &[u8]) -> Result<PublicKey, WireError> {
+    let wire: StoredPointWire = parse(bytes)?;
+    confidential_crypto::validated_storage::parse_key(&wire.point)
+        .map(|value| value.into_public_key())
+        .map_err(|_| ())
+}
+
+pub fn parse_stored_ciphertext(bytes: &[u8]) -> Result<Ciphertext, WireError> {
+    let wire: StoredCiphertextWire = parse(bytes)?;
+    confidential_crypto::validated_storage::parse_ciphertext(&wire.ephemeral, &wire.message)
+        .map(|value| value.into_ciphertext())
+        .map_err(|_| ())
+}
+
+pub fn parse_stored_commitment(bytes: &[u8]) -> Result<Commitment, WireError> {
+    let wire: StoredPointWire = parse(bytes)?;
+    confidential_crypto::validated_storage::parse_commitment(&wire.point)
+        .map(|value| value.into_commitment())
+        .map_err(|_| ())
 }
 
 pub fn statement_inputs_with_digest(

@@ -39,7 +39,7 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
       if (confidentialMethods.has(method) && log.startsWith('EVENT_JSON:')) assertPrivatePayload(JSON.parse(log.slice('EVENT_JSON:'.length)), privateAmounts);
     }
     measurements.push({ method, gas: outcome.gas_burnt, argumentBytes: Buffer.byteLength(JSON.stringify(input)), milliseconds: Date.now() - before, succeeded: !outcome.failed });
-    await writeFile('.artifacts/lifecycle-benchmark.json', JSON.stringify({ complete: false, core: core.accountId, manifestHash: deployment.manifestHash, measurements }, null, 2));
+    await writeFile('.artifacts/lifecycle-benchmark.json', JSON.stringify({ complete: false, core: core.accountId, manifestHash: deployment.manifestHash, coreWasmHash: deployment.coreWasmHash, measurements }, null, 2));
     assert.equal(outcome.failed, false, `${method}: ${JSON.stringify(outcome.status)}`);
     await rpc.waitForFinalOutcome(outcome.transactionReceipt.hash, actor.accountId);
     return outcome.parseResult<T>();
@@ -191,6 +191,6 @@ test('real confidential lending funds, spends, repays, settles yield and redeems
     await wallet.recovery.verify({ role: 'token_auditor', subjectId: token.accountId, keyId: '1' }, decodeWire(restored.record.auditor_balance_ciphertext), 1000000n);
     assert.equal(await core.view('get_custody_total'), '40000000');
     await mkdir('.artifacts', { recursive: true });
-    await writeFile('.artifacts/lifecycle-benchmark.json', JSON.stringify({ complete: true, core: core.accountId, manifestHash: deployment.manifestHash, measurements }, null, 2));
+    await writeFile('.artifacts/lifecycle-benchmark.json', JSON.stringify({ complete: true, core: core.accountId, manifestHash: deployment.manifestHash, coreWasmHash: deployment.coreWasmHash, measurements }, null, 2));
   } finally { keys.clear(); await worker.tearDown(); }
 });

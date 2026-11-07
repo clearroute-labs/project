@@ -15,6 +15,11 @@ test('multiple brokers reconcile impairment and default without charging the sam
     return outcome.parseResult<T>();
   };
   const submit = <T>(actor: NearAccount, prepared: PreparedCall): Promise<T> => call(actor, prepared.method, prepared.args);
+  const reject = async (actor: NearAccount, prepared: PreparedCall, category: RegExp): Promise<void> => {
+    const outcome = await actor.callRaw(core, prepared.method, prepared.args, { gas: maximumGas });
+    assert.equal(outcome.failed, true);
+    assert.match(JSON.stringify(outcome.status), category);
+  };
   const deposit = async (actor: NearAccount, amount: string, id: string): Promise<string> => {
     const outcome = await actor.callRaw(token, 'ft_transfer_call', {
       receiver_id: core.accountId, amount, memo: null, msg: JSON.stringify({ version: 1, deposit_id: id }),
@@ -90,17 +95,23 @@ test('multiple brokers reconcile impairment and default without charging the sam
 
     // A positive provision requires an atomic post-settlement reconciliation.
     // The wallet derives an inline checkpoint; no separate prepare transaction is needed.
+    const priorCheckpoint = await call<string>(actors.broker, 'prepare_reconciliation', { broker_id: firstBroker });
     assert.ok((await fastForwardFinalized(worker, 120)).elapsedSeconds >= 60n);
+    const staleCheckpoint = await wallet.prepareReconciliation(firstBroker, priorCheckpoint);
     const impairedSettlement = await wallet.prepareSettlement(firstBroker, '50000000');
     assert.equal((impairedSettlement.args.args as { reconciliation: { checkpoint_id: string } }).reconciliation.checkpoint_id, '0');
     await submit(actors.broker, impairedSettlement);
+    await reject(actors.broker, staleCheckpoint, /STALE_STATE/);
     vault = await core.view('get_vault', { vault_id: vaultId });
     assert.equal(vault.assets_available, '50000000');
     assert.equal(vault.assets_total, '300000000');
     assert.equal(vault.loss_unrealized, '150000000');
     assert.equal((await wallet.broker(firstBroker)).record.debt_total, '150000000');
 
+    await submit(actors.recipient, await wallet.prepareMergeHolder(actors.recipient.accountId));
+    const repaymentBeforeDefault = await wallet.prepareRepayment(actors.recipient.accountId, defaultingLoan, 'Full');
     await submit(actors.broker, await wallet.prepareManagement(defaultingLoan, 'Default'));
+    await reject(actors.recipient, repaymentBeforeDefault, /LOAN_CLOSED/);
     await reconcile(firstBroker);
     vault = await core.view('get_vault', { vault_id: vaultId });
     assert.equal(vault.assets_total, '250000000'); assert.equal(vault.loss_unrealized, '100000000');
@@ -129,6 +140,6 @@ test('multiple brokers reconcile impairment and default without charging the sam
     await call(actors.recipient, 'finalize_payout', { operation_id: '9007199254741001' });
     assert.equal(await token.view('ft_balance_of', { account_id: actors.lender.accountId }), '960000000');
     assert.equal(await core.view('get_custody_total'), '100000000');
-    assert.equal((await wallet.holder(actors.recipient.accountId)).inbox, '100000000');
+    assert.equal((await wallet.holder(actors.recipient.accountId)).spending, '100000000');
   } finally { keys.clear(); await worker.tearDown(); }
 });

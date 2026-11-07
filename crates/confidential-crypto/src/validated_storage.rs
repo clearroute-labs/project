@@ -111,13 +111,8 @@ pub fn parse_key(point: &str) -> Result<StoredPublicKey, CryptoError> {
 
 /// Parse both persisted ciphertext points under the trusted-state contract.
 /// Identity points remain valid for homomorphic cancellation results.
-pub fn parse_ciphertext(
-    ephemeral: &str,
-    message: &str,
-) -> Result<StoredCiphertext, CryptoError> {
-    let ciphertext = with_statement_point_subgroup_check(|| {
-        Ciphertext::parse(ephemeral, message)
-    })?;
+pub fn parse_ciphertext(ephemeral: &str, message: &str) -> Result<StoredCiphertext, CryptoError> {
+    let ciphertext = with_statement_point_subgroup_check(|| Ciphertext::parse(ephemeral, message))?;
     ciphertext.ephemeral.promote_after_trusted_validation()?;
     ciphertext.message.promote_after_trusted_validation()?;
     Ok(StoredCiphertext(ciphertext))
@@ -137,8 +132,8 @@ mod tests {
     use ark_ff::Zero;
 
     use super::*;
-    use crate::encoding::PointHex;
     use crate::SecretKey;
+    use crate::encoding::PointHex;
 
     #[test]
     fn trusted_decoder_accepts_valid_state_and_generic_parser_remains_strict() {
