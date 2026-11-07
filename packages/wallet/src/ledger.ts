@@ -140,16 +140,18 @@ export class LedgerWallet {
     if (!/^(0|[1-9]\d*)$/.test(assetKey.key_id)) throw new Error('Audit reader key ID is invalid');
     const reader: KeyReference = { role: readerRole, subjectId: state.asset.token_account, keyId: assetKey.key_id };
     // publicKey() intentionally fails when the imported wallet does not own
-    // the selected audit key. Do not fall back to a holder/broker key.
-    this.keys.publicKey(reader);
+    // the selected audit key. Do not fall back to a holder/broker key. Bind
+    // the imported secret to the immutable key advertised by Core as well;
+    // this matters even when the mirror currently decrypts to zero.
+    const readerPublicKey = this.keys.publicKey(reader);
+    const registeredPublicKey = decodeWire<EncryptionPublicKey>(assetKey.public_key);
+    if (readerPublicKey.point !== registeredPublicKey.point) throw new Error('Imported audit key does not match the registered asset key');
     const subject = `${kind}:${subjectId}`;
     const record = kind === 'holder'
       ? await this.view<LedgerHolder | null>(state.block, 'get_holder', { owner: subjectId }, signal)
       : await this.view<LedgerBroker | null>(state.block, 'get_broker', { broker_id: subjectId }, signal);
     if (!record) throw new Error(`The requested ${kind} is not registered`);
-    const mirrorCiphertext = kind === 'holder'
-      ? (readerRole === 'issuer' ? record.issuer_balance_ciphertext : record.auditor_balance_ciphertext)
-      : (readerRole === 'issuer' ? record.issuer_balance_ciphertext : record.auditor_balance_ciphertext);
+    const mirrorCiphertext = readerRole === 'issuer' ? record.issuer_balance_ciphertext : record.auditor_balance_ciphertext;
     const mirror = await this.recoverAuditMirror(state, subject, reader, mirrorCiphertext, signal);
     return { record, key: reader, mirror, snapshot: state } as RecoveredAuditBalance<LedgerHolder | LedgerBroker>;
   }
@@ -385,7 +387,10 @@ export class LedgerWallet {
       payment_count: draft.terms.paymentCount, payment_interval: schedule.interval, grace_period: schedule.grace, expiry: schedule.expiry,
       principal_ciphertexts: draft.principal.views.map(view => jsonBytes(view.ciphertext)), initial_owed_ciphertexts: draft.owed.views.map(view => jsonBytes(view.ciphertext)), periodic_payment_ciphertexts: draft.payment.views.map(view => jsonBytes(view.ciphertext)),
       principal_commitment: jsonBytes(draft.principalCommitment.commitment), owed_commitment: jsonBytes(draft.owedCommitment.commitment), payment_commitment: jsonBytes(draft.paymentCommitment.commitment),
-      agreement_digest: [], broker_signature: [], borrower_signature: [], broker_authorization_epoch: brokerKey.authorization_epoch,
+      agreement_digest: [], broker_signature: [], borrower_signature: [],
+      // Direct owner approvals carry no broker authorization key. Core's
+      // direct path is epoch zero; the encryption-key epoch is unrelated.
+      broker_authorization_epoch: '0',
       borrower_authorization_epoch: holder.authorization_epoch, broker_authorization_nonce: '0', borrower_authorization_nonce: '0', broker_authorization_key_id: null, borrower_authorization_key_id: null,
     } });
   }
@@ -412,8 +417,12 @@ export class LedgerWallet {
     if (record.borrower !== accountId || !['active', 'impaired'].includes(loan.amounts.status)) throw new Error('Loan is not payable by this account');
     const broker = await this.view<LedgerBroker | null>(snapshot.block, 'get_broker', { broker_id: record.broker_id }, signal);
     if (!broker) throw new Error('Loan broker is unavailable');
-    const payment = mode === 'Full' ? loan.amounts.owed : amount ?? loan.amounts.periodic;
-    requireSpendable(balance.spending, balance.inbox, payment, 'repayment');
+    const owed = BigInt(loan.amounts.owed), periodic = BigInt(loan.amounts.periodic), principal = BigInt(loan.amounts.principalRemaining);
+    const paymentText = mode === 'Full' ? loan.amounts.owed : amount ?? loan.amounts.periodic;
+    if (!/^(0|[1-9]\d*)$/.test(paymentText) || BigInt(paymentText) > (1n << 63n) - 1n) throw new Error('Invalid loan repayment');
+    const payment = BigInt(paymentText);
+    if (payment === 0n || principal > owed || (mode === 'Regular' && (payment < periodic || payment >= owed || record.payment_remaining <= 1))) throw new Error('Invalid loan repayment');
+    requireSpendable(balance.spending, balance.inbox, payment.toString(), 'repayment');
     const borrowerKey = this.keys.publicKey(balance.key), brokerKey = decodeWire<EncryptionPublicKey>(broker.encryption_public_key), auditor = decodeWire<EncryptionPublicKey>(record.loan_auditor_public_key);
     const readers = [borrowerKey, brokerKey, auditor];
     const loanViews = (ciphertexts: number[][]): ReaderView[] => ciphertexts.map((bytes, index) => ({ reader_key: readers[index]!, ciphertext: decodeWire(bytes) }));
@@ -422,7 +431,7 @@ export class LedgerWallet {
       owedViews: loanViews(record.amount_owed_ciphertexts), paymentViews: loanViews(record.periodic_payment_ciphertexts), principalViews: loanViews(record.principal_remaining_ciphertexts),
       transferKeys: [borrowerKey, brokerKey, decodeWire(snapshot.asset.issuer_key.public_key), decodeWire(snapshot.asset.token_auditor_key.public_key), auditor],
       paymentRemaining: record.payment_remaining, loanVersion: record.loan_version,
-    }, mode, payment);
+    }, mode, payment.toString());
     return this.prepared(snapshot, 'repay', { args: { loan_id: loanId, mode, expected_loan_version: record.loan_version,
       expected_borrower_spending_version: balance.record.spending_version, proof: proofArguments(proof) } }, proof);
   }
@@ -497,8 +506,11 @@ export class LedgerWallet {
     requireSpendable(balance.spending, balance.inbox, amount, 'settlement');
     const context = await this.context(snapshot, { operation: 'settle', broker_id: brokerId, amount }, signal);
     const proof = await this.proofs.conversion(context, this.spending(balance), amount, this.conversionReaders(snapshot, balance.key), 'Debit');
-    const reconciliationId = checkpointId ?? (BigInt(balance.record.impairment_provision) > 0n || balance.record.accounting_pending
-      ? balance.record.reconciliation_checkpoint_id ?? '0' : undefined);
+    // An automatic inline reconciliation must bind to the same finalized
+    // snapshot as this settlement. A previously stored checkpoint can be
+    // stale after a newer risk/book update; only an explicit caller-provided
+    // checkpoint may select a historical checkpoint.
+    const reconciliationId = checkpointId ?? (BigInt(balance.record.impairment_provision) > 0n || balance.record.accounting_pending ? '0' : undefined);
     const reconciliation = reconciliationId !== undefined ? (await this.reconciliation(balance, reconciliationId, { amount, proof }, signal)).input : null;
     return this.prepared(snapshot, 'settle', { args: { broker_id: brokerId, amount, expected_spending_version: balance.record.spending_version,
       expected_accounting_version: balance.record.accounting_version, reconciliation, proof: proofArguments(proof) } }, proof);
