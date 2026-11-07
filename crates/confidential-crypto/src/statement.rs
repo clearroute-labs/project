@@ -748,6 +748,8 @@ impl Statement {
 
 #[cfg(test)]
 mod tests {
+    use ark_ed_on_bn254::{EdwardsAffine, Fq, Fr as EdFr};
+
     use super::*;
 
     #[test]
@@ -765,6 +767,43 @@ mod tests {
         for (kind, count) in expected {
             assert_eq!(kind.slot_count(), count);
             assert!(count <= crate::CONTEXT_SLOTS);
+        }
+    }
+
+    #[test]
+    fn promotion_only_moves_exact_statement_points() {
+        let valid_secret = crate::SecretKey::from_scalar(EdFr::from(7u64)).unwrap();
+        let valid_key = valid_secret.public_key();
+        let torsion = EdwardsAffine::new_unchecked(Fq::from(0u64), -Fq::from(1u64));
+        let torsion_wire = crate::encoding::encode_point(&torsion).unwrap();
+
+        // Seed the statement-only cache with an unrelated malformed subgroup
+        // point and with the valid statement point. Promotion must enumerate
+        // the exact statement, never copy the cache wholesale.
+        crate::encoding::with_statement_point_subgroup_check(|| {
+            assert!(crate::encoding::decode_point(&torsion_wire, false).is_ok());
+            assert!(
+                crate::encoding::decode_point(&valid_key.point.0, true).is_ok(),
+                "valid key should parse in statement mode"
+            );
+        });
+        let statement = Statement::KeyPossession(KeyPossessionStatement {
+            context: OperationContext::default(),
+            public_key: valid_key,
+        });
+        statement.promote_after_verified_proof().unwrap();
+
+        assert!(crate::encoding::decode_point(&statement_public_key(&statement), true).is_ok());
+        assert!(matches!(
+            crate::encoding::decode_point(&torsion_wire, false),
+            Err(CryptoError::MalformedPoint)
+        ));
+    }
+
+    fn statement_public_key(statement: &Statement) -> String {
+        match statement {
+            Statement::KeyPossession(value) => value.public_key.point.0.clone(),
+            _ => unreachable!("test statement kind"),
         }
     }
 }

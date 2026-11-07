@@ -11,7 +11,7 @@
 use ark_bn254::Fr;
 use borsh::{BorshDeserialize, BorshSerialize};
 use confidential_crypto::{
-    FieldHex, PROFILE_HASH, PROFILE_ID, ProofEnvelope, Statement, StatementKind, transcript_hash,
+    FieldHex, PROFILE_HASH, PROFILE_ID, ProofEnvelope, Statement, StatementKind,
 };
 use near_sdk::{PanicOnDefault, near};
 use serde::{Deserialize, Serialize};
@@ -108,13 +108,13 @@ impl VerifierProbe {
         near_verifier::verify_prepared(&self.key, &proof, &inputs).unwrap_or(false)
     }
 
-    /// Derive the canonical public-input vector exactly as Core does.  This
-    /// endpoint is useful for integration diagnostics and does not trust a
-    /// caller-provided public-input vector.
-    pub fn derive_public_inputs(&self, statement_json: String) -> Option<Vec<String>> {
+    /// Derive the canonical slot vector exactly as Core does. This diagnostic
+    /// intentionally omits the Poseidon digest; the digest remains the first
+    /// envelope input and is constrained by the Groth16 circuit.
+    pub fn derive_public_slots(&self, statement_json: String) -> Option<Vec<String>> {
         let statement: Statement = serde_json::from_str(&statement_json).ok()?;
         Some(
-            statement_public_inputs(&statement)?
+            statement_public_slots(&statement)?
                 .into_iter()
                 .map(|field| field.0)
                 .collect(),
@@ -189,15 +189,6 @@ fn statement_public_values(statement: &Statement) -> Option<Vec<Fr>> {
 fn statement_public_slots(statement: &Statement) -> Option<Vec<FieldHex>> {
     statement_public_values(statement)
         .map(|values| values.into_iter().map(FieldHex::from).collect())
-}
-
-fn statement_public_inputs(statement: &Statement) -> Option<Vec<FieldHex>> {
-    let values = statement_public_values(statement)?;
-    let digest = transcript_hash(&values);
-    let mut result = Vec::with_capacity(values.len() + 1);
-    result.push(FieldHex::from(digest));
-    result.extend(values.into_iter().map(FieldHex::from));
-    Some(result)
 }
 
 impl VerifierProbe {

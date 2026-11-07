@@ -24,7 +24,7 @@ point-membership=statement-on-curve-plus-private-cofactor-preimage-[8]Q=P;generi
 max-amount=9223372036854775807;slot-capacity=320
 transfer-views=5;loan-reader-views=3
 recovery=proof-bound-two-encrypted-u32-limbs;authenticated-records-hints-only
-setup=development-single-party-rejected-funded
+setup=development-single-party-rejected-funded-release
 ```
 
 The current suite hash is

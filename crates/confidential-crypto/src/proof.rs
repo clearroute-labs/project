@@ -944,8 +944,12 @@ impl SlotCursor {
         let mut preimage = PointVar::new_variable_omit_on_curve_check(
             point.x.cs(),
             || {
+                let affine = ark_ed_on_bn254::EdwardsAffine::new_unchecked(
+                    point.x.value()?,
+                    point.y.value()?,
+                );
                 Ok(ark_ed_on_bn254::EdwardsProjective::from(
-                    point.value()?.into_affine().mul_by_cofactor_inv(),
+                    affine.mul_by_cofactor_inv(),
                 ))
             },
             AllocationMode::Witness,
@@ -2328,9 +2332,53 @@ fn check_balance_assertion(
 #[cfg(test)]
 mod smoke_tests {
     use super::*;
-    use ark_ed_on_bn254::Fr as EdFr;
+    use ark_ed_on_bn254::{EdwardsAffine, Fq, Fr as EdFr};
     use ark_relations::r1cs::ConstraintSystem;
     use rand_chacha::{ChaCha20Rng, rand_core::SeedableRng};
+
+    fn assert_direct_satisfied(statement: &Statement, witness: &Witness) {
+        let slots = statement.public_slots().unwrap();
+        let circuit = LendingCircuit::from_statement(statement.kind(), slots.values, witness.clone())
+            .unwrap();
+        let cs = ConstraintSystem::new_ref();
+        circuit.generate_constraints(cs.clone()).unwrap();
+        assert!(cs.is_satisfied().unwrap(), "{:?}", cs.which_is_unsatisfied());
+    }
+
+    fn assert_direct_unsatisfied(statement: &Statement, witness: &Witness) {
+        let slots = statement.public_slots().unwrap();
+        let circuit = LendingCircuit::from_statement(statement.kind(), slots.values, witness.clone())
+            .unwrap();
+        let cs = ConstraintSystem::new_ref();
+        circuit.generate_constraints(cs.clone()).unwrap();
+        assert!(!cs.is_satisfied().unwrap());
+    }
+
+    #[test]
+    fn cofactor_preimage_constraint_rejects_torsion_point() {
+        // (0, -1) is on Baby-Jubjub but has order two. The host statement
+        // parser intentionally accepts it in its canonical/on-curve mode;
+        // the circuit must reject it through [8]Q = P.
+        let torsion = EdwardsAffine::new_unchecked(Fq::from(0u64), -Fq::from(1u64));
+        let cs = ConstraintSystem::new_ref();
+        let slots = vec![
+            FpVar::<Fr>::new_input(ark_relations::ns!(cs, "x"), || Ok(torsion.x)).unwrap(),
+            FpVar::<Fr>::new_input(ark_relations::ns!(cs, "y"), || Ok(torsion.y)).unwrap(),
+        ];
+        let mut cursor = SlotCursor { pos: 0 };
+        let _ = cursor.point(&slots).unwrap();
+        assert!(!cs.is_satisfied().unwrap());
+
+        let valid = encryption_base().into_affine();
+        let valid_cs = ConstraintSystem::new_ref();
+        let valid_slots = vec![
+            FpVar::<Fr>::new_input(ark_relations::ns!(valid_cs, "x"), || Ok(valid.x)).unwrap(),
+            FpVar::<Fr>::new_input(ark_relations::ns!(valid_cs, "y"), || Ok(valid.y)).unwrap(),
+        ];
+        let mut valid_cursor = SlotCursor { pos: 0 };
+        let _ = valid_cursor.point(&valid_slots).unwrap();
+        assert!(valid_cs.is_satisfied().unwrap());
+    }
 
     #[test]
     fn key_possession_proof_round_trip() {
@@ -2380,6 +2428,18 @@ mod smoke_tests {
             }
             assert!(verify(&changed, &envelope, &artifacts).is_err());
         }
+    }
+
+    #[test]
+    fn key_possession_wrong_secret_fails_direct_r1cs() {
+        let owner = crate::SecretKey::from_scalar(EdFr::from(29u64)).unwrap();
+        let statement = Statement::KeyPossession(KeyPossessionStatement {
+            context: crate::OperationContext::default(),
+            public_key: owner.public_key(),
+        });
+        let wrong = crate::SecretKey::from_scalar(EdFr::from(31u64)).unwrap();
+        let witness = Witness::KeyPossession(KeyPossessionWitness { secret_key: wrong });
+        assert_direct_unsatisfied(&statement, &witness);
     }
 
     fn conversion_fixture(mode: ConversionMode, balance: u64, amount: u64) -> (Statement, Witness) {
@@ -2459,6 +2519,135 @@ mod smoke_tests {
         (statement, witness)
     }
 
+    fn origination_fixture() -> (Statement, Witness) {
+        let broker = crate::SecretKey::from_scalar(EdFr::from(41u64)).unwrap();
+        let borrower = crate::SecretKey::from_scalar(EdFr::from(43u64)).unwrap();
+        let reader_two = crate::SecretKey::from_scalar(EdFr::from(47u64)).unwrap();
+        let transfer_keys = [
+            broker.public_key(),
+            borrower.public_key(),
+            reader_two.public_key(),
+            crate::SecretKey::from_scalar(EdFr::from(53u64))
+                .unwrap()
+                .public_key(),
+            crate::SecretKey::from_scalar(EdFr::from(59u64))
+                .unwrap()
+                .public_key(),
+        ];
+        let term_keys = [
+            borrower.public_key(),
+            broker.public_key(),
+            reader_two.public_key(),
+        ];
+        let broker_balance = 100u64;
+        let principal = 30u64;
+        let initial_owed = 50u64;
+        let periodic_payment = 10u64;
+        let broker_before_randomness = EdFr::from(61u64);
+        let broker_after_randomness = EdFr::from(67u64);
+        let broker_before = Ciphertext::encrypt_with_randomness(
+            &broker.public_key(),
+            broker_balance,
+            broker_before_randomness,
+        )
+        .unwrap();
+        let broker_after = Ciphertext::encrypt_with_randomness(
+            &broker.public_key(),
+            broker_balance - principal,
+            broker_after_randomness,
+        )
+        .unwrap();
+        let (transfer_views, transfer_randomness) =
+            reader_views(transfer_keys.clone(), principal, 71);
+        let (transfer_recovery, transfer_recovery_randomness) =
+            recovery_pairs(transfer_keys, principal, 79);
+        let (owed_views, owed_randomness) = reader_views(term_keys.clone(), initial_owed, 89);
+        let (owed_recovery, owed_recovery_randomness) =
+            recovery_pairs(term_keys.clone(), initial_owed, 97);
+        let (payment_views, payment_randomness) =
+            reader_views(term_keys.clone(), periodic_payment, 103);
+        let (payment_recovery, payment_recovery_randomness) =
+            recovery_pairs(term_keys, periodic_payment, 109);
+        let principal_blinding = EdFr::from(113u64);
+        let owed_blinding = EdFr::from(127u64);
+        let payment_blinding = EdFr::from(131u64);
+        let mut context = crate::OperationContext::default();
+        context.operation_id = [77u8; 32];
+        let statement = Statement::Origination(OriginationStatement {
+            context,
+            broker_key: broker.public_key(),
+            borrower_key: borrower.public_key(),
+            broker_spending_before: broker_before,
+            broker_spending_after: broker_after,
+            transfer_views,
+            transfer_recovery,
+            principal_commitment: Commitment::commit_with_blinding(
+                principal,
+                principal_blinding,
+            )
+            .unwrap(),
+            owed_views,
+            owed_recovery,
+            payment_views,
+            payment_recovery,
+            owed_commitment: Commitment::commit_with_blinding(initial_owed, owed_blinding)
+                .unwrap(),
+            payment_commitment: Commitment::commit_with_blinding(
+                periodic_payment,
+                payment_blinding,
+            )
+            .unwrap(),
+            payment_count: 5,
+            max_payment_count: 6,
+            broker_spending_version: 1,
+            loan_version: 0,
+        });
+        let witness = Witness::Origination(OriginationWitness {
+            broker_secret: broker,
+            broker_balance,
+            principal,
+            initial_owed,
+            periodic_payment,
+            transfer_randomness,
+            transfer_recovery_randomness,
+            broker_delta_randomness: ScalarHex::from(
+                broker_before_randomness - broker_after_randomness,
+            ),
+            principal_blinding: ScalarHex::from(principal_blinding),
+            owed_randomness,
+            owed_recovery_randomness,
+            payment_randomness,
+            payment_recovery_randomness,
+            owed_blinding: ScalarHex::from(owed_blinding),
+            payment_blinding: ScalarHex::from(payment_blinding),
+        });
+        (statement, witness)
+    }
+
+    #[test]
+    fn origination_amount_and_authorization_bounds_fail_direct_r1cs() {
+        let (statement, witness) = origination_fixture();
+        assert_direct_satisfied(&statement, &witness);
+
+        let mut wrong_secret = witness.clone();
+        if let Witness::Origination(value) = &mut wrong_secret {
+            value.broker_secret = crate::SecretKey::from_scalar(EdFr::from(137u64)).unwrap();
+        }
+        assert_direct_unsatisfied(&statement, &wrong_secret);
+
+        let mut zero_principal = witness.clone();
+        if let Witness::Origination(value) = &mut zero_principal {
+            value.principal = 0;
+        }
+        assert_direct_unsatisfied(&statement, &zero_principal);
+
+        let mut zero_payment_count = statement.clone();
+        if let Statement::Origination(value) = &mut zero_payment_count {
+            value.payment_count = 0;
+        }
+        assert_direct_unsatisfied(&zero_payment_count, &witness);
+    }
+
     #[test]
     fn conversion_credit_zero_balance_is_satisfied_and_debit_solvent_check_is_gated() {
         let (credit, credit_witness) = conversion_fixture(ConversionMode::Credit, 0, 25);
@@ -2480,6 +2669,30 @@ mod smoke_tests {
         let cs = ConstraintSystem::new_ref();
         circuit.generate_constraints(cs.clone()).unwrap();
         assert!(!cs.is_satisfied().unwrap());
+    }
+
+    #[test]
+    fn conversion_amount_boundaries_and_solvency_fail_direct_r1cs() {
+        let (credit_max, credit_max_witness) = conversion_fixture(ConversionMode::Credit, 0, MAX_AMOUNT);
+        assert_direct_satisfied(&credit_max, &credit_max_witness);
+
+        let (mut too_large, too_large_witness) =
+            conversion_fixture(ConversionMode::Credit, 0, MAX_AMOUNT);
+        if let Statement::PublicConversion(statement) = &mut too_large {
+            statement.public_amount = MAX_AMOUNT + 1;
+        }
+        assert_direct_unsatisfied(&too_large, &too_large_witness);
+
+        let (zero, zero_witness) = conversion_fixture(ConversionMode::Credit, 0, 0);
+        assert_direct_unsatisfied(&zero, &zero_witness);
+
+        let (debit_exact, debit_exact_witness) =
+            conversion_fixture(ConversionMode::Debit, 25, 25);
+        assert_direct_satisfied(&debit_exact, &debit_exact_witness);
+
+        let (debit_insolvent, debit_insolvent_witness) =
+            conversion_fixture(ConversionMode::Debit, 25, 26);
+        assert_direct_unsatisfied(&debit_insolvent, &debit_insolvent_witness);
     }
 
     #[test]
@@ -2568,6 +2781,24 @@ mod smoke_tests {
             s.sender_spending_version += 1;
         }
         assert!(verify(&changed, &envelope, &artifacts).is_err());
+
+        let mut insufficient = witness.clone();
+        if let Witness::ConfidentialTransfer(ref mut value) = insufficient {
+            value.sender_balance = 99;
+        }
+        assert_direct_unsatisfied(&statement, &insufficient);
+
+        let mut wrong_owner = witness.clone();
+        if let Witness::ConfidentialTransfer(ref mut value) = wrong_owner {
+            value.sender_secret = crate::SecretKey::from_scalar(EdFr::from(29u64)).unwrap();
+        }
+        assert_direct_unsatisfied(&statement, &wrong_owner);
+
+        let mut zero_amount = witness.clone();
+        if let Witness::ConfidentialTransfer(ref mut value) = zero_amount {
+            value.amount = 0;
+        }
+        assert_direct_unsatisfied(&statement, &zero_amount);
     }
 
     fn reconciliation_fixture() -> (Statement, Witness) {
@@ -2724,7 +2955,16 @@ mod smoke_tests {
         (pairs, randomness)
     }
 
-    fn repayment_full_fixture() -> (Statement, Witness) {
+    fn repayment_fixture(
+        mode: PaymentMode,
+        payment: u64,
+        owed: u64,
+        principal: u64,
+        principal_paid: u64,
+        borrower_balance: u64,
+        payment_remaining_before: u32,
+        payment_remaining_after: u32,
+    ) -> (Statement, Witness) {
         let borrower = crate::SecretKey::from_scalar(EdFr::from(51u64)).unwrap();
         let broker = crate::SecretKey::from_scalar(EdFr::from(53u64)).unwrap();
         let reader_two = crate::SecretKey::from_scalar(EdFr::from(59u64)).unwrap();
@@ -2744,21 +2984,18 @@ mod smoke_tests {
             broker.public_key(),
             reader_two.public_key(),
         ];
-        let payment = 100u64;
-        let owed = 100u64;
         let periodic = 25u64;
-        let principal = 60u64;
         let borrower_before_randomness = EdFr::from(71u64);
         let borrower_after_randomness = EdFr::from(73u64);
         let borrower_before = Ciphertext::encrypt_with_randomness(
             &borrower.public_key(),
-            200,
+            borrower_balance,
             borrower_before_randomness,
         )
         .unwrap();
         let borrower_after = Ciphertext::encrypt_with_randomness(
             &borrower.public_key(),
-            100,
+            borrower_balance - payment,
             borrower_after_randomness,
         )
         .unwrap();
@@ -2767,20 +3004,20 @@ mod smoke_tests {
         let (transfer_recovery, transfer_recovery_randomness) =
             recovery_pairs(transfer_keys, payment, 89);
         let (owed_before, _) = reader_views(term_keys.clone(), owed, 201);
-        let (owed_after, _) = reader_views(term_keys.clone(), 0, 101);
+        let (owed_after, _) = reader_views(term_keys.clone(), owed - payment, 101);
         let (owed_delta, owed_delta_randomness) = reader_views(term_keys.clone(), payment, 99);
         let (owed_delta_recovery, owed_delta_recovery_randomness) =
             recovery_pairs(term_keys.clone(), payment, 137);
         let (periodic_views, _) = reader_views(term_keys.clone(), periodic, 149);
         let (principal_before, _) = reader_views(term_keys.clone(), principal, 263);
-        let (principal_after, _) = reader_views(term_keys.clone(), 0, 163);
+        let (principal_after, _) = reader_views(term_keys.clone(), principal - principal_paid, 163);
         let (principal_delta, principal_delta_randomness) =
-            reader_views(term_keys.clone(), principal, 99);
+            reader_views(term_keys.clone(), principal_paid, 99);
         let (principal_delta_recovery, principal_delta_recovery_randomness) =
-            recovery_pairs(term_keys, principal, 191);
+            recovery_pairs(term_keys, principal_paid, 191);
         let principal_paid_blinding = EdFr::from(197u64);
         let principal_delta_commitment =
-            Commitment::commit_with_blinding(principal, principal_paid_blinding).unwrap();
+            Commitment::commit_with_blinding(principal_paid, principal_paid_blinding).unwrap();
         let context = crate::OperationContext {
             operation_id: [55u8; 32],
             ..Default::default()
@@ -2803,21 +3040,21 @@ mod smoke_tests {
             principal_delta,
             principal_delta_recovery,
             principal_delta_commitment,
-            mode: PaymentMode::Full,
-            payment_remaining_before: 1,
-            payment_remaining_after: 0,
+            mode,
+            payment_remaining_before,
+            payment_remaining_after,
             borrower_spending_version: 7,
             loan_version_before: 8,
             loan_version_after: 9,
         });
         let witness = Witness::Repayment(RepaymentWitness {
             borrower_secret: borrower,
-            borrower_balance: 200,
+            borrower_balance,
             payment,
             owed_before: owed,
             periodic_payment: periodic,
             principal_before: principal,
-            principal_paid: principal,
+            principal_paid,
             transfer_randomness,
             transfer_recovery_randomness,
             borrower_delta_randomness: ScalarHex::from(
@@ -2830,6 +3067,14 @@ mod smoke_tests {
             principal_paid_blinding: ScalarHex::from(principal_paid_blinding),
         });
         (statement, witness)
+    }
+
+    fn repayment_full_fixture() -> (Statement, Witness) {
+        repayment_fixture(PaymentMode::Full, 100, 100, 60, 60, 200, 1, 0)
+    }
+
+    fn repayment_regular_fixture() -> (Statement, Witness) {
+        repayment_fixture(PaymentMode::Regular, 25, 100, 60, 25, 200, 2, 1)
     }
 
     #[test]
@@ -2859,6 +3104,12 @@ mod smoke_tests {
         let cs = ConstraintSystem::new_ref();
         circuit.generate_constraints(cs.clone()).unwrap();
         assert!(!cs.is_satisfied().unwrap());
+
+        let (statement, mut wrong_secret) = reconciliation_fixture();
+        if let Witness::Reconciliation(value) = &mut wrong_secret {
+            value.broker_secret = crate::SecretKey::from_scalar(EdFr::from(149u64)).unwrap();
+        }
+        assert_direct_unsatisfied(&statement, &wrong_secret);
     }
 
     #[test]
@@ -2887,5 +3138,18 @@ mod smoke_tests {
         let cs = ConstraintSystem::new_ref();
         circuit.generate_constraints(cs.clone()).unwrap();
         assert!(!cs.is_satisfied().unwrap());
+    }
+
+    #[test]
+    fn regular_repayment_boundary_is_directly_constrained() {
+        let (statement, witness) = repayment_regular_fixture();
+        validate_host_relation(&statement, &witness).unwrap();
+        assert_direct_satisfied(&statement, &witness);
+
+        let mut invalid = statement.clone();
+        if let Statement::Repayment(value) = &mut invalid {
+            value.mode = PaymentMode::Full;
+        }
+        assert_direct_unsatisfied(&invalid, &witness);
     }
 }

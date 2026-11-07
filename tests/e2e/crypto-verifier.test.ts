@@ -172,18 +172,11 @@ test('typed NEAR host verification accepts all real proof families and rejects c
       const envelopeJson = jsonText(operation.envelope);
       const envelope = typeof operation.envelope === 'string' ? JSON.parse(operation.envelope) as Record<string, unknown> : operation.envelope as Record<string, unknown>;
       const envelopeInputs = Array.isArray(envelope.public_inputs) ? envelope.public_inputs as string[] : [];
-      const derived = await worker.rootAccount.callRaw(probe, 'derive_public_inputs', { statement_json: statementJson }, { gas: benchmarkGas });
-      if (!derived.succeeded) {
-        families[kind]!.measurements[`${operation.name}:derive`] = {
-          status: 'failed', publicInputs: envelopeInputs.length, gasBurnt: gasStringOrUnknown(derived.gas_burnt),
-          within300T: false, durationMs: derived.durationMs, error: errorString(derived),
-        };
-        await writeMeasurements();
-      }
-      const statementInputs = derived.succeeded ? derived.parseResult<string[]>() ?? [] : envelopeInputs;
-      if (derived.succeeded) {
-        assert.deepEqual(statementInputs, envelope.public_inputs, `${kind} Core/public-input derivation mismatch`);
-      }
+      const derived = await worker.rootAccount.callRaw(probe, 'derive_public_slots', { statement_json: statementJson }, { gas: benchmarkGas });
+      assert.equal(derived.succeeded, true, `${kind} slot derivation execution failed: ${errorString(derived)}`);
+      const statementSlots = derived.parseResult<string[]>() ?? [];
+      assert.deepEqual(statementSlots, envelopeInputs.slice(1), `${kind} Core/public-slot derivation mismatch`);
+      const statementInputs = envelopeInputs;
 
       const valid = await worker.rootAccount.callRaw(probe, 'verify_typed', { statement_json: statementJson, envelope_json: envelopeJson }, { gas: benchmarkGas });
       if (!valid.succeeded) {
