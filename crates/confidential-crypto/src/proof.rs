@@ -2700,6 +2700,39 @@ mod smoke_tests {
     use ark_relations::r1cs::ConstraintSystem;
     use rand_chacha::{ChaCha20Rng, rand_core::SeedableRng};
 
+    /// Test-only constructor for the full ElGamal relation, including the
+    /// otherwise-rejected zero-randomness case.  Production encryption must
+    /// reject zero; these tests need the matching `(0G, mG)` public points so
+    /// that an unsatisfied circuit is attributable to the nonzero predicate,
+    /// rather than to a ciphertext equation mismatch.
+    fn test_ciphertext_with_randomness(
+        public_key: &PublicKey,
+        amount: u64,
+        randomness: EdFr,
+    ) -> Ciphertext {
+        let base = encryption_base();
+        let key_point = public_key.to_point().unwrap();
+        Ciphertext {
+            ephemeral: crate::encoding::PointHex::from_prime_subgroup_affine(
+                (base * randomness).into_affine(),
+            ),
+            message: crate::encoding::PointHex::from_prime_subgroup_affine(
+                (base * EdFr::from(amount) + key_point * randomness).into_affine(),
+            ),
+        }
+    }
+
+    /// Test-only constructor for a commitment relation with zero blinding.
+    /// The public commitment API intentionally rejects this value because it
+    /// reveals the committed amount; direct-R1CS tests must still provide its
+    /// exact matching point to isolate that privacy constraint.
+    fn test_commitment_with_blinding(amount: u64, blinding: EdFr) -> Commitment {
+        let point = encryption_base() * EdFr::from(amount) + pedersen_base() * blinding;
+        Commitment {
+            point: crate::encoding::PointHex::from_prime_subgroup_affine(point.into_affine()),
+        }
+    }
+
     fn assert_direct_satisfied(statement: &Statement, witness: &Witness) {
         let slots = statement.public_slots().unwrap();
         let circuit =
@@ -3281,30 +3314,140 @@ mod smoke_tests {
         }
         assert_direct_unsatisfied(&statement, &zero_amount);
 
-        let mut zero_recovery_randomness = witness.clone();
-        if let Witness::ConfidentialTransfer(ref mut value) = zero_recovery_randomness {
+        let positive_recovery_randomness = EdFr::from(1001u64);
+        let mut positive_recovery_statement = statement.clone();
+        if let Statement::ConfidentialTransfer(ref mut value) = positive_recovery_statement {
+            value.transfer_recovery[0].low_limb = test_ciphertext_with_randomness(
+                &value.transfer_views[0].reader_key,
+                amount,
+                positive_recovery_randomness,
+            );
+        }
+        let mut positive_recovery_witness = witness.clone();
+        if let Witness::ConfidentialTransfer(ref mut value) = positive_recovery_witness {
+            value.transfer_recovery_randomness[0][0] =
+                ScalarHex::from(positive_recovery_randomness);
+        }
+        assert_direct_satisfied(&positive_recovery_statement, &positive_recovery_witness);
+
+        let mut zero_recovery_statement = positive_recovery_statement.clone();
+        if let Statement::ConfidentialTransfer(ref mut value) = zero_recovery_statement {
+            value.transfer_recovery[0].low_limb = test_ciphertext_with_randomness(
+                &value.transfer_views[0].reader_key,
+                amount,
+                EdFr::from(0u64),
+            );
+        }
+        let mut zero_recovery_witness = positive_recovery_witness.clone();
+        if let Witness::ConfidentialTransfer(ref mut value) = zero_recovery_witness {
             value.transfer_recovery_randomness[0][0] = ScalarHex::from(EdFr::from(0u64));
         }
-        assert_direct_unsatisfied(&statement, &zero_recovery_randomness);
+        assert_direct_unsatisfied(&zero_recovery_statement, &zero_recovery_witness);
 
-        let mut zero_delta_randomness = witness.clone();
-        if let Witness::ConfidentialTransfer(ref mut value) = zero_delta_randomness {
+        let positive_before_randomness = EdFr::from(101u64);
+        let positive_after_randomness = EdFr::from(103u64);
+        let mut positive_delta_statement = positive_recovery_statement.clone();
+        if let Statement::ConfidentialTransfer(ref mut value) = positive_delta_statement {
+            value.sender_spending_before =
+                test_ciphertext_with_randomness(&value.sender_key, 100, positive_before_randomness);
+            value.sender_spending_after =
+                test_ciphertext_with_randomness(&value.sender_key, 75, positive_after_randomness);
+        }
+        let mut positive_delta_witness = positive_recovery_witness.clone();
+        if let Witness::ConfidentialTransfer(ref mut value) = positive_delta_witness {
+            value.sender_delta_randomness =
+                ScalarHex::from(positive_before_randomness - positive_after_randomness);
+        }
+        assert_direct_satisfied(&positive_delta_statement, &positive_delta_witness);
+
+        let mut zero_delta_statement = positive_delta_statement.clone();
+        if let Statement::ConfidentialTransfer(ref mut value) = zero_delta_statement {
+            value.sender_spending_before =
+                test_ciphertext_with_randomness(&value.sender_key, 100, positive_after_randomness);
+            value.sender_spending_after =
+                test_ciphertext_with_randomness(&value.sender_key, 75, positive_after_randomness);
+        }
+        let mut zero_delta_witness = positive_delta_witness.clone();
+        if let Witness::ConfidentialTransfer(ref mut value) = zero_delta_witness {
             value.sender_delta_randomness = ScalarHex::from(EdFr::from(0u64));
         }
-        assert_direct_unsatisfied(&statement, &zero_delta_randomness);
+        assert_direct_unsatisfied(&zero_delta_statement, &zero_delta_witness);
 
-        let mut zero_commitment_blinding = witness.clone();
-        if let Witness::ConfidentialTransfer(ref mut value) = zero_commitment_blinding {
+        let positive_commitment_blinding = EdFr::from(1003u64);
+        let mut positive_commitment_statement = positive_delta_statement.clone();
+        if let Statement::ConfidentialTransfer(ref mut value) = positive_commitment_statement {
+            value.amount_commitment =
+                test_commitment_with_blinding(amount, positive_commitment_blinding);
+        }
+        let mut positive_commitment_witness = positive_delta_witness.clone();
+        if let Witness::ConfidentialTransfer(ref mut value) = positive_commitment_witness {
+            value.commitment_blinding = ScalarHex::from(positive_commitment_blinding);
+        }
+        assert_direct_satisfied(&positive_commitment_statement, &positive_commitment_witness);
+
+        let mut zero_commitment_statement = positive_commitment_statement.clone();
+        if let Statement::ConfidentialTransfer(ref mut value) = zero_commitment_statement {
+            value.amount_commitment = test_commitment_with_blinding(amount, EdFr::from(0u64));
+        }
+        let mut zero_commitment_witness = positive_commitment_witness.clone();
+        if let Witness::ConfidentialTransfer(ref mut value) = zero_commitment_witness {
             value.commitment_blinding = ScalarHex::from(EdFr::from(0u64));
         }
-        assert_direct_unsatisfied(&statement, &zero_commitment_blinding);
-        assert!(validate_host_relation(&statement, &zero_commitment_blinding).is_err());
+        assert_direct_unsatisfied(&zero_commitment_statement, &zero_commitment_witness);
+        assert!(
+            validate_host_relation(&zero_commitment_statement, &zero_commitment_witness).is_err()
+        );
 
         let mut identity_ephemeral = statement.clone();
         if let Statement::ConfidentialTransfer(ref mut value) = identity_ephemeral {
             value.transfer_recovery[0].low_limb = Ciphertext::zero();
         }
         assert_direct_unsatisfied(&identity_ephemeral, &witness);
+    }
+
+    #[test]
+    fn origination_same_reader_nonce_reuse_has_matching_ciphertexts() {
+        let (statement, witness) = origination_fixture();
+        assert_direct_satisfied(&statement, &witness);
+
+        let fresh_term_randomness = EdFr::from(1007u64);
+        let mut positive_statement = statement.clone();
+        if let Statement::Origination(ref mut value) = positive_statement {
+            assert_eq!(
+                value.transfer_views[1].reader_key,
+                value.owed_views[0].reader_key
+            );
+            value.owed_views[0].ciphertext = test_ciphertext_with_randomness(
+                &value.owed_views[0].reader_key,
+                50,
+                fresh_term_randomness,
+            );
+        }
+        let mut positive_witness = witness.clone();
+        if let Witness::Origination(ref mut value) = positive_witness {
+            value.owed_randomness[0] = ScalarHex::from(fresh_term_randomness);
+        }
+        assert_direct_satisfied(&positive_statement, &positive_witness);
+
+        let reused_randomness = match &witness {
+            Witness::Origination(value) => value.transfer_randomness[1].to_scalar().unwrap(),
+            _ => unreachable!(),
+        };
+        let mut reused_statement = positive_statement;
+        if let Statement::Origination(ref mut value) = reused_statement {
+            value.owed_views[0].ciphertext = test_ciphertext_with_randomness(
+                &value.owed_views[0].reader_key,
+                50,
+                reused_randomness,
+            );
+        }
+        let mut reused_witness = positive_witness;
+        if let Witness::Origination(ref mut value) = reused_witness {
+            value.owed_randomness[0] = ScalarHex::from(reused_randomness);
+        }
+        // The ciphertext equation remains valid; only the same-reader
+        // pairwise-distinct nonce relation should reject this witness.
+        assert_direct_unsatisfied(&reused_statement, &reused_witness);
     }
 
     fn reconciliation_fixture() -> (Statement, Witness) {
