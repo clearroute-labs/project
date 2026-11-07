@@ -26,6 +26,8 @@ The launcher starts an isolated NEAR sandbox, deploys the Core and a test token,
 
 Follow [the local product walkthrough](docs/LOCAL_DEMO.md) to create a vault, fund and repay a confidential loan, settle yield, withdraw and audit the terminal record.
 
+Public deployments use NEAR Connect to select an ecosystem wallet. Optional Privy configuration adds email and Google login through an embedded NEAR wallet in the same selector. See [wallet setup](docs/WALLETS.md) for the public IDs, hosting requirements, account funding and verification steps.
+
 ## Components
 
 | Location | Responsibility |

@@ -4,18 +4,18 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    // Wallet dependencies use safe-buffer and generate-function's util.format.
-    // Both need their browser implementations in development and production.
+    // NEAR signing dependencies use Buffer and util in the browser.
     alias: { buffer: 'buffer/', util: 'util/' },
   },
   define: {
     global: 'globalThis',
     'process.env.DEFAULT_FINALITY': JSON.stringify('near-final'),
   },
-  // Wallet Selector's optimized Meteor dependency evaluates safe-buffer's
-  // Node-style global before Vite's module graph reaches the app entrypoint.
-  // Keep the same browser global in the esbuild pre-bundle as in production.
+  // Keep the same browser globals in dependency pre-bundles and production.
   optimizeDeps: {
+    // Discover popup dependencies before a wallet connection is in progress;
+    // a late optimizer reload would discard the opener's pending request.
+    include: ['@hot-labs/near-connect', '@privy-io/react-auth', '@privy-io/react-auth/extended-chains', '@privy-io/js-sdk-core', '@peerfolio/privy-near-connect/sign-page'],
     esbuildOptions: {
       define: {
         global: 'globalThis',

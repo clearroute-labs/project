@@ -3,8 +3,12 @@ packages:
   - packages/*
   - services/*
 allowBuilds:
+  '@reown/appkit': false
   esbuild: true
   near-sandbox: false
   near-workspaces: false
   secp256k1: false
 storeDir: .local/pnpm-store
+overrides:
+  # Keep the plugin and React Auth on one JS Core peer instance.
+  '@peerfolio/privy-near-connect>viem': 2.56.0

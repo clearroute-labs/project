@@ -97,9 +97,10 @@ export function App({ adapters: providedAdapters }: { adapters?: AppAdapters }) 
       setSnapshot(null)
       setLoadError(toProtocolError(error))
       try {
-        setCryptoStatus(await adapters.crypto.getStatus())
+        const status = await adapters.crypto.getStatus()
+        if (sequence === refreshSequence.current) setCryptoStatus(status)
       } catch {
-        setCryptoStatus(null)
+        if (sequence === refreshSequence.current) setCryptoStatus(null)
       }
     } finally {
       if (sequence === refreshSequence.current) setLoading(false)

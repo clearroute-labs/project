@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useAppContext } from '../App'
 import { Button, Card, EmptyState, Mono, Notice, SectionHeading, StatusBadge } from '../components/ui'
 import { formatAmount } from '../lib/money'
@@ -10,8 +10,14 @@ export function PageHeader({ eyebrow, title, description, action }: { eyebrow: s
 
 export function ConnectionGate({ role, children }: { role: Role; children: ReactNode }) {
   const { accountId, adapters, loading, loadError, refresh, snapshot } = useAppContext()
+  const [connectionError, setConnectionError] = useState('')
+  const connect = async () => {
+    setConnectionError('')
+    try { await adapters.wallet.connect() }
+    catch (error) { setConnectionError(error instanceof Error ? error.message : 'Wallet connection failed.') }
+  }
   if (!accountId || adapters.wallet.status !== 'connected') {
-    return <><PageHeader eyebrow={role} title="Your workspace is ready" description="Connect a NEAR wallet to view finalized account state and authorize actions." /><Card><EmptyState icon="⌁" title="Connect your NEAR wallet" description="Connect a wallet to view balances, loans and activity." action={<Button onClick={() => void adapters.wallet.connect()}>Connect NEAR wallet</Button>} /></Card></>
+    return <><PageHeader eyebrow={role} title="Your workspace is ready" description="Connect a NEAR wallet to view finalized account state and authorize actions." /><Card><EmptyState icon="⌁" title="Connect your NEAR wallet" description="Connect a wallet to view balances, loans and activity." action={<Button disabled={adapters.wallet.status === 'connecting'} onClick={() => void connect()}>{adapters.wallet.status === 'connecting' ? 'Connecting…' : 'Connect NEAR wallet'}</Button>} />{connectionError ? <Notice tone="danger">{connectionError}</Notice> : null}</Card></>
   }
   // Refresh keeps mounted forms, transaction feedback and local agreement packages.
   // An account switch clears the snapshot in App before its workspace can render.
