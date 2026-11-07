@@ -2273,6 +2273,12 @@ impl Core {
         require!(!proposal.consumed && !proposal.revoked, ERR_REPLAY);
         require!(now_seconds() <= proposal.expiry, ERR_EXPIRED);
         require!(
+            now_seconds()
+                .checked_add(proposal.payment_interval)
+                .is_some(),
+            ERR_INVALID_AMOUNT
+        );
+        require!(
             proposal.broker_direct_authorized
                 || verify_authorization_signature(
                     self,
@@ -8660,6 +8666,14 @@ mod tests {
             core.originate(empty_originate_args(2));
         }));
         assert!(expired_origination.is_err());
+
+        let mut overflowing_date = minimal_proposal(borrower.clone(), broker_id, 1, u64::MAX);
+        overflowing_date.payment_interval = u64::MAX;
+        core.proposals.insert(&4, &overflowing_date);
+        let date_overflow = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            core.originate(empty_originate_args(4));
+        }));
+        assert!(date_overflow.is_err());
 
         core.proposals
             .insert(&3, &minimal_proposal(borrower, broker_id, 1, u64::MAX));
