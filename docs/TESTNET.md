@@ -22,7 +22,7 @@ pnpm dev --host localhost --port 5175 --strictPort
 
 Open `http://localhost:5175`. The public proving artifacts must already be prepared as described below. No sandbox account credentials are accepted by this application.
 
-1. Connect a testnet wallet through NEAR Connect. Optional Privy login requires the public app/client IDs described in [WALLETS.md](WALLETS.md).
+1. Connect a testnet wallet through NEAR Connect. Optional Privy login requires a public App ID (Client ID is optional) described in [WALLETS.md](WALLETS.md).
 2. Obtain gas and storage funds from the [NEAR testnet faucet](https://docs.near.org/getting-started/faucet).
 3. In **Get test funds**, register token storage with 0.01 testnet NEAR, then claim 1,000 TEST. Each account may claim once.
 4. In **Wallet & security**, add a Core storage budget before registering protocol records. Generate confidential keys, export and confirm an encrypted recovery file, then register the key on-chain.

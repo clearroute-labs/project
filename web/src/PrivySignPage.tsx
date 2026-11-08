@@ -19,7 +19,7 @@ export default function PrivySignPage() {
   const [deployment] = useState(deploymentConfigFromEnv)
   let configuration: PrivyConfiguration | undefined
   try { configuration = privyConfiguration(deployment, window.location.origin) } catch { /* Show a configuration error without starting authentication. */ }
-  if (!configuration) return <SigningFrame><Notice tone="warning" title="Social login is not configured">Add the public Privy App ID and Client ID to this deployment, then rebuild the app.</Notice></SigningFrame>
+  if (!configuration) return <SigningFrame><Notice tone="warning" title="Social login is not configured">Set a valid public Privy App ID, then restart or rebuild the app. A Client ID is optional.</Notice></SigningFrame>
   if (!window.opener) return <SigningFrame><Notice tone="info" title="Open this page from your wallet">Return to Private Ledger and select Email or social login from Connect wallet.</Notice></SigningFrame>
   return <PrivyProvider appId={configuration.appId} clientId={configuration.clientId} config={{ loginMethods: ['email', 'google'], appearance: { theme: 'dark', accentColor: '#b8e4c4' }, embeddedWallets: { ethereum: { createOnLogin: 'off' }, solana: { createOnLogin: 'off' } } }}>
     <SigningFlow configuration={configuration} deployment={deployment} />

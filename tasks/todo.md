@@ -1,5 +1,16 @@
 # Confidential lending on NEAR
 
+## Current task: allow Privy App ID without a Client ID
+
+- [x] Check current Privy documentation and both installed SDK interfaces.
+- [x] Make the Client ID optional and correct setup instructions.
+- [x] Verify App-ID-only authentication setup and preserve explicit client overrides.
+
+
+### Review
+
+Privy React Auth and JS Core both accept an omitted Client ID. The app now enables social login with only the App ID, validates optional client overrides, and uses the same identity in both SDKs. Updated the setup docs and ignored the user’s local `web/.env` without changing its contents. All 28 focused configuration/signing-page tests and web typecheck pass. After restarting Vite, Chromium confirmed the real App-ID-only configuration lists the social wallet and opens a signing page ready for login; no authentication or transaction was submitted.
+
 ## Current task: testnet app and easier key recovery
 
 - [x] Make the product connect to testnet by default, remove sandbox credential controls/signing from the production app, and keep financial sandbox verification in test fixtures.
@@ -14,7 +25,7 @@ Implemented the real testnet default, self-service TEST faucet, and WebAuthn PRF
 
 Verification: 183 TypeScript tests, strict workspace typecheck, seven token Rust tests, contract WASM build/host checks, production web build, and the real-token custody regression pass. Chromium verifies PRF enrollment/encrypted autosave/reload/unlock, the app's recovery-file restore/save/lock/reconnect flow, desktop/mobile layout, live finalized testnet reads, pinned WASM and six ecosystem wallet choices. Vite denies access to private deployment directories. Testnet deployment and resumption are checked against the immutable Core configuration and exact archived WASM.
 
-The app is running at http://localhost:5175. Public artifacts are served from this app; no permanent external artifact host was requested or provisioned. Cross-device encrypted backup hosting is outside this change. Physical Touch ID/Face ID and real Privy social login remain untested; Privy still requires public app/client IDs. Development proving keys and operator account access remain explicitly documented testnet limitations.
+The app is running at http://localhost:5175. Public artifacts are served from this app; no permanent external artifact host was requested or provisioned. Cross-device encrypted backup hosting is outside this change. Physical Touch ID/Face ID and real Privy social login remain untested; Privy requires a public App ID; a Client ID is optional. Development proving keys and operator account access remain explicitly documented testnet limitations.
 
 ## Current task: NEAR Connect and configurable Privy support
 

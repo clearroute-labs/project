@@ -11,6 +11,7 @@
 !/.env.example
 /web/.env.local
 /web/.env.*.local
+/web/.env
 /web/public/crypto/
 /web/.crypto-staging-*/
 /web/.crypto-previous/
