@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { mapTransactionStatus, NearProtocolClient, type NearContractTransport } from '../src/lib/nearClient'
 import { createBrowserAdapters } from '../src/lib/adapters'
 import { createRpcProtocolClient, type NearWalletSession } from '../src/lib/nearClient'
@@ -38,6 +38,24 @@ const proof: PreparedProof = {
 }
 
 describe('real Core client mapping', () => {
+  it('routes test-token funding to the configured token with exact storage deposit and no arbitrary mint arguments', async () => {
+    const call = vi.fn(async () => ({ transactionHash: 'tx', status: 'succeeded' as const, finalized: true }))
+    const transport: NearContractTransport = { view: async () => { throw new Error('unused') }, call }
+    const client = new NearProtocolClient(transport, { ...config, testnetFaucet: true })
+    await client.registerTestTokenStorage()
+    expect(call).toHaveBeenLastCalledWith('storage_deposit', { registration_only: true }, { receiverId: config.tokenAccountId, deposit: '10000000000000000000000', gas: '30000000000000' })
+    await client.claimTestTokens()
+    expect(call).toHaveBeenLastCalledWith('faucet_claim', {}, { receiverId: config.tokenAccountId, deposit: '0', gas: '30000000000000' })
+  })
+
+  it('rejects faucet operations on mainnet and deployments without explicit faucet support', () => {
+    const call = vi.fn()
+    const transport: NearContractTransport = { view: async () => { throw new Error('unused') }, call }
+    expect(() => new NearProtocolClient(transport, config).claimTestTokens()).toThrow('unavailable')
+    expect(() => new NearProtocolClient(transport, { ...config, networkId: 'mainnet', testnetFaucet: true }).registerTestTokenStorage()).toThrow('unavailable')
+    expect(call).not.toHaveBeenCalled()
+  })
+
   it('maps the read-only finalized transaction status into an action receipt', async () => {
     const hash = 'A'.repeat(44)
     const transport: NearContractTransport = {
@@ -578,10 +596,18 @@ describe('wallet initialization', () => {
     expect(adapters.wallet.accountId).toBeUndefined()
   })
 
-  it('stays visibly unavailable when deployment values are incomplete', () => {
+  it('allows a testnet wallet connection while lending deployment values are incomplete', () => {
     const adapters = createBrowserAdapters({ ...config, coreAccountId: '' })
     expect(adapters.protocol).not.toBeInstanceOf(NearProtocolClient)
+    expect(adapters.wallet).toBeInstanceOf(NearConnectWallet)
     expect(adapters.wallet.status).toBe('disconnected')
+  })
+
+  it('does not install a sandbox signer in the product app', () => {
+    const adapters = createBrowserAdapters({ ...config, networkId: 'sandbox', rpcUrl: 'http://127.0.0.1:3030', allowInsecureLocalhost: true })
+    expect(adapters.protocol).not.toBeInstanceOf(NearProtocolClient)
+    expect(adapters.wallet).not.toBeInstanceOf(NearConnectWallet)
+    expect('importCredentialFile' in adapters.wallet).toBe(false)
   })
 
   it('keeps a connected signer account in the real RPC pair without embedding identity', () => {

@@ -2,8 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { KeyPair } from '@near-js/crypto'
 import { base58 } from '@scure/base'
 import type { NearRpc } from '@confidential-lending/client'
-import { isSandboxCredentialDeployment, SandboxCredentialWallet } from '../src/lib/nearWallet'
-import { createBrowserAdapters } from '../src/lib/adapters'
+import { isSandboxCredentialDeployment, SandboxCredentialWallet } from './support/sandboxWallet'
 import type { DeploymentConfig } from '../src/lib/types'
 
 const config: DeploymentConfig = {
@@ -23,12 +22,6 @@ describe('sandbox credential wallet', () => {
     expect(isSandboxCredentialDeployment(config)).toBe(true)
     expect(isSandboxCredentialDeployment({ ...config, networkId: 'testnet' })).toBe(false)
     expect(isSandboxCredentialDeployment({ ...config, rpcUrl: 'https://rpc.testnet.near.org' })).toBe(false)
-  })
-
-  it('installs the sandbox signer as the configured browser wallet adapter', () => {
-    const adapters = createBrowserAdapters(config)
-    expect(adapters.wallet).toBeInstanceOf(SandboxCredentialWallet)
-    expect(adapters.wallet.status).toBe('disconnected')
   })
 
   it('starts disconnected and becomes connected only after importing a valid file', async () => {

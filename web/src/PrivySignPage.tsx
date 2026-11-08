@@ -6,6 +6,7 @@ import { initSigningPage, type SignPageSession, type SignPageOptions } from '@pe
 import { deploymentConfigFromEnv } from './lib/deploymentConfig'
 import { privyConfiguration, type PrivyConfiguration } from './lib/privyConfig'
 import { nearDeposit, validatePrivyRequest } from './lib/privyRequest'
+import { completePrivyOAuth, withoutPrivyOAuthCallback } from './lib/privyOAuth'
 import type { DeploymentConfig } from './lib/types'
 import { Button, Notice } from './components/ui'
 
@@ -19,10 +20,32 @@ export default function PrivySignPage() {
   const [deployment] = useState(deploymentConfigFromEnv)
   let configuration: PrivyConfiguration | undefined
   try { configuration = privyConfiguration(deployment, window.location.origin) } catch { /* Show a configuration error without starting authentication. */ }
-  if (!configuration) return <SigningFrame><Notice tone="warning" title="Social login is not configured">Add the public Privy App ID and Client ID to this deployment, then rebuild the app.</Notice></SigningFrame>
+  if (!configuration) return <SigningFrame><Notice tone="warning" title="Social login is not configured">Set a valid public Privy App ID, then restart or rebuild the app. A Client ID is optional.</Notice></SigningFrame>
   if (!window.opener) return <SigningFrame><Notice tone="info" title="Open this page from your wallet">Return to Private Ledger and select Email or social login from Connect wallet.</Notice></SigningFrame>
+  return <ConfiguredSigningPage configuration={configuration} deployment={deployment} />
+}
+
+function ConfiguredSigningPage({ configuration, deployment }: { configuration: PrivyConfiguration; deployment: DeploymentConfig }) {
+  const [client] = useState(() => new Privy({ appId: configuration.appId, clientId: configuration.clientId, storage: new LocalStorage() }))
+  const initialization = useRef<Promise<void>>()
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+
+  useEffect(() => {
+    let active = true
+    // Finish a redirect before mounting React Auth so only one client exchanges
+    // the one-time code. Keep the promise across effect replays.
+    initialization.current ??= client.initialize().then(() => completePrivyOAuth(client, window.location.href))
+    void initialization.current.then(() => { if (active) setStatus('ready') }).catch(() => { if (active) setStatus('error') })
+    return () => { active = false }
+  }, [client])
+
+  if (status === 'loading') return <SigningFrame><p role="status">Preparing secure login…</p></SigningFrame>
+  if (status === 'error') return <SigningFrame>
+    <Notice tone="danger" title="Sign-in could not be completed">Your login expired, was cancelled, or could not be verified. Start again to retry.</Notice>
+    <Button onClick={() => window.location.replace(withoutPrivyOAuthCallback(window.location.href))}>Start sign-in again</Button>
+  </SigningFrame>
   return <PrivyProvider appId={configuration.appId} clientId={configuration.clientId} config={{ loginMethods: ['email', 'google'], appearance: { theme: 'dark', accentColor: '#b8e4c4' }, embeddedWallets: { ethereum: { createOnLogin: 'off' }, solana: { createOnLogin: 'off' } } }}>
-    <SigningFlow configuration={configuration} deployment={deployment} />
+    <SigningFlow client={client} configuration={configuration} deployment={deployment} />
   </PrivyProvider>
 }
 
@@ -30,26 +53,26 @@ function SigningFrame({ children }: { children: React.ReactNode }) {
   return <main className="wallet-sign-page"><div className="wallet-sign-card"><p className="eyebrow">Private Ledger · NEAR wallet</p>{children}</div></main>
 }
 
-function SigningFlow({ configuration, deployment }: { configuration: PrivyConfiguration; deployment: DeploymentConfig }) {
+function SigningFlow({ client, configuration, deployment }: { client: Privy; configuration: PrivyConfiguration; deployment: DeploymentConfig }) {
   const { ready, authenticated, user, login, logout } = usePrivy()
   const { createWallet } = useCreateWallet()
-  const [client] = useState(() => new Privy({ appId: configuration.appId, clientId: configuration.clientId, storage: new LocalStorage() }))
   const [session, setSession] = useState<SignPageSession>()
   const [wallet, setWallet] = useState<NearWallet>()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [walletChecked, setWalletChecked] = useState(false)
   const busyRef = useRef(false)
-  const lifetime = useRef(new AbortController())
+  const lifetime = useRef<AbortController>()
 
   useEffect(() => {
-    const controller = lifetime.current
+    const controller = new AbortController()
+    lifetime.current = controller
     const guardRequest = (event: MessageEvent) => {
       if (event.data?.source === 'privy-near-connect' && event.data?.type === 'SIGN_REQUEST' && (event.source !== window.opener || event.origin !== configuration.origin)) event.stopImmediatePropagation()
     }
     window.addEventListener('message', guardRequest, true)
     // Start the handshake before login: the executor waits only 30 seconds for READY.
-    void client.initialize().then(() => initSigningPage(client, { allowedOrigins: [configuration.origin], rpcOptions: { url: configuration.rpcUrl }, debug: false, signal: controller.signal })).then((value) => {
+    void initSigningPage(client, { allowedOrigins: [configuration.origin], rpcOptions: { url: configuration.rpcUrl }, debug: false, signal: controller.signal }).then((value) => {
       if (controller.signal.aborted) return
       validatePrivyRequest(value.payload, deployment)
       setSession(value)
@@ -105,7 +128,7 @@ function SigningFlow({ configuration, deployment }: { configuration: PrivyConfig
       validatePrivyRequest(session.payload, deployment, wallet.address)
       // Bind signing to the reviewed wallet. Repeating READY asks the executor for
       // the same request; compare it before using the wallet-bound signing session.
-      const bound = await initSigningPage(client, { allowedOrigins: [configuration.origin], rpcOptions: { url: configuration.rpcUrl }, wallet: current, debug: false, signal: lifetime.current.signal })
+      const bound = await initSigningPage(client, { allowedOrigins: [configuration.origin], rpcOptions: { url: configuration.rpcUrl }, wallet: current, debug: false, signal: lifetime.current?.signal })
       if (bound.targetOrigin !== session.targetOrigin || JSON.stringify(bound.payload) !== JSON.stringify(session.payload)) throw new Error('The signing request changed. Close this window and reconnect.')
       await bound.sign()
     } catch {

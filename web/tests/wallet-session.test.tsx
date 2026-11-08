@@ -25,8 +25,9 @@ describe('wallet account session isolation', () => {
     const dashboard = new Promise((_, reject) => { rejectDashboard = reject })
     let resolveOldStatus!: (value: unknown) => void
     const oldStatus = new Promise((resolve) => { resolveOldStatus = resolve })
-    const listener = { current: () => {} }
-    const wallet = { accountId: 'alice.testnet' as string | undefined, status: 'connected', subscribe: (fn: () => void) => { listener.current = fn; return () => {} } }
+    const listeners = new Set<() => void>()
+    const notify = () => { for (const listener of listeners) listener() }
+    const wallet = { accountId: 'alice.testnet' as string | undefined, status: 'connected', subscribe: (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } } }
     const setSubject = vi.fn()
     const getStatus = vi.fn().mockResolvedValueOnce({ available: true, message: 'alice' }).mockReturnValueOnce(oldStatus).mockResolvedValue({ available: true, message: 'bob' })
     const adapters = { wallet, crypto: { setSubject, getStatus }, protocol: { config: { coreAccountId: 'core.testnet' }, getDashboard: vi.fn().mockReturnValueOnce(dashboard).mockResolvedValue({}) } } as unknown as AppAdapters
@@ -36,11 +37,11 @@ describe('wallet account session isolation', () => {
     await act(async () => root!.render(<App adapters={adapters} />))
     await act(async () => rejectDashboard(new Error('read failed')))
     expect(getStatus).toHaveBeenCalledTimes(2)
-    await act(async () => { wallet.accountId = 'bob.testnet'; listener.current() })
+    await act(async () => { wallet.accountId = 'bob.testnet'; notify() })
     expect(container.textContent).toBe('bob.testnet:bob')
     await act(async () => resolveOldStatus({ available: true, message: 'alice private session' }))
     expect(container.textContent).toBe('bob.testnet:bob')
-    await act(async () => { wallet.accountId = undefined; wallet.status = 'disconnected'; listener.current() })
+    await act(async () => { wallet.accountId = undefined; wallet.status = 'disconnected'; notify() })
     expect(setSubject.mock.calls.map(([account]) => account)).toEqual(['alice.testnet', 'bob.testnet', undefined])
     expect(container.textContent).not.toContain('bob')
   })

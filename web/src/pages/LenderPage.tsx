@@ -6,6 +6,7 @@ import { readBrokerZeroProof, type BrokerZeroProofPackage } from '../lib/brokerZ
 import { MAX_U128_UNITS, parseAmount, parseNonNegativeAmount, randomUint64Decimal, sharesForAssets, unixSecondsNow } from '../lib/money'
 import type { PayoutSummary, PublicClaim, VaultSummary } from '../lib/types'
 import { AmountCell, AssetBoundary, ConnectionGate, EmptyRow, IdLabel, PageHeader, PublicPrivateNotice, StateFreshness, VaultPolicyNotice } from './shared'
+import { TestnetFundsCard } from '../components/TestnetFundsCard'
 
 export function LenderPage() {
   const context = useAppContext()
@@ -31,6 +32,7 @@ function LenderOverview({ onOpenVaults, onOpenClaims, onRefresh }: { onOpenVault
     <PageHeader eyebrow="Lender workspace" title="A measured view of your capital" description="Vault liquidity and shares are public protocol state. Loan-level cash flows stay encrypted and are never inferred from the dashboard." action={<Button variant="secondary" onClick={() => void onRefresh()}>Refresh state</Button>} />
     <PublicPrivateNotice>Vault assets, available liquidity, share supply and your share balance are public. Individual loan principal, owed amounts and repayment amounts are encrypted; a share is a claim under current accounting, not a guaranteed original price.</PublicPrivateNotice>
     <AssetBoundary asset={snapshot.asset} />
+    <TestnetFundsCard />
     <div className="metrics-grid">
       <Metric label="Net asset value" value={<Money units={netAssets} decimals={snapshot.asset.decimals} />} supporting="Assets less recognized provisions" />
       <Metric label="Available liquidity" value={<Money units={available} decimals={snapshot.asset.decimals} />} supporting="Public cash held by the vault" tone="positive" />

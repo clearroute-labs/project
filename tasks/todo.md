@@ -1,5 +1,45 @@
 # Confidential lending on NEAR
 
+## Current task: Google login does not update the wallet
+
+- [x] Reproduce the callback state and inspect SDK/session and popup lifecycle independently.
+- [x] Fix the authentication-to-wallet transition while preserving request approval and account binding.
+- [x] Add regression coverage, verify browser behavior, and publish the fix.
+
+### Review
+
+Root cause: the installed React Auth SDK classifies a Google redirect inside any same-origin popup as a child OAuth flow and forwards it to the opener. Our opener is the main app, which does not own the Privy login, so the signing page returned to unauthenticated state. The signing page now completes the callback through the core SDK before mounting React Auth, preserving SDK state/PKCE validation and exchanging the code once. Successful callbacks clear only their OAuth parameters; failures offer a fresh login. The existing request/account approval checks remain in force, and handshake effects now use a fresh abort controller on replay.
+
+Verification: all 137 web tests, web typecheck and the production build pass. Chromium exercises the actual installed SDKs and NEAR Connect with synthetic authentication responses: existing-wallet login, first-time wallet setup, reload without a repeated code exchange, explicit approval and the main app account update, rejected exchange/retry and rejection of mismatched state before exchange. Public Privy app configuration is fetched live. No real Google authentication, wallet creation or transaction signing was performed. The development server was restarted and serves the fix at http://localhost:5175.
+
+
+## Current task: allow Privy App ID without a Client ID
+
+- [x] Check current Privy documentation and both installed SDK interfaces.
+- [x] Make the Client ID optional and correct setup instructions.
+- [x] Verify App-ID-only authentication setup and preserve explicit client overrides.
+
+
+### Review
+
+Privy React Auth and JS Core both accept an omitted Client ID. The app now enables social login with only the App ID, validates optional client overrides, and uses the same identity in both SDKs. Updated the setup docs and ignored the user’s local `web/.env` without changing its contents. All 28 focused configuration/signing-page tests and web typecheck pass. After restarting Vite, Chromium confirmed the real App-ID-only configuration lists the social wallet and opens a signing page ready for login; no authentication or transaction was submitted.
+
+## Current task: testnet app and easier key recovery
+
+- [x] Make the product connect to testnet by default, remove sandbox credential controls/signing from the production app, and keep financial sandbox verification in test fixtures.
+- [x] Update launch instructions and browser tests, then run the testnet app at the existing local URL.
+- [x] Deploy testnet Core/token contracts and serve the corresponding pinned public cryptographic artifacts; wire the product to the real deployment.
+- [x] Add passkey-backed same-browser unlock for confidential keys, retaining the encrypted recovery-file requirement and a fallback for unsupported authenticators.
+- [x] Publish the verified follow-up in [PR #2](https://github.com/clearroute-labs/project/pull/2), since PR #1 was already merged.
+
+### Review
+
+Implemented the real testnet default, self-service TEST faucet, and WebAuthn PRF-encrypted same-browser key storage with recovery files retained. Core `clearroute-core-312a0a7a.testnet` has eight activated verifier families; token `clearroute-token-312a0a7a.testnet` accepts wallet storage registration and a one-time 1,000 TEST claim. Live checks finalized the faucet claim/replay rejection, a real holder-key proof, and a 100 TEST deposit creating public claim `1`. Exact transaction hashes and operator instructions are in [TESTNET.md](../docs/TESTNET.md). Private operator files remain ignored and owner-only; only manifest-allowlisted public artifacts are staged into the web app.
+
+Verification: 183 TypeScript tests, strict workspace typecheck, seven token Rust tests, contract WASM build/host checks, production web build, and the real-token custody regression pass. Chromium verifies PRF enrollment/encrypted autosave/reload/unlock, the app's recovery-file restore/save/lock/reconnect flow, desktop/mobile layout, live finalized testnet reads, pinned WASM and six ecosystem wallet choices. Vite denies access to private deployment directories. Testnet deployment and resumption are checked against the immutable Core configuration and exact archived WASM.
+
+The app is running at http://localhost:5175. Public artifacts are served from this app; no permanent external artifact host was requested or provisioned. Cross-device encrypted backup hosting is outside this change. Physical Touch ID/Face ID and real Privy social login remain untested; Privy requires a public App ID; a Client ID is optional. Development proving keys and operator account access remain explicitly documented testnet limitations.
+
 ## Current task: NEAR Connect and configurable Privy support
 
 User requested a feature branch and PR, then selected NEAR Connect to support Privy alongside ecosystem wallets. No Privy application exists yet; implement configurable support and explicitly document that live social login requires public deployment IDs.

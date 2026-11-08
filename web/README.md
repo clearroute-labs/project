@@ -10,19 +10,21 @@ pnpm install
 pnpm --filter confidential-lending-web dev
 ```
 
-With a complete `mainnet` or `testnet` deployment configuration, the app creates a real Wallet Selector session (MyNearWallet and Meteor) and a finalized JSON-RPC `ProtocolClient`. For the local demo, set `VITE_NETWORK_ID=sandbox`, use an explicitly enabled localhost RPC, and import one of the demo credential JSON files from the wallet button. The file must contain `account_id` and an `ed25519:` `private_key` (an optional matching `public_key` is checked); it is held in memory only and is cleared on disconnect. This path signs real NEAR transactions and is never enabled for public networks. Without the required Core/token/profile values it starts in an intentionally disconnected, empty state. It does not invent balances, claims, proof results or transaction success.
+The app defaults to the deployed Core/token and manifest pins in `src/config/testnet.json`; prepare its public artifacts as described in [testnet setup](../docs/TESTNET.md). It connects through NEAR Connect, including ecosystem wallets and optional Privy social login. A wallet can connect before deployment configuration is complete; lending requires the deployed Core/token and pinned crypto manifest. See [wallet setup](../docs/WALLETS.md). The product never imports account credential files or installs a sandbox signer.
+
+Sandbox signing is isolated in `tests/support/sandboxWallet.ts` and the development-only `/tests/browser/sandbox.html` fixture. The local validation launcher opens that fixture explicitly; it is not a Vite production build entry.
 
 ## Integration boundary
 
 `src/lib/types.ts` is the browser-facing contract between the UI, the NEAR client and the crypto worker:
 
 - `ProtocolClient` reads finalized public/ciphertext state and submits typed Core actions. `src/lib/nearClient.ts` maps every action to the documented Core ABI through `@confidential-lending/client`'s HTTPS JSON-RPC and final-outcome transport.
-- `WalletAdapter` owns NEAR wallet-selector/session connection state. The default `NearWalletSelectorSession` uses supported MyNearWallet and Meteor modules and returns only actual connection state; no account is embedded in the app.
+- `WalletAdapter` owns NEAR Connect session state and forwards exact reviewed actions to the selected wallet. Optional Privy login uses an origin-isolated executor page.
 - `CryptoProvider` owns browser-local key material, WASM artifact/profile validation, key-registration/PoP preparation, proof preparation (including merge, draw, broker-only origination, repayment, settlement and reconciliation), direct loan-management preparation, and explicit decryption. Witnesses and decrypted values must not be sent to RPC or telemetry.
 
 `src/lib/nearClient.ts` maps those typed operations to the Core method names from `SPEC.md`. `src/lib/workerCrypto.ts` is the fail-closed worker transport for the reviewed WASM module; a module is accepted only when its profile and artifact hashes match the deployment manifest. Root integration may inject a reviewed crypto provider before mounting the app.
 
-Deployment values are read from `VITE_NETWORK_ID`, `VITE_CORE_ACCOUNT_ID`, `VITE_TOKEN_ACCOUNT_ID`, `VITE_RPC_URL`, `VITE_ALLOW_INSECURE_LOCALHOST`, `VITE_CRYPTO_PROFILE_HASH`, `VITE_CRYPTO_ARTIFACT_HASH`, `VITE_CRYPTO_MANIFEST_URL`, `VITE_CRYPTO_ARTIFACT_BASE_URL`, `VITE_FUNDED_DEPLOYMENT`, `VITE_ASSET_DECIMALS` and `VITE_ASSET_SYMBOL`. RPC URLs must not contain credentials; production RPC must use HTTPS. The localhost HTTP opt-in is only for an explicitly local sandbox.
+Deployment values are read from `VITE_NETWORK_ID`, `VITE_CORE_ACCOUNT_ID`, `VITE_TOKEN_ACCOUNT_ID`, `VITE_RPC_URL`, `VITE_ALLOW_INSECURE_LOCALHOST`, `VITE_CRYPTO_PROFILE_HASH`, `VITE_CRYPTO_ARTIFACT_HASH`, `VITE_CRYPTO_MANIFEST_URL`, `VITE_CRYPTO_ARTIFACT_BASE_URL`, `VITE_FUNDED_DEPLOYMENT`, `VITE_ASSET_DECIMALS`, `VITE_ASSET_SYMBOL` and `VITE_TESTNET_FAUCET`. Supplying a custom contract/profile override disables bundled contract/profile defaults; supply the complete custom deployment together. RPC URLs must not contain credentials; production RPC must use HTTPS. The localhost HTTP opt-in is accepted only by the test fixture; the product always requires HTTPS RPC.
 
 The browser crypto bridge must implement the `CryptoProvider` interface in
 `src/lib/types.ts`. Every `PreparedProof` carries canonical Statement JSON,
@@ -57,3 +59,11 @@ draft kept across sessions.
 Amounts are parsed and formatted as decimal strings with `BigInt` base units. Private terms and balances are represented by ciphertexts/commitments until the user deliberately decrypts them. Wallet backup encryption is provided by the shared `@confidential-lending/wallet` PBKDF2-SHA-256/AES-256-GCM implementation and is downloaded as an encrypted file; no secret is put into `localStorage`. The UI requires an explicit saved-backup confirmation before registering a newly generated holder/broker key or receiving/decrypting a loan proposal, and scopes that confirmation to the connected account and deployment.
 
 All action controls report `pending`, `failed`, and `unknown` states separately. An unknown payout result remains locked; the UI never treats a timeout as a refund or success.
+
+## Passkey unlock
+
+`DeviceKeyVault` uses WebAuthn PRF with required user verification to derive a wrapping key. It encrypts wallet material under a random AES-GCM data key and stores only the encrypted envelope, wrapped key and public credential metadata in IndexedDB. Account, deployment and origin are bound to the envelope. Unlock requires the original passkey and this browser’s stored envelope. Actual PRF output is checked during enrollment and unlock; unsupported authenticators leave file recovery available.
+
+`DeviceKeySession` automatically updates the encrypted copy while unlocked, invalidates recovery-file confirmation when private material changes, and clears worker keys when locked or the NEAR account changes. A recovery file confirmed for the saved snapshot restores that confirmation on unlock. Restoring a file over a locked browser copy requires an explicit authenticated update; an older copy is never silently imported over loaded keys. Concurrent tabs use revision-checked storage updates.
+
+Use HTTPS or `http://localhost` for WebAuthn. Apple/Google passkey sync does not sync the app’s IndexedDB data. Browser storage may be deleted or evicted; keep the encrypted recovery file. Removing the browser copy does not delete the passkey from the OS password manager.

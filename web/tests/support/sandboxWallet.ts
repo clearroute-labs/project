@@ -3,8 +3,7 @@ import { actionCreators, createTransaction, encodeTransaction, Signature, Signed
 import { base58 } from '@scure/base'
 import { Buffer as BrowserBuffer } from 'buffer'
 import { NearRpc, assertAccountId, type Arguments } from '@confidential-lending/client'
-import type { DeploymentConfig, WalletAdapter } from './types'
-
+import type { DeploymentConfig, WalletAdapter } from '../../src/lib/types'
 
 // @near-js/transactions still references the Node Buffer global while
 // serializing a signed sandbox transaction. Keep that dependency browser-safe
@@ -25,11 +24,11 @@ interface AccessKeyView {
 }
 
 /**
- * A deliberately narrow localnet signer.  Public wallets cannot connect to
- * a sandbox network, while a local demo still needs real signed NEAR
- * transactions.  Credentials are selected by the user, validated, and held
- * only in this object until disconnect or page unload; they are never put in
- * storage, URLs, telemetry, or RPC arguments.
+ * A deliberately narrow localnet signer for the browser integration fixture.
+ * Public wallets cannot connect to a sandbox network, while a local demo still
+ * needs real signed NEAR transactions. Credentials are selected by the user,
+ * validated, and held only in this object until disconnect or page unload; they
+ * are never put in storage, URLs, telemetry, or RPC arguments.
  */
 export class SandboxCredentialWallet implements WalletAdapter {
   readonly networkId: string

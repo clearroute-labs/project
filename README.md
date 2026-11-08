@@ -4,7 +4,13 @@ An implementation of [SPEC.md](SPEC.md): public single-asset vaults fund broker-
 
 The credit model has no on-chain collateral or first-loss cover. Brokers underwrite borrowers off-chain. Fixed finance charges are agreed at origination; there are no late fees or time-based interest accrual. Public settlement repays vault debt before recognizing yield. Impairment and default reconciliation prevent lenders from redeeming against stale accounting.
 
-## Run locally
+## Run the app
+
+The product defaults to NEAR testnet and uses NEAR Connect for wallet access. Install dependencies with `pnpm install --frozen-lockfile --ignore-scripts`, prepare the pinned public artifacts using [testnet setup](docs/TESTNET.md), and run `pnpm dev --host localhost --port 5175`. See [wallet setup](docs/WALLETS.md) and [web configuration](web/README.md).
+
+Confidential keys can be saved encrypted in this browser and unlocked with a compatible passkey. Keep the encrypted recovery file for a new browser or lost browser data.
+
+## Protocol development and sandbox verification
 
 Use Node 24.11 or newer, the pinned pnpm version in `package.json`, and Rust through rustup. `rust-toolchain.toml` pins the compiler and WASM target.
 
@@ -20,7 +26,7 @@ pnpm demo
 
 Development setup generates proving and verification keys for all eight proof families and pins every executable artifact in a deployment manifest. It resumes interrupted setup without changing completed keys. If source binaries change, choose a fresh output directory with `pnpm setup:development --output .artifacts/development-v2`; pass the same directory to `pnpm demo .artifacts/development-v2`.
 
-The launcher starts an isolated NEAR sandbox, deploys the Core and a test token, stages the real verification keys, creates funded test accounts and starts the web app at `http://127.0.0.1:5174`. It serves only manifest-listed public cryptographic artifacts. Local account credentials are saved with owner-only permissions under `.local/demo/credentials/`. Import the chosen account in the sandbox wallet to act as lender, broker or borrower. The sandbox stops when the launcher exits; its test assets have no monetary value.
+The launcher starts an isolated NEAR sandbox, deploys the Core and a test token, stages the real verification keys, creates funded test accounts and opens the test-only wallet fixture at `http://127.0.0.1:5174/tests/browser/sandbox.html`. It serves only manifest-listed public cryptographic artifacts. Local account credentials are saved with owner-only permissions under `.local/demo/credentials/`. Import the chosen account in that test fixture to act as lender, broker or borrower. The sandbox stops when the launcher exits; its test assets have no monetary value.
 
 `.local/demo/public.json` contains public deployment details and the loan auditor public key. The encrypted auditor wallet and its locally generated passphrase are separate owner-only files in the same directory. All generated keys, backups, artifacts and local chain files are excluded from Git.
 
@@ -86,4 +92,4 @@ Development artifacts use a single-party setup and are labeled accordingly. No i
 
 The Core has no application-level arbitrary-balance reset or verifier replacement after activation. A NEAR account's remaining full-access keys can still replace its deployed code; the actual account upgrade policy must therefore be disclosed and enforced at deployment. The configured token/controller can freeze transfers according to its published policy. Issuer, token-auditor and loan-auditor keys have distinct scopes. Provisioning a broker decryption key to a keeper gives that service the corresponding private visibility.
 
-No public network deployment is performed by the local launcher or test commands.
+The sandbox launcher and tests do not deploy to public networks. `pnpm deploy:testnet` explicitly deploys the testnet contracts; see [TESTNET.md](docs/TESTNET.md) for the active deployment, public artifact packaging and test-token funding.

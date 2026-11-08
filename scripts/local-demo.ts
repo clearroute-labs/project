@@ -78,7 +78,7 @@ try {
   if (!address || typeof address === 'string') throw new Error('Artifact server did not bind');
   const artifactBase = `http://127.0.0.1:${address.port}/`;
   await privateFile(join(output, 'public.json'), JSON.stringify({ networkId: 'sandbox', coreAccountId: deployment.core.accountId,
-    webUrl: `http://127.0.0.1:${webPort}/`,
+    webUrl: `http://127.0.0.1:${webPort}/tests/browser/sandbox.html`,
     tokenAccountId: deployment.token.accountId, rpcUrl: deployment.rpc.url, manifestHash: deployment.manifestHash,
     profileHash: deployment.manifest.profileHash, coreWasmHash: deployment.coreWasmHash, artifactBase, loanAuditorKey,
     keeperAuthorization: { keyId: '1', epoch: '2', accountId: deployment.actors.keeper.accountId },

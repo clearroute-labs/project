@@ -21,7 +21,9 @@
     "validate:browser": "node scripts/validate-browser.mjs",
     "validate:product": "node scripts/validate-product.mjs",
     "install:sandbox": "node scripts/install-sandbox.mjs",
-    "check:release": "tsx scripts/check-release.ts"
+    "check:release": "tsx scripts/check-release.ts",
+    "prepare:testnet-web": "tsx scripts/prepare-testnet-web.ts",
+    "deploy:testnet": "tsx scripts/deploy-testnet.ts"
   },
   "devDependencies": {
     "@near-js/transactions": "1.3.3",

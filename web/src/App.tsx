@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { Layout, getRoleFromPath } from './components/Layout'
 import { createBrowserAdapters } from './lib/adapters'
 import { toProtocolError } from './lib/actionState'
@@ -8,6 +8,7 @@ import { BrokerPage } from './pages/BrokerPage'
 import { BorrowerPage } from './pages/BorrowerPage'
 import { LenderPage } from './pages/LenderPage'
 import { SecurityPage } from './pages/SecurityPage'
+import { DeviceKeySession, type DeviceKeyState } from './lib/deviceKeySession'
 
 export interface AppContextValue {
   adapters: AppAdapters
@@ -18,6 +19,8 @@ export interface AppContextValue {
   loading: boolean
   loadError?: ProtocolError
   cryptoStatus: CryptoProviderStatus | null
+  deviceKeys: DeviceKeySession
+  deviceKeyState: DeviceKeyState
   refresh(): Promise<void>
   navigate(path: string): void
 }
@@ -31,7 +34,11 @@ export function useAppContext(): AppContextValue {
 }
 
 export function App({ adapters: providedAdapters }: { adapters?: AppAdapters }) {
-  const adapters = useMemo(() => providedAdapters ?? createBrowserAdapters(), [providedAdapters])
+  const rawAdapters = useMemo(() => providedAdapters ?? createBrowserAdapters(), [providedAdapters])
+  const deviceKeys = useMemo(() => new DeviceKeySession(rawAdapters), [rawAdapters])
+  const adapters = useMemo(() => ({ ...rawAdapters, crypto: deviceKeys.crypto }), [rawAdapters, deviceKeys])
+  const deviceKeyState = useSyncExternalStore(deviceKeys.subscribe, deviceKeys.getSnapshot)
+  useEffect(() => deviceKeys.start(), [deviceKeys])
   const [path, setPath] = useState(() => readHashPath())
   const [role, setRole] = useState<Role>(() => getRoleFromPath(readHashPath()) ?? 'lender')
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null)
@@ -65,12 +72,7 @@ export function App({ adapters: providedAdapters }: { adapters?: AppAdapters }) 
     setLoading(false)
     setCryptoStatus(null)
     setLoadError(undefined)
-  }, [accountId])
-
-  useEffect(() => {
-    const provider = adapters.crypto as typeof adapters.crypto & { setSubject?: (accountId: string | undefined) => void }
-    provider.setSubject?.(accountId)
-  }, [accountId, adapters.crypto])
+  }, [accountId, deviceKeyState.sessionVersion])
 
   const refresh = useCallback(async () => {
     const sequence = ++refreshSequence.current
@@ -109,7 +111,7 @@ export function App({ adapters: providedAdapters }: { adapters?: AppAdapters }) 
 
   useEffect(() => {
     void refresh()
-  }, [refresh])
+  }, [refresh, deviceKeyState.sessionVersion, deviceKeyState.materialVersion])
 
   const navigate = useCallback((nextPath: string) => {
     if (window.location.hash !== `#${nextPath}`) window.location.hash = nextPath
@@ -130,11 +132,13 @@ export function App({ adapters: providedAdapters }: { adapters?: AppAdapters }) 
     loading,
     loadError,
     cryptoStatus,
+    deviceKeys,
+    deviceKeyState,
     refresh,
     navigate,
-  }), [accountId, adapters, cryptoStatus, loadError, loading, navigate, path, refresh, role, snapshot])
+  }), [accountId, adapters, cryptoStatus, deviceKeys, deviceKeyState, loadError, loading, navigate, path, refresh, role, snapshot])
 
-  const page = <PageRouter key={`${accountId || 'disconnected'}:${role}`} />
+  const page = <PageRouter key={`${accountId || 'disconnected'}:${role}:${deviceKeyState.sessionVersion}`} />
   const adapterReady = adapters.wallet.status === 'connected' && Boolean(accountId) && Boolean(adapters.protocol.config.coreAccountId)
 
   return (
