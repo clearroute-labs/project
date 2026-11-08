@@ -1,5 +1,18 @@
 # Confidential lending on NEAR
 
+## Current task: Google login does not update the wallet
+
+- [x] Reproduce the callback state and inspect SDK/session and popup lifecycle independently.
+- [x] Fix the authentication-to-wallet transition while preserving request approval and account binding.
+- [x] Add regression coverage, verify browser behavior, and publish the fix.
+
+### Review
+
+Root cause: the installed React Auth SDK classifies a Google redirect inside any same-origin popup as a child OAuth flow and forwards it to the opener. Our opener is the main app, which does not own the Privy login, so the signing page returned to unauthenticated state. The signing page now completes the callback through the core SDK before mounting React Auth, preserving SDK state/PKCE validation and exchanging the code once. Successful callbacks clear only their OAuth parameters; failures offer a fresh login. The existing request/account approval checks remain in force, and handshake effects now use a fresh abort controller on replay.
+
+Verification: all 137 web tests, web typecheck and the production build pass. Chromium exercises the actual installed SDKs and NEAR Connect with synthetic authentication responses: existing-wallet login, first-time wallet setup, reload without a repeated code exchange, explicit approval and the main app account update, rejected exchange/retry and rejection of mismatched state before exchange. Public Privy app configuration is fetched live. No real Google authentication, wallet creation or transaction signing was performed. The development server was restarted and serves the fix at http://localhost:5175.
+
+
 ## Current task: allow Privy App ID without a Client ID
 
 - [x] Check current Privy documentation and both installed SDK interfaces.

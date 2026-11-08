@@ -1,15 +1,15 @@
 /* @vitest-environment jsdom */
-import { act, type ReactNode } from 'react'
+import { act, StrictMode, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mock = vi.hoisted(() => ({
   authenticated: false,
-  login: vi.fn(), logout: vi.fn(), initialize: vi.fn(), construct: vi.fn(), provider: vi.fn(), getUser: vi.fn(), createWallet: vi.fn(), handshake: vi.fn(), sign: vi.fn(),
+  login: vi.fn(), loginWithCode: vi.fn(), logout: vi.fn(), initialize: vi.fn(), construct: vi.fn(), provider: vi.fn(), getUser: vi.fn(), createWallet: vi.fn(), handshake: vi.fn(), sign: vi.fn(),
   config: { networkId: 'testnet', coreAccountId: 'core.testnet', tokenAccountId: 'token.testnet', rpcUrl: 'https://rpc.testnet.near.org', cryptoProfileHash: '', assetDecimals: 6, assetSymbol: 'USD', privyAppId: 'app', privyClientId: 'client' },
 }))
 vi.mock('../src/lib/deploymentConfig', () => ({ deploymentConfigFromEnv: () => mock.config }))
-vi.mock('@privy-io/js-sdk-core', () => ({ default: class { constructor(options: unknown) { mock.construct(options) } initialize = mock.initialize; user = { get: mock.getUser } }, LocalStorage: class {} }))
+vi.mock('@privy-io/js-sdk-core', () => ({ default: class { constructor(options: unknown) { mock.construct(options) } initialize = mock.initialize; user = { get: mock.getUser }; auth = { oauth: { loginWithCode: mock.loginWithCode } } }, LocalStorage: class {} }))
 vi.mock('@privy-io/react-auth', () => ({ PrivyProvider: ({ children, appId, clientId }: { children: ReactNode; appId: string; clientId?: string }) => { mock.provider({ appId, clientId }); return children }, usePrivy: () => ({ ready: true, authenticated: mock.authenticated, user: mock.authenticated ? { id: 'user' } : undefined, login: mock.login, logout: mock.logout }) }))
 vi.mock('@privy-io/react-auth/extended-chains', () => ({ useCreateWallet: () => ({ createWallet: mock.createWallet }) }))
 vi.mock('@peerfolio/privy-near-connect/sign-page', () => ({ initSigningPage: mock.handshake }))
@@ -34,6 +34,8 @@ describe('Privy authentication and approval page', () => {
     mock.config.privyAppId = 'app'
     mock.config.privyClientId = 'client'
     mock.initialize.mockResolvedValue(undefined)
+    mock.loginWithCode.mockImplementation(async () => { mock.authenticated = true })
+    window.history.replaceState({}, '', '/wallet/privy')
     mock.getUser.mockResolvedValue({ user: { linked_accounts: [wallet] } })
     mock.handshake.mockImplementation(async () => ({ payload, targetOrigin: window.location.origin, sign: mock.sign }))
     mock.sign.mockResolvedValue(undefined)
@@ -64,6 +66,73 @@ describe('Privy authentication and approval page', () => {
     await click('Sign in')
     expect(mock.login).toHaveBeenCalledOnce()
     expect(mock.sign).not.toHaveBeenCalled()
+  })
+  it('updates the wallet after authentication without remounting the signing page', async () => {
+    await render()
+    expect(container.textContent).toContain('Sign in')
+    mock.authenticated = true
+    await render()
+    expect(container.textContent).toContain(wallet.address)
+    expect(container.textContent).toContain('Approve transaction')
+    expect(mock.sign).not.toHaveBeenCalled()
+    mock.authenticated = false
+    await render()
+    expect(container.textContent).toContain('Sign in')
+    expect(container.textContent).not.toContain(wallet.address)
+  })
+  it('exchanges the Google redirect before mounting React auth and preserves explicit approval', async () => {
+    window.history.replaceState({ retained: true }, '', '/wallet/privy?keep=yes&privy_oauth_code=test-code&privy_oauth_state=test-state&privy_oauth_provider=google#review')
+    let finish!: () => void
+    mock.loginWithCode.mockImplementation(() => new Promise<void>((resolve) => { finish = () => { mock.authenticated = true; resolve() } }))
+    await render()
+    expect(mock.loginWithCode).toHaveBeenCalledOnce()
+    expect(mock.loginWithCode).toHaveBeenCalledWith('test-code', 'test-state', 'google', undefined, 'login-or-sign-up')
+    expect(mock.provider).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('Preparing secure login')
+    await act(async () => finish())
+    expect(window.location.search).toBe('?keep=yes')
+    expect(window.location.hash).toBe('#review')
+    expect(window.history.state).toEqual({ retained: true })
+    expect(container.textContent).toContain(wallet.address)
+    expect(window.opener.postMessage).not.toHaveBeenCalled()
+    expect(mock.sign).not.toHaveBeenCalled()
+    await click('Approve transaction')
+    expect(mock.sign).toHaveBeenCalledOnce()
+  })
+  it('shows an exchange failure without handing the callback to React auth', async () => {
+    window.history.replaceState({}, '', '/wallet/privy?privy_oauth_code=test-code&privy_oauth_state=test-state&privy_oauth_provider=google')
+    mock.loginWithCode.mockRejectedValueOnce(new Error('Invalid state'))
+    await render()
+    expect(container.textContent).toContain('Sign-in could not be completed')
+    expect(container.textContent).toContain('Start sign-in again')
+    expect(mock.provider).not.toHaveBeenCalled()
+    expect(mock.handshake).not.toHaveBeenCalled()
+    expect(mock.sign).not.toHaveBeenCalled()
+  })
+  it.each([
+    'privy_oauth_code=error&privy_oauth_state=state&privy_oauth_provider=google',
+    'privy_oauth_code=code&privy_oauth_state=state',
+    'privy_oauth_code=code&privy_oauth_state=state&privy_oauth_provider=unexpected',
+  ])('rejects incomplete, cancelled and unsupported callbacks: %s', async (query) => {
+    window.history.replaceState({}, '', `/wallet/privy?${query}`)
+    await render()
+    expect(container.textContent).toContain('Sign-in could not be completed')
+    expect(mock.loginWithCode).not.toHaveBeenCalled()
+    expect(mock.provider).not.toHaveBeenCalled()
+  })
+  it('exchanges a redirect once and keeps the current handshake alive across effect replays', async () => {
+    window.history.replaceState({}, '', '/wallet/privy?privy_oauth_code=code&privy_oauth_state=state&privy_oauth_provider=google')
+    await act(async () => root.render(<StrictMode><PrivySignPage /></StrictMode>))
+    expect(mock.initialize).toHaveBeenCalledOnce()
+    expect(mock.loginWithCode).toHaveBeenCalledOnce()
+    const signals = mock.handshake.mock.calls.map((call) => call[1].signal as AbortSignal)
+    expect(signals).toHaveLength(2)
+    expect(signals[0].aborted).toBe(true)
+    expect(signals[1].aborted).toBe(false)
+    expect(container.textContent).toContain(wallet.address)
+    await click('Approve transaction')
+    expect(mock.sign).toHaveBeenCalledOnce()
+    expect(mock.handshake.mock.lastCall![1].signal).toBe(signals[1])
   })
   it('shows exact transaction amounts and binds the approved wallet before signing once', async () => {
     mock.authenticated = true
