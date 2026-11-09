@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const baseUrl = process.env.UI_BASE_URL || 'http://127.0.0.1:5175'
+const baseUrl = process.env.UI_BASE_URL || 'http://127.0.0.1:5175/app'
 const screenshotDir = path.resolve(process.env.UI_SCREENSHOT_DIR || path.join(process.cwd(), '.artifacts', 'ui'))
 const credentialFile = process.env.UI_CREDENTIAL_FILE
 const scriptRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
@@ -47,16 +47,15 @@ async function openWorkspace(page, role, navigationLabel) {
 async function inspectViewport(page, viewport, screenshotName) {
   await page.setViewportSize(viewport)
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 })
-  await expectVisibleText(page, 'Connect your NEAR wallet', 'Disconnected state should invite a wallet connection.')
-  await expectVisibleText(page, 'Connect a wallet to view balances, loans and claims and authorize actions.')
+  await visible(page.getByRole('main').getByRole('button', { name: 'Connect wallet', exact: true }), 'Disconnected state should invite a wallet connection.')
+  check(await page.getByRole('main').getByRole('heading').count() === 0, 'Disconnected screen should contain only the wallet prompt.')
   await openWorkspace(page, 'broker', 'Loan book')
   await openWorkspace(page, 'borrower', 'Agreements')
   await openWorkspace(page, 'auditor', 'Loan exports')
   await openWorkspace(page, 'lender', 'Wallet & security')
   await page.getByRole('button', { name: 'Wallet & security', exact: true }).click()
-  await visible(page.getByRole('heading', { name: 'Keep the keys close', exact: true }), 'Security settings should be reachable while disconnected.')
-  await visible(page.getByLabel('Backup file'), 'Encrypted backup import should be present.')
-  check(await page.getByRole('button', { name: 'Decrypt & restore', exact: true }).isDisabled(), 'Backup restore must remain locked until a connected secure session is ready.')
+  await visible(page.getByRole('main').getByRole('button', { name: 'Connect wallet', exact: true }), 'Settings should prompt for a wallet while disconnected.')
+  check(await page.getByLabel('Backup file').count() === 0, 'Recovery controls should appear only after connection.')
   await page.screenshot({ path: path.join(screenshotDir, screenshotName), fullPage: true })
 }
 
@@ -68,7 +67,7 @@ async function inspectOptionalCredentialFlow(page) {
     // Navigation checks can leave a responsive sidebar in a transient route;
     // reset to the disconnected landing state before importing credentials.
     await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 })
-    await page.getByText('Connect your NEAR wallet', { exact: true }).waitFor({ state: 'visible', timeout: 15_000 })
+    await page.getByRole('main').getByRole('button', { name: 'Connect wallet', exact: true }).waitFor({ state: 'visible', timeout: 15_000 })
   }
   if ((await input.count()) === 0) {
     const controls = await page.locator('input').evaluateAll((elements) => elements.map((element) => ({ type: element.type, aria: element.getAttribute('aria-label'), id: element.id })))

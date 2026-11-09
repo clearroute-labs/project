@@ -9,12 +9,12 @@ try {
   const page = await browser.newPage()
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
-  await page.goto(process.env.UI_BASE_URL || 'http://localhost:5175')
+  await page.goto(new URL('/app', process.env.UI_BASE_URL || 'http://localhost:5175').href)
   await mkdir(resolve('.local'), { recursive: true, mode: 0o700 })
   await writeFile(probe, 'Harmless access-control probe', { mode: 0o600 })
   const forbidden = await page.request.get(new URL(`/@fs${probe}`, page.url()).href)
   expect(forbidden.status()).toBe(403)
-  await expect(page.getByRole('button', { name: 'Connect wallet', exact: true })).toBeVisible()
+  await expect(page.getByRole('banner').getByRole('button', { name: 'Connect wallet', exact: true })).toBeVisible()
   await expect(page.getByLabel('Import sandbox credentials', { exact: true })).toHaveCount(0)
   await expect(page.getByText('NEAR testnet', { exact: false }).first()).toBeVisible()
   const result = await page.evaluate(async () => {
@@ -29,7 +29,7 @@ try {
     if (!/^\d+$/.test(faucet.balance) || typeof faucet.claimed !== 'boolean') throw new Error('Live test-token faucet reads failed')
     return { network: config.networkId, core: config.coreAccountId, token: config.tokenAccountId, asset, profileHash: status.profileHash, artifactHash: status.artifactHash }
   })
-  await page.getByRole('button', { name: 'Connect wallet', exact: true }).click()
+  await page.getByRole('banner').getByRole('button', { name: 'Connect wallet', exact: true }).click()
   await expect(page.locator('.connect-item').first()).toBeVisible({ timeout: 30_000 })
   const walletCount = await page.locator('.connect-item').count()
   if (walletCount < 2) throw new Error('Native NEAR wallet choices are missing')

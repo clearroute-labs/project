@@ -65,7 +65,7 @@ async function run(outcome) {
   })
   try {
     const page = await context.newPage()
-    await page.goto(baseURL)
+    await page.goto(new URL('/app', baseURL).href)
     await page.getByRole('button', { name: 'Connect wallet', exact: true }).first().click()
     const opened = page.waitForEvent('popup')
     await page.locator('.connect-item[data-type="private-ledger-privy"]').click()
@@ -103,7 +103,7 @@ async function run(outcome) {
     await closed
     await expect(page.getByRole('button', { name: 'Connect wallet', exact: true })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Connecting…', exact: true })).toHaveCount(0)
-    await expect(page.getByRole('button', { name: `${address.slice(0, 9)}…${address.slice(-8)}`, exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: `Wallet & security: ${address}`, exact: true })).toBeVisible()
   } finally { await context.close() }
 }
 

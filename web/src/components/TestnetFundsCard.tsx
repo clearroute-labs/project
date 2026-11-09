@@ -43,8 +43,8 @@ export function TestnetFundsCard() {
   const storageReady = status && BigInt(status.storageBalance) >= STORAGE_TOP_UP
   const busy = ['preparing', 'awaiting_wallet', 'submitted', 'pending'].includes(action.state.phase)
   return <Card className="configuration-card">
-    <SectionHeading eyebrow="NEAR testnet" title="Get test funds" />
-    <p className="muted">Claim 1,000 TEST once per account to try lending and repayment. TEST has no monetary value. Your wallet needs testnet NEAR for transaction fees and storage.</p>
+    <SectionHeading title="Get test funds" />
+    <p className="muted">TEST has no monetary value. You need testnet NEAR for fees and storage.</p>
     <p><a href="https://docs.near.org/getting-started/faucet" target="_blank" rel="noreferrer">Get testnet NEAR</a></p>
     {status ? <p>Wallet balance: <Money units={status.balance} decimals={6} /> TEST{status.claimed ? ' · Faucet already claimed' : ''}</p> : null}
     {!accountId ? <p className="field-hint">Connect your testnet wallet to get started.</p> : null}

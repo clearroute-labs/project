@@ -1,5 +1,67 @@
 # Confidential lending on NEAR
 
+## Current task: stop the app and open the UI pull request
+
+- [x] Stop this app’s development server and verify it is no longer listening.
+- [x] Review the existing PR state and isolate the UI changes on a new branch.
+- [ ] Commit, push, open a PR against main and verify the remote head.
+
+### Plan
+
+The earlier testnet/passkey PR is merged. Preserve it and open a separate PR for the completed design refresh, minimalist pages, landing route and compact navigation. Reuse the completed web, build and browser verification; check the final diff and branch against current main.
+
+### Pre-publication review
+
+Stopped the app server and confirmed port 5175 has no listener. PR #2 is merged at 1850277; current main is 1fb4654 with the same tracked tree. Created `feat/minimal-app-design` from current main, preserving only the completed UI changes. The final diff passes whitespace checks; the recorded production build passed. Existing completed verification covers 137 web unit tests, type checking, all workspace routes at desktop/390/320 widths, navigation/accessibility interactions and four mocked OAuth outcomes. No real authentication or financial transactions were performed.
+
+## Current task: public landing and compact app navigation
+
+- [x] Add a public landing page at `/` with Open app linking to `/app`; preserve wallet callback and existing app links.
+- [x] Center disconnected wallet access, move workspace selection into the top bar, and make navigation collapse to accessible icons.
+- [x] Verify landing/app navigation, hover/focus/touch sidebar behavior, wallet flows and desktop/mobile layouts.
+
+### Plan
+
+Keep the sparse visual direction. Root owns routing, shared logo/icons, shell and checks. The landing-page worker owns only the new page and scoped stylesheet in an isolated worktree. Desktop navigation expands on hover or keyboard focus; touch gets an explicit menu control. Public entry must not initialize wallet/crypto until the app opens.
+
+### Landing and navigation review
+
+Added a sparse public landing page at `/` with logo-only branding and Open app at the top right. `/app` lazily initializes the application; disconnected routes show only a centered wallet action. Workspace selection now sits immediately left of the wallet/account control. The icon sidebar expands on hover or keyboard focus, uses a touch disclosure with Escape/outside dismissal, and returns focus to content after navigation. Existing root hash links retain their destination; the Privy callback remains `/wallet/privy`.
+
+Verification: all 137 web tests, TypeScript, production build, disconnected checks, all connected workspace routes at 1440/390/320 pixels, and all four mocked OAuth scenarios pass. New browser checks cover landing-to-app/back/forward navigation, legacy links, button centering, workspace/control placement, desktop hover collapse, keyboard focus and touch disclosure/dismissal. Screenshots are in `.local/navigation-review`. Another project occupies IPv6 localhost:5175; this app remains on IPv4 at http://127.0.0.1:5175 with the workspace at /app. No real wallet authentication or transactions performed.
+
+## Current task: simplify the interface
+
+- [x] Remove decorative strips, repeated labels and promotional copy from the shell and welcome screen.
+- [x] Simplify workspaces and security copy; keep actionable guidance, real state and financial/recovery safeguards.
+- [x] Verify all routes on desktop/mobile, update affected checks and document the result.
+
+### Plan
+
+Use concise page titles and action labels. Remove repeated privacy explanations and technical overviews from dashboards, keep essential information next to the relevant decision, and collapse optional configuration details. Preserve the presentation palette. Root owns shared components/styles and workspaces; the security-page worker owns only its file in an isolated worktree.
+
+### Minimal-interface review
+
+Removed the welcome principle strip, footer caption, orbit illustration, sidebar tagline, numbered navigation, section eyebrows, repeated privacy banners and static borrower inbox/backup metrics. Replaced slogan headings with direct titles, reduced heading size and shortened form guidance. Dashboards now start with real balances/activity; test funds remain available in Wallet & security. Collapsed vault disclosure and deployment diagnostics, retained recovery requirements, financial risks, pending-payout guidance, errors and all action handlers.
+
+Verification: 137 web tests, TypeScript and production build pass. All workspace routes, populated/empty/error/loading states, keyboard navigation and overflow checks pass at 1440, 390 and 320 pixels. Disconnected welcome/security checks and optional configuration expansion pass. Reviewed desktop and mobile screenshots in `.local/minimal-review`. App remains running at http://localhost:5175.
+
+## Current task: apply the technical-direction presentation design system
+
+- [x] Inspect the reference presentation and translate its recurring visual rules into app design tokens.
+- [x] Restyle the shared shell, components, data views, forms and wallet screens, preserving behavior.
+- [x] Verify representative workspaces and states on desktop/mobile; run applicable checks and document results.
+
+### Design and verification plan
+
+Use the local presentation at `/Users/thomashussenet/Documents/commons/code/xrpl-commons-technical-direction/dist/index.html` as the visual source of truth. Extract its palette, fonts, surfaces, geometry and hierarchy; adapt them to an interactive lending product with readable forms, accessible states and responsive navigation. Keep Private Ledger branding and existing functionality. Root owns implementation; two read-only reviews cover reference extraction and UI verification coverage. Validate actual rendered screens with existing browser fixtures and testnet reads, without signing or changing live financial state.
+
+### Design review
+
+Applied the presentation’s Arial typography, paper/ink/olive palette, lime/lavender/blue surfaces, 22px cards, thin rules, tracked labels and geometric orbit motif across the app. Updated navigation, forms, tables, balance/security panels, wallet picker, social sign-in page, tab icon and browser theme color. Added responsive wrapping, visible keyboard focus and reduced-motion handling. Private Ledger branding and lending behavior are preserved.
+
+Verification: 137 web tests, TypeScript checking, production build and diff checks pass. The test-only injected-adapter fixture covers every workspace route with populated/empty data at 1440, 390 and 320 pixels, plus loading/error states, keyboard navigation, focus indicators and horizontal-overflow checks. Reviewed rendered welcome, dashboard, form, security, balance and wallet screens; checked pastel-text contrast and reduced-motion rendering. Existing disconnected browser checks and all four mocked OAuth scenarios pass. Synthetic fixtures cannot sign or submit mutations and are not production build entries. No real authentication or financial transaction was performed. Screenshots are in `.local/design-review`; the app is running at http://localhost:5175.
+
 ## Current task: Google login does not update the wallet
 
 - [x] Reproduce the callback state and inspect SDK/session and popup lifecycle independently.

@@ -2,23 +2,29 @@ import { useState, type ReactNode } from 'react'
 import { useAppContext } from '../App'
 import { Button, Card, EmptyState, Mono, Notice, SectionHeading, StatusBadge } from '../components/ui'
 import { formatAmount } from '../lib/money'
-import type { AssetProfile, ProtocolError, Role, VaultSummary } from '../lib/types'
+import type { ProtocolError, Role, VaultSummary } from '../lib/types'
 
-export function PageHeader({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) {
-  return <div className="page-header"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p className="page-description">{description}</p></div>{action ? <div className="page-header-action">{action}</div> : null}</div>
+export function PageHeader({ title, description, action }: { title: ReactNode; description?: string; action?: ReactNode }) {
+  return <div className="page-header"><div><h1>{title}</h1>{description ? <p className="page-description">{description}</p> : null}</div>{action ? <div className="page-header-action">{action}</div> : null}</div>
 }
 
-export function ConnectionGate({ role, children }: { role: Role; children: ReactNode }) {
-  const { accountId, adapters, loading, loadError, refresh, snapshot } = useAppContext()
+export function ConnectWallet() {
+  const { adapters } = useAppContext()
   const [connectionError, setConnectionError] = useState('')
   const connect = async () => {
     setConnectionError('')
     try { await adapters.wallet.connect() }
     catch (error) { setConnectionError(error instanceof Error ? error.message : 'Wallet connection failed.') }
   }
-  if (!accountId || adapters.wallet.status !== 'connected') {
-    return <><PageHeader eyebrow={role} title="Your workspace is ready" description="Connect a NEAR wallet to view finalized account state and authorize actions." /><Card><EmptyState icon="⌁" title="Connect your NEAR wallet" description="Connect a wallet to view balances, loans and activity." action={<Button disabled={adapters.wallet.status === 'connecting'} onClick={() => void connect()}>{adapters.wallet.status === 'connecting' ? 'Connecting…' : 'Connect NEAR wallet'}</Button>} />{connectionError ? <Notice tone="danger">{connectionError}</Notice> : null}</Card></>
-  }
+  return <section className="welcome" aria-label="Wallet connection">
+      <Button disabled={adapters.wallet.status === 'connecting'} onClick={() => void connect()}>{adapters.wallet.status === 'connecting' ? 'Connecting…' : 'Connect wallet'}</Button>
+      {connectionError ? <Notice tone="danger">{connectionError}</Notice> : null}
+    </section>
+}
+
+export function ConnectionGate({ children }: { children: ReactNode }) {
+  const { accountId, adapters, loading, loadError, refresh, snapshot } = useAppContext()
+  if (!accountId || adapters.wallet.status !== 'connected') return <ConnectWallet />
   // Refresh keeps mounted forms, transaction feedback and local agreement packages.
   // An account switch clears the snapshot in App before its workspace can render.
   if (loading && !snapshot) return <LoadingState label="Reading finalized Core state…" />
@@ -34,17 +40,9 @@ export function ErrorState({ error, onRetry }: { error: ProtocolError; onRetry: 
   return <Card><EmptyState icon="!" title="State could not be read" description={`${error.details.message} The latest finalized state could not be read. Check any pending transaction before retrying an action.`} action={<Button variant="secondary" onClick={onRetry}>Retry read</Button>} /><div className="diagnostic"><span>Category</span><Mono>{error.details.category}</Mono></div></Card>
 }
 
-export function PublicPrivateNotice({ children }: { children?: ReactNode }) {
-  return <Notice tone="info" title="Public / private boundary">{children || 'IDs, status, versions, ciphertexts and public boundary amounts are visible on-chain. Loan terms, balances and repayment amounts remain encrypted until an authorized local key is used.'}</Notice>
-}
-
-export function AssetBoundary({ asset }: { asset: AssetProfile }) {
-  return <Card className="asset-boundary"><SectionHeading eyebrow="Asset boundary" title="Configured public rail" /><div className="config-grid"><div><span>Token account</span><Mono>{asset.tokenAccount || 'Not configured'}</Mono></div><div><span>Controller</span><Mono>{asset.controllerAccount || 'Not reported'}</Mono></div><div><span>Trust policy</span><strong>{asset.tokenTrustPolicy || 'Not reported'}</strong></div><div><span>Authorization</span><strong>{asset.authorizationPolicy || 'Not reported'}</strong></div>{asset.freezePolicy ? <div><span>Freeze policy</span><strong>{asset.freezePolicy}</strong></div> : null}{asset.confidentialOutstanding !== undefined ? <div><span>Confidential outstanding</span><AmountCell units={asset.confidentialOutstanding} decimals={asset.decimals} /></div> : null}</div><p className="field-hint">Controller, token policy and boundary totals are public protocol declarations. A controller is not assumed to be the underlying issuer, and public timing or small cohorts can still reveal financial information by correlation.</p></Card>
-}
-
 export function VaultPolicyNotice({ vault }: { vault?: VaultSummary }) {
   if (!vault) return null
-  return <Notice tone="info" title="Vault disclosure policy">Checkpoint cadence: {vault.checkpointEpochSeconds ? `${vault.checkpointEpochSeconds} seconds` : 'not reported'} · disclosure: {vault.checkpointDisclosurePolicy || 'not reported'}. Individual loan terms remain encrypted, but public timing and small cohorts can reveal amounts by correlation. No collateral or first-loss guarantee is implied by this view.</Notice>
+  return <details className="inline-details"><summary>Vault risks & disclosure</summary><p>Loans have no collateral or first-loss guarantee. Public timing and small cohorts can reveal amounts.</p><p>Checkpoint interval: {vault.checkpointEpochSeconds ? `${vault.checkpointEpochSeconds} seconds` : 'not reported'} · disclosure: {vault.checkpointDisclosurePolicy || 'not reported'}.</p></details>
 }
 
 export function StateFreshness({ status }: { status: 'current' | 'pending' | 'stale' | 'unknown' }) {
