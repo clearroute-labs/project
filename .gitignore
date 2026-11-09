@@ -19,3 +19,6 @@
 *.tsbuildinfo
 .DS_Store
 
+
+/.superdesign/
+/.Codex/rules/superdesign-init/

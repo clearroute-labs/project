@@ -78,20 +78,23 @@ export function Layout({ role, path, onNavigate, onRoleChange, wallet, children,
   }
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#workspace-content" onClick={(event) => { event.preventDefault(); mainContent.current?.focus() }}>Skip to workspace</a>
       {navigationOpen ? <button className="sidebar-backdrop" aria-label="Close navigation" onClick={closeNavigation} /> : null}
       <aside className="sidebar" data-expanded={navigationOpen} onBlurCapture={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setNavigationOpen(false)
       }} onKeyDown={(event) => {
         if (event.key === 'Escape' && navigationOpen) { event.preventDefault(); closeNavigation() }
       }}>
-        <button className="brand" onClick={() => navigate('/')} aria-label="Private Ledger home"><AppLogo /></button>
+        <button className="brand" onClick={() => navigate('/')} aria-label="ClearRoute home"><AppLogo /><span className="brand-wordmark" aria-hidden="true">ClearRoute</span></button>
         <button ref={menuToggle} className="sidebar-toggle" aria-label={navigationOpen ? 'Collapse navigation' : 'Expand navigation'} aria-expanded={navigationOpen} aria-controls="workspace-navigation" onClick={() => setNavigationOpen((value) => !value)}><NavIcon name={navigationOpen ? 'close' : 'menu'} /></button>
+        <p className="sidebar-caption">Your workspace</p>
         <nav id="workspace-navigation" className="primary-nav" aria-label={`${meta.label} navigation`}>
           {meta.nav.map((item) => {
             const selected = item.path === '/' ? path === '/' : path.startsWith(item.path)
             return <button key={item.path} className={`nav-item ${selected ? 'nav-item-active' : ''}`} aria-label={item.label} title={item.label} aria-current={selected ? 'page' : undefined} onClick={() => navigate(item.path)}><NavIcon name={item.icon} /><span className="nav-label" aria-hidden="true">{item.label}</span></button>
           })}
         </nav>
+        <div className="sidebar-footer"><p>Public capital.<br />Private credit.</p><a href="/">About ClearRoute <span aria-hidden="true">↗</span></a></div>
       </aside>
       <div className="main-column">
         <header className="topbar">
@@ -104,7 +107,7 @@ export function Layout({ role, path, onNavigate, onRoleChange, wallet, children,
             {!connected ? <Button variant="secondary" disabled={wallet.status === 'connecting'} onClick={() => void connect()}>{wallet.status === 'connecting' ? 'Connecting…' : 'Connect wallet'}</Button> : null}
           </div>
         </header>
-        <main ref={mainContent} tabIndex={-1} className={`main-content${connected ? '' : ' main-content-disconnected'}`}>
+        <main id="workspace-content" ref={mainContent} tabIndex={-1} className={`main-content${connected ? '' : ' main-content-disconnected'}`}>
           {connected && !adapterReady ? <Notice tone="warning" title="Lending deployment unavailable">Your wallet is connected. A complete contract and security configuration is required before lending actions are available.</Notice> : null}
           {walletError ? <Notice tone="danger" title="Wallet connection unavailable">{walletError}</Notice> : null}
           {notice ? <Notice tone="info">{notice}</Notice> : null}

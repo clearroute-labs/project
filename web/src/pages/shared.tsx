@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { useAppContext } from '../App'
 import { Button, Card, EmptyState, Mono, Notice, SectionHeading, StatusBadge } from '../components/ui'
 import { formatAmount } from '../lib/money'
+import { AppLogo } from '../components/AppLogo'
 import type { ProtocolError, Role, VaultSummary } from '../lib/types'
 
 export function PageHeader({ title, description, action }: { title: ReactNode; description?: string; action?: ReactNode }) {
@@ -17,8 +18,13 @@ export function ConnectWallet() {
     catch (error) { setConnectionError(error instanceof Error ? error.message : 'Wallet connection failed.') }
   }
   return <section className="welcome" aria-label="Wallet connection">
+      <div className="welcome-logo"><AppLogo /></div>
+      <p className="eyebrow">The ClearRoute workspace</p>
+      <h1>Credit, on your terms.</h1>
+      <p className="welcome-description">Connect your NEAR wallet to view vaults, manage a loan or access an authorized audit view. Choose your role with the workspace selector.</p>
       <Button disabled={adapters.wallet.status === 'connecting'} onClick={() => void connect()}>{adapters.wallet.status === 'connecting' ? 'Connecting…' : 'Connect wallet'}</Button>
       {connectionError ? <Notice tone="danger">{connectionError}</Notice> : null}
+      <p className="welcome-footnote">Connecting does not submit a transaction. Confidential amounts require your local decryption keys; account identities and transaction timing remain public.</p>
     </section>
 }
 

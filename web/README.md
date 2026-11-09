@@ -1,4 +1,4 @@
-# Private Ledger web application
+# ClearRoute web application
 
 This directory contains the React/Vite wallet application for the NEAR confidential lending protocol.
 
@@ -17,6 +17,20 @@ Sandbox signing is isolated in `tests/support/sandboxWallet.ts` and the developm
 ## Routes
 
 `/` is the public landing page. `Open app` opens `/app`; workspace navigation uses hashes such as `/app#/borrower/agreements`. Existing root hash links redirect to `/app` while retaining their destination. `/wallet/privy` remains the social-wallet callback route. Configure static hosting to serve `index.html` for `/app` and `/wallet/privy`. Wallet and cryptographic services initialize only when the app is opened.
+
+## Visual conventions and checks
+
+The interface uses paper ivory, forest green and a restrained lime accent. Manrope and IBM Plex Mono are served locally with their licenses in `public/fonts`. Keep the existing orbital mark, visible workspace labels on desktop, keyboard focus and reduced-motion support. Landing-page balances are explicitly illustrative; actual balances remain sourced from the protocol client.
+
+With the development server running, validate navigation, responsive workspace states and development file boundaries:
+
+```sh
+UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-navigation.mjs
+UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-design.mjs
+UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-dev-boundaries.mjs
+```
+
+Run these commands from the repository root. Set `UI_BROWSER_CHANNEL=chrome` to use installed Chrome. The navigation and design checks cover 1440, 390 and 320 px; their synthetic fixtures do not verify on-chain transactions. The default development port is 5174 and Vite chooses the next free port when occupied.
 
 ## Integration boundary
 

@@ -1,4 +1,5 @@
-import { defineConfig } from 'vite'
+import { fileURLToPath } from 'node:url'
+import { defineConfig, normalizePath } from 'vite'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
@@ -27,7 +28,9 @@ export default defineConfig({
     port: 5174,
     strictPort: false,
     fs: {
-      deny: ['.env', '.env.*', '*.{crt,pem,key}', '**/.git/**', '**/.local/**', '**/.artifacts/**', '**/.worktrees/**', '**/.aws/**', '**/.ssh/**', '**/.codex/**', '**/.agents/**'],
+      // Block nested checkouts without blocking this project when it is itself
+      // inside a worktree. Vite's workspace allow-list still excludes siblings.
+      deny: ['.env', '.env.*', '*.{crt,pem,key}', '**/.git', '**/.git/**', '**/.local/**', '**/.artifacts/**', `${normalizePath(fileURLToPath(new URL('../.worktrees', import.meta.url)))}/**`, '**/.aws/**', '**/.ssh/**', '**/.codex/**', '**/.agents/**', '**/.superdesign/**'],
     },
   },
   build: {

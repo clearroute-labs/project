@@ -48,7 +48,7 @@ async function inspectViewport(page, viewport, screenshotName) {
   await page.setViewportSize(viewport)
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 })
   await visible(page.getByRole('main').getByRole('button', { name: 'Connect wallet', exact: true }), 'Disconnected state should invite a wallet connection.')
-  check(await page.getByRole('main').getByRole('heading').count() === 0, 'Disconnected screen should contain only the wallet prompt.')
+  await visible(page.getByRole('main').getByRole('heading', { name: 'Credit, on your terms.', exact: true }), 'Disconnected screen should explain wallet entry.')
   await openWorkspace(page, 'broker', 'Loan book')
   await openWorkspace(page, 'borrower', 'Agreements')
   await openWorkspace(page, 'auditor', 'Loan exports')
