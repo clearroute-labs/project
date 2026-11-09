@@ -44,7 +44,7 @@ function ConfiguredSigningPage({ configuration, deployment }: { configuration: P
     <Notice tone="danger" title="Sign-in could not be completed">Your login expired, was cancelled, or could not be verified. Start again to retry.</Notice>
     <Button onClick={() => window.location.replace(withoutPrivyOAuthCallback(window.location.href))}>Start sign-in again</Button>
   </SigningFrame>
-  return <PrivyProvider appId={configuration.appId} clientId={configuration.clientId} config={{ loginMethods: ['email', 'google'], appearance: { theme: 'dark', accentColor: '#b8e4c4' }, embeddedWallets: { ethereum: { createOnLogin: 'off' }, solana: { createOnLogin: 'off' } } }}>
+  return <PrivyProvider appId={configuration.appId} clientId={configuration.clientId} config={{ loginMethods: ['email', 'google'], appearance: { theme: 'light', accentColor: '#486139' }, embeddedWallets: { ethereum: { createOnLogin: 'off' }, solana: { createOnLogin: 'off' } } }}>
     <SigningFlow client={client} configuration={configuration} deployment={deployment} />
   </PrivyProvider>
 }

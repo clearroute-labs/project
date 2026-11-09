@@ -14,6 +14,10 @@ The app defaults to the deployed Core/token and manifest pins in `src/config/tes
 
 Sandbox signing is isolated in `tests/support/sandboxWallet.ts` and the development-only `/tests/browser/sandbox.html` fixture. The local validation launcher opens that fixture explicitly; it is not a Vite production build entry.
 
+## Routes
+
+`/` is the public landing page. `Open app` opens `/app`; workspace navigation uses hashes such as `/app#/borrower/agreements`. Existing root hash links redirect to `/app` while retaining their destination. `/wallet/privy` remains the social-wallet callback route. Configure static hosting to serve `index.html` for `/app` and `/wallet/privy`. Wallet and cryptographic services initialize only when the app is opened.
+
 ## Integration boundary
 
 `src/lib/types.ts` is the browser-facing contract between the UI, the NEAR client and the crypto worker:

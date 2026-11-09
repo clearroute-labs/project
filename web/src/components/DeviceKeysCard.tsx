@@ -15,9 +15,9 @@ export function DeviceKeysCard() {
     catch (caught) { setError(caught instanceof Error ? caught.message : 'The passkey action could not be completed.') }
   }
   return <Card className="configuration-card">
-    <SectionHeading eyebrow="Passkey unlock" title="Keep your keys in this browser" action={<StatusBadge tone={state.unlocked ? 'success' : 'neutral'}>{state.unlocked ? 'Unlocked' : state.exists ? 'Saved · locked' : 'Not saved'}</StatusBadge>} />
-    <p className="muted">Use a compatible passkey with Touch ID, Face ID, Windows Hello or your device PIN to unlock your confidential keys. Only an encrypted copy is saved in this browser. Your NEAR wallet still approves transactions.</p>
-    <p className="field-hint">Keep your encrypted recovery file. A synced passkey does not restore this app’s saved data on another browser or device, or after browser data is cleared.</p>
+    <SectionHeading title="Passkey unlock" action={<StatusBadge tone={state.unlocked ? 'success' : 'neutral'}>{state.unlocked ? 'Unlocked' : state.exists ? 'Saved · locked' : 'Not saved'}</StatusBadge>} />
+    <p className="muted">Unlock your confidential keys with a passkey. Your wallet still approves transactions.</p>
+    <p className="field-hint">Keep a recovery file: a synced passkey cannot restore your keys on another browser or after browser data is cleared.</p>
     {!state.supported ? <Notice tone="info">This browser does not offer passkey encryption here. Use an encrypted recovery file, or open the app in a compatible browser over HTTPS.</Notice> : null}
     {state.exists && !state.unlocked && hasKeys ? <Notice tone="info">Keys are already loaded from this session or a recovery file. Confirm a current recovery file, then replace the saved browser copy with these loaded keys.</Notice> : null}
     <div className="review-actions">

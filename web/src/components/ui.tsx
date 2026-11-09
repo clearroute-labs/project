@@ -15,11 +15,10 @@ export function Card({ children, className = '', as: Element = 'section' }: { ch
   return <Element className={`card ${className}`}>{children}</Element>
 }
 
-export function SectionHeading({ eyebrow, title, description, action }: { eyebrow?: string; title: string; description?: string; action?: ReactNode }) {
+export function SectionHeading({ title, description, action }: { title: string; description?: string; action?: ReactNode }) {
   return (
     <div className="section-heading">
       <div>
-        {eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}
         <h2>{title}</h2>
         {description ? <p className="muted section-description">{description}</p> : null}
       </div>
@@ -62,12 +61,12 @@ export function Metric({ label, value, supporting, tone = 'default' }: { label: 
   )
 }
 
-export function EmptyState({ icon, title, description, action }: { icon?: string; title: string; description: string; action?: ReactNode }) {
+export function EmptyState({ icon, title, description, action }: { icon?: string; title: string; description?: string; action?: ReactNode }) {
   return (
     <div className="empty-state">
       {icon ? <div className="empty-icon" aria-hidden="true">{icon}</div> : null}
       <h3>{title}</h3>
-      <p className="muted">{description}</p>
+      {description ? <p className="muted">{description}</p> : null}
       {action ? <div className="empty-action">{action}</div> : null}
     </div>
   )

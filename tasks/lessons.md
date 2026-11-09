@@ -11,3 +11,4 @@
 - Read a pull request’s current state and head before updating it. If it was merged, preserve its historical description and open a follow-up PR for new commits.
 - Treat configuration fields shown in SDK examples as examples, not requirements. Verify optionality in current documentation and every SDK used before requiring users to create extra credentials. Privy web clients can use the App ID alone.
 - A visible social-login page does not verify OAuth completion. Test the transition from unauthenticated to authenticated state, SDK session synchronization, redirect/reload handling and wallet approval before treating login integration as working.
+- A visual reference supplies a design system, not a reason to add content. Keep product screens centered on data and actions; omit decorative principle strips, repeated eyebrows, slogans, and protocol lectures unless they help a concrete decision.
