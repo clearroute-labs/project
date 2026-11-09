@@ -4,7 +4,7 @@
 
 - [x] Stop this app’s development server and verify it is no longer listening.
 - [x] Review the existing PR state and isolate the UI changes on a new branch.
-- [ ] Commit, push, open a PR against main and verify the remote head.
+- [x] Commit, push, open a PR against main and verify the remote head.
 
 ### Plan
 
@@ -13,6 +13,10 @@ The earlier testnet/passkey PR is merged. Preserve it and open a separate PR for
 ### Pre-publication review
 
 Stopped the app server and confirmed port 5175 has no listener. PR #2 is merged at 1850277; current main is 1fb4654 with the same tracked tree. Created `feat/minimal-app-design` from current main, preserving only the completed UI changes. The final diff passes whitespace checks; the recorded production build passed. Existing completed verification covers 137 web unit tests, type checking, all workspace routes at desktop/390/320 widths, navigation/accessibility interactions and four mocked OAuth outcomes. No real authentication or financial transactions were performed.
+
+### Publication result
+
+Opened [PR #3 — Refresh the UI and add a public landing page](https://github.com/clearroute-labs/project/pull/3) from `feat/minimal-app-design` to `main`. GitHub reports the PR open, ready for review and mergeable, with implementation commit `cefaf4b` matching the pushed branch. No CI checks were reported at publication; the local verification above passed. The application development server is stopped.
 
 ## Current task: public landing and compact app navigation
 
