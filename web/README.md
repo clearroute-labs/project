@@ -43,6 +43,16 @@ For a repeatable local performance sample, build, serve `pnpm --dir web preview 
 
 The development port defaults to 5174 and advances if occupied. There is no lint script; run the documented build, typecheck and existing tests before committing.
 
+## Account metrics and realized yield
+
+Overview metrics are scoped to the connected account and role. The lender value is the integer pro-rata share of net vault assets, after provisions; it is unavailable when accounting or share balances are incomplete. Available claims exclude reserved/paid receipts. Unresolved payouts include recorded results awaiting finalization. Broker metrics include only owned broker accounts and their loan book; borrower metrics include only agreements where the account is the borrower. Audit metrics describe the current explicitly decrypted result, never inferred reader authorization.
+
+`cumulative_yield` and `cumulative_realized_losses` are public broker counters. Realized yield is settlement surplus after principal repayment (SPEC.md §12.2), not the finance charge promised at origination. Broker performance covers currently owned active account records. Lender performance aggregates complete counters for the vaults where the account currently holds shares, with membership and broker reads pinned to one finalized block when supported. Optional yield reads run in batches of eight; failure cannot block account loading or become an invented zero.
+
+A deleted broker's tombstone has no historical yield counters, so a vault with incomplete history displays unavailable performance. Gross yield and realized losses are shown separately; net realized result excludes unrealized provisions. These lifetime vault totals are not the shareholder's personal profit. Personal P&L and APY need deposit, withdrawal and share-transfer history and are not inferred from current ownership or share price. No private amounts are automatically decrypted for metrics.
+
+Run `UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-workspace-metrics.mjs` to check displayed values while changing roles. Unit tests cover multi-role wallets, exact large-number arithmetic, stale accounting, incomplete history and negative realized results.
+
 ## Integration boundary
 
 `src/lib/types.ts` is the browser-facing contract between the UI, the NEAR client and the crypto worker:

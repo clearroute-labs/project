@@ -626,3 +626,53 @@ describe('wallet initialization', () => {
     expect(pair.wallet.status).toBe('connected')
   })
 })
+
+describe('finalized realized-yield counters', () => {
+  const rawBroker = { broker_id:'1',owner:'alice.testnet',vault_id:'1',debt_total:'0',debt_maximum:'100',spending_version:'1',book_version:'1',encryption_key_id:'1',accounting_pending:false,accounting_version:'1',spending_ciphertext:[],inbox_ciphertext:[],cumulative_yield:'9007199254740993',cumulative_realized_losses:'7' }
+  function harness(options: { record?: Record<string, unknown> | null; ids?: readonly string[]; fail?: boolean; tombstone?: boolean } = {}) {
+    const block = {hash:'yield-block',height:42}
+    const pinned: string[]=[]
+    const record=options.record===undefined?rawBroker:options.record
+    const performanceRead=async <T>(method:string,args?:Record<string,unknown>):Promise<T>=>{
+      if(options.fail) throw new Error('read unavailable')
+      if(method==='get_vault_broker_ids') return (options.ids || ['1']) as T
+      if(method==='get_broker') return record as T
+      if(method==='get_broker_tombstone') return (options.tombstone?{broker_id:args?.broker_id,tombstoned:true}:null) as T
+      throw new Error(`unexpected performance read ${method}`)
+    }
+    const transport:NearContractTransport={
+      view:async <T>(method:string):Promise<T>=>{
+        if(method==='get_asset_profile')return {token_account:'token.testnet',decimals:6,controller_account:'issuer.testnet',crypto_profile_hash:Array(32).fill(1),token_trust_policy:'fixed',issuer_key:{key_id:'4',public_key:issuerPublicKeyBytes},token_auditor_key:{key_id:'5',public_key:auditorPublicKeyBytes}} as T
+        if(method==='get_counters')return {vault_high_water:'1',broker_high_water:'1',loan_high_water:'0',proposal_high_water:'0',claim_high_water:'0',payout_high_water:'0'} as T
+        if(method==='list_vaults')return [{vault_id:'1',owner:'alice.testnet',asset_id:'token.testnet',assets_total:'100',loss_unrealized:'0',assets_available:'100',shares_total:'10',accounting_pending:false,accounting_version:'1',kind:'OpenEnded'}] as T
+        if(method==='list_brokers')return [rawBroker] as T
+        if(method==='get_share_balance')return '1' as T
+        throw new Error(`unexpected dashboard read ${method}`)
+      },
+      finalizedBlock:async()=>block,
+      viewAt:async <T>(selectedBlock: {hash:string;height:number},method:string,args?:Record<string,unknown>):Promise<T>=>{expect(selectedBlock).toEqual(block);pinned.push(method);return performanceRead<T>(method,args)},
+      call:async()=>{throw new Error('not used')},
+    }
+    return {client:new NearProtocolClient(transport,config),pinned}
+  }
+  it('preserves exact broker counters and aggregates held-vault yield from one finalized block',async()=>{
+    const {client,pinned}=harness();const result=await client.getDashboard('alice.testnet')
+    expect(result.brokers[0].cumulativeYield).toBe('9007199254740993')
+    expect(result.vaults[0]).toMatchObject({cumulativeYield:'9007199254740993',cumulativeRealizedLosses:'7',yieldStatus:'available'})
+    expect(pinned).toEqual(['get_vault_broker_ids','get_broker'])
+  })
+  it.each([
+    [{record:null,tombstone:true},'history_incomplete'],
+    [{record:null},'unavailable'],
+    [{record:{...rawBroker,vault_id:'2'}},'unavailable'],
+    [{record:{...rawBroker,cumulative_yield:undefined}},'unavailable'],
+    [{record:{...rawBroker,cumulative_yield:'-1'}},'unavailable'],
+    [{ids:['1','1']},'unavailable'],
+    [{fail:true},'unavailable'],
+  ] as const)('keeps incomplete or invalid optional counters out of displayed totals: %j',async(options,status)=>{
+    const result=await harness(options).client.getDashboard('alice.testnet')
+    expect(result.vaults[0].yieldStatus).toBe(status)
+    expect(result.vaults[0].cumulativeYield).toBeUndefined()
+    expect(result.brokers).toHaveLength(1)
+  })
+})

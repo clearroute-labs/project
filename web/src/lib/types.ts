@@ -108,7 +108,13 @@ export interface AssetProfile {
  */
 export type VaultPhase = 'open' | 'subscription' | 'investment' | 'redemption' | 'closed'
 
-export interface VaultSummary {
+export interface RealizedPerformance {
+  cumulativeYield?: string
+  cumulativeRealizedLosses?: string
+  yieldStatus?: 'available' | 'unavailable' | 'history_incomplete'
+}
+
+export interface VaultSummary extends RealizedPerformance {
   vaultId: string
   ownerId: string
   brokerId?: string
@@ -127,7 +133,7 @@ export interface VaultSummary {
   checkpointStatus: 'current' | 'pending' | 'stale' | 'unknown'
 }
 
-export interface BrokerSummary {
+export interface BrokerSummary extends RealizedPerformance {
   brokerId: string
   ownerId: string
   vaultId: string

@@ -339,7 +339,7 @@ export function mapTransactionStatus(outcome: FinalOutcome, requestedHash: strin
 
 type RawAssetProfile = { token_account: string; decimals: number; controller_account: string; issuer_key: { key_id: string | number; public_key: unknown }; token_auditor_key: { key_id: string | number; public_key: unknown }; crypto_profile_hash: unknown; token_trust_policy: string; authorization_policy?: string; freeze_policy?: string; custody_cap?: string | number; confidential_outstanding?: string | number }
 type RawHolder = { owner: string; asset_id: string; key_id: string | number; authorization_epoch?: string | number; public_key?: unknown; encryption_public_key?: unknown; encryption_key?: { public_key?: unknown }; spending_ciphertext: unknown; inbox_ciphertext: unknown; issuer_balance_ciphertext?: unknown; auditor_balance_ciphertext?: unknown; spending_commitment?: unknown; inbox_commitment?: unknown; spending_version: string | number }
-type RawBroker = { broker_id: string | number; owner: string; vault_id: string | number; debt_total: unknown; debt_maximum: unknown; spending_version: string | number; book_version: string | number; loan_book_root?: unknown; encryption_key_id: string | number; authorization_epoch?: string | number; encryption_public_key?: unknown; spending_ciphertext: unknown; inbox_ciphertext: unknown; issuer_balance_ciphertext?: unknown; auditor_balance_ciphertext?: unknown; spending_commitment?: unknown; inbox_commitment?: unknown; active_principal_ciphertext?: unknown; impaired_principal_ciphertext?: unknown; active_principal_commitment?: unknown; impaired_principal_commitment?: unknown; impairment_provision?: unknown; accounting_pending: boolean; accounting_version: string | number; risk_version?: string | number; delegates?: RawKeeper[] }
+type RawBroker = { cumulative_yield?: unknown; cumulative_realized_losses?: unknown; broker_id: string | number; owner: string; vault_id: string | number; debt_total: unknown; debt_maximum: unknown; spending_version: string | number; book_version: string | number; loan_book_root?: unknown; encryption_key_id: string | number; authorization_epoch?: string | number; encryption_public_key?: unknown; spending_ciphertext: unknown; inbox_ciphertext: unknown; issuer_balance_ciphertext?: unknown; auditor_balance_ciphertext?: unknown; spending_commitment?: unknown; inbox_commitment?: unknown; active_principal_ciphertext?: unknown; impaired_principal_ciphertext?: unknown; active_principal_commitment?: unknown; impaired_principal_commitment?: unknown; impairment_provision?: unknown; accounting_pending: boolean; accounting_version: string | number; risk_version?: string | number; delegates?: RawKeeper[] }
 type RawBrokerTombstone = { broker_id: string | number; tombstoned: boolean }
 type RawVault = { vault_id: string | number; owner: string; asset_id: string; assets_total: unknown; loss_unrealized: unknown; assets_available: unknown; shares_total: unknown; share_scale?: number; checkpoint_policy?: { epoch_seconds?: string | number; disclosure_policy?: string }; accounting_pending: boolean; accounting_version: string | number; phase?: string | null; kind?: string }
 type RawLoan = { loan_id: string | number; broker_id: string | number; borrower: string; proposal_id: string | number; payment_interval: string | number; grace_period: string | number; next_due?: string | number | null; payment_total: number; payment_remaining: number; status: string; impaired?: boolean; loan_version: string | number; borrower_key_id?: string | number; broker_key_id?: string | number; loan_auditor_key_id?: string | number; loan_auditor_public_key?: unknown; principal_ciphertexts?: unknown[]; initial_owed_ciphertexts?: unknown[]; amount_owed_ciphertexts?: unknown[]; periodic_payment_ciphertexts?: unknown[]; principal_remaining_ciphertexts?: unknown[]; cumulative_repaid_ciphertexts?: unknown[]; accounting_leaf?: unknown }
@@ -442,7 +442,7 @@ function mapHolder(raw: RawHolder): PrivateAccountView {
 }
 
 function mapBroker(raw: RawBroker, assetAccount: string): BrokerSummary {
-  return { brokerId: decimal(raw.broker_id), ownerId: raw.owner, vaultId: decimal(raw.vault_id), debtTotal: decimal(raw.debt_total), debtCeiling: decimal(raw.debt_maximum), spendingVersion: decimal(raw.spending_version), bookVersion: decimal(raw.book_version), privateBalanceKeyId: decimal(raw.encryption_key_id), checkpointStatus: raw.accounting_pending ? 'pending' : 'current', keeperCount: raw.delegates?.filter((delegate) => delegate.active).length || 0, spendingCiphertext: bytesToHex(raw.spending_ciphertext), inboxCiphertext: bytesToHex(raw.inbox_ciphertext), issuerBalanceCiphertext: raw.issuer_balance_ciphertext === undefined ? undefined : bytesToHex(raw.issuer_balance_ciphertext), auditorBalanceCiphertext: raw.auditor_balance_ciphertext === undefined ? undefined : bytesToHex(raw.auditor_balance_ciphertext), spendingCommitment: raw.spending_commitment === undefined ? undefined : bytesToHex(raw.spending_commitment), inboxCommitment: raw.inbox_commitment === undefined ? undefined : bytesToHex(raw.inbox_commitment), activePrincipalCiphertext: raw.active_principal_ciphertext === undefined ? undefined : bytesToHex(raw.active_principal_ciphertext), impairedPrincipalCiphertext: raw.impaired_principal_ciphertext === undefined ? undefined : bytesToHex(raw.impaired_principal_ciphertext), activePrincipalCommitment: raw.active_principal_commitment === undefined ? undefined : bytesToHex(raw.active_principal_commitment), impairedPrincipalCommitment: raw.impaired_principal_commitment === undefined ? undefined : bytesToHex(raw.impaired_principal_commitment), loanBookRoot: raw.loan_book_root === undefined ? undefined : bytesToHex(raw.loan_book_root), impairmentProvision: raw.impairment_provision === undefined ? undefined : decimal(raw.impairment_provision), accountingVersion: decimal(raw.accounting_version), riskVersion: raw.risk_version === undefined ? undefined : decimal(raw.risk_version) }
+  return { cumulativeYield: raw.cumulative_yield === undefined ? undefined : decimal(raw.cumulative_yield), cumulativeRealizedLosses: raw.cumulative_realized_losses === undefined ? undefined : decimal(raw.cumulative_realized_losses), brokerId: decimal(raw.broker_id), ownerId: raw.owner, vaultId: decimal(raw.vault_id), debtTotal: decimal(raw.debt_total), debtCeiling: decimal(raw.debt_maximum), spendingVersion: decimal(raw.spending_version), bookVersion: decimal(raw.book_version), privateBalanceKeyId: decimal(raw.encryption_key_id), checkpointStatus: raw.accounting_pending ? 'pending' : 'current', keeperCount: raw.delegates?.filter((delegate) => delegate.active).length || 0, spendingCiphertext: bytesToHex(raw.spending_ciphertext), inboxCiphertext: bytesToHex(raw.inbox_ciphertext), issuerBalanceCiphertext: raw.issuer_balance_ciphertext === undefined ? undefined : bytesToHex(raw.issuer_balance_ciphertext), auditorBalanceCiphertext: raw.auditor_balance_ciphertext === undefined ? undefined : bytesToHex(raw.auditor_balance_ciphertext), spendingCommitment: raw.spending_commitment === undefined ? undefined : bytesToHex(raw.spending_commitment), inboxCommitment: raw.inbox_commitment === undefined ? undefined : bytesToHex(raw.inbox_commitment), activePrincipalCiphertext: raw.active_principal_ciphertext === undefined ? undefined : bytesToHex(raw.active_principal_ciphertext), impairedPrincipalCiphertext: raw.impaired_principal_ciphertext === undefined ? undefined : bytesToHex(raw.impaired_principal_ciphertext), activePrincipalCommitment: raw.active_principal_commitment === undefined ? undefined : bytesToHex(raw.active_principal_commitment), impairedPrincipalCommitment: raw.impaired_principal_commitment === undefined ? undefined : bytesToHex(raw.impaired_principal_commitment), loanBookRoot: raw.loan_book_root === undefined ? undefined : bytesToHex(raw.loan_book_root), impairmentProvision: raw.impairment_provision === undefined ? undefined : decimal(raw.impairment_provision), accountingVersion: decimal(raw.accounting_version), riskVersion: raw.risk_version === undefined ? undefined : decimal(raw.risk_version) }
 }
 
 function mapVault(raw: RawVault, shares?: string): import('./types').VaultSummary {
@@ -569,6 +569,37 @@ export class NearProtocolClient implements ProtocolClient {
     if (this.config.networkId !== 'testnet' || !this.config.testnetFaucet) throw new Error('The test-token faucet is unavailable for this deployment.')
   }
 
+  private async readVaultPerformance(vaultId: string): Promise<import('./types').RealizedPerformance> {
+    try {
+      const block = this.transport.finalizedBlock && this.transport.viewAt ? await this.transport.finalizedBlock() : undefined
+      const view: NearContractTransport['view'] = block && this.transport.viewAt
+        ? <T>(method: string, args?: Record<string, unknown>, signal?: AbortSignal) => this.transport.viewAt!(block, method, args, signal)
+        : this.transport.view.bind(this.transport)
+      const membership = await this.readVaultBrokerIds(wireId(vaultId), view)
+      if (new Set(membership).size !== membership.length) return { yieldStatus: 'unavailable' }
+      let yieldTotal = 0n, losses = 0n
+      for (let offset = 0; offset < membership.length; offset += 8) {
+        const ids = membership.slice(offset, offset + 8)
+        const records = await Promise.all(ids.map(brokerId => view<RawBroker | null>('get_broker', { broker_id: wireId(brokerId) })))
+        for (const [index, brokerId] of ids.entries()) {
+          const broker = records[index]
+          if (broker === null) {
+            const tombstone = await view<RawBrokerTombstone | null>('get_broker_tombstone', { broker_id: wireId(brokerId) })
+            // Tombstones omit historical accounting counters; never report a partial lifetime total.
+            return { yieldStatus: tombstone?.tombstoned && decimal(tombstone.broker_id) === brokerId ? 'history_incomplete' : 'unavailable' }
+          }
+          if (!broker || decimal(broker.broker_id) !== brokerId || decimal(broker.vault_id) !== vaultId || broker.cumulative_yield === undefined || broker.cumulative_realized_losses === undefined) return { yieldStatus: 'unavailable' }
+          yieldTotal += counter(broker.cumulative_yield, 'realized yield')
+          losses += counter(broker.cumulative_realized_losses, 'realized losses')
+        }
+      }
+      return { cumulativeYield: yieldTotal.toString(), cumulativeRealizedLosses: losses.toString(), yieldStatus: 'available' }
+    } catch {
+      // Optional display data must not block the account or become an invented zero.
+      return { yieldStatus: 'unavailable' }
+    }
+  }
+
   async getDashboard(accountId: string): Promise<DashboardSnapshot> {
     const [asset, counters] = await Promise.all([this.getAssetProfile(), readCounters(this.transport)])
     const [rawVaults, rawBrokers, rawClaims, rawPayouts] = await Promise.all([
@@ -590,7 +621,8 @@ export class NearProtocolClient implements ProtocolClient {
       let shares: string | undefined
       const shareBalance = await this.transport.view<unknown>('get_share_balance', { vault_id: wireId(decimal(vault.vault_id)), owner: accountId })
       if (shareBalance !== null && shareBalance !== undefined) shares = decimal(shareBalance)
-      return { ...mapVault(vault, shares), decimals: asset.decimals }
+      const performance = shares && BigInt(shares) > 0n ? await this.readVaultPerformance(decimal(vault.vault_id)) : {}
+      return { ...mapVault(vault, shares), decimals: asset.decimals, ...performance }
     }))
     return {
       fetchedAt: Date.now(),

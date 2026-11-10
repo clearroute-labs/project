@@ -1,9 +1,12 @@
+import { YieldSummary } from '../components/YieldSummary'
+import { WorkspaceMetrics } from '../components/WorkspaceMetrics'
+import { accountScope } from '../lib/workspaceMetrics'
 import { PrivacyAside } from '../components/PrivacyAside'
 import { ActionPanel } from '../components/ActionPanel'
 import { ReviewForm } from '../components/ReviewForm'
 import { useEffect, useMemo, useState } from 'react'
 import { useAppContext } from '../App'
-import { ActionFeedback, Button, Card, EmptyState, Field, Metric, Mono, Money, Notice, SectionHeading, SelectInput, StatusBadge, Table, TextInput } from '../components/ui'
+import { ActionFeedback, Button, Card, EmptyState, Field, Mono, Notice, SectionHeading, SelectInput, StatusBadge, Table, TextInput } from '../components/ui'
 import { useAction } from '../lib/actionState'
 import { readBrokerZeroProof, type BrokerZeroProofPackage } from '../lib/brokerZeroProof'
 import { MAX_U128_UNITS, parseAmount, parseNonNegativeAmount, randomUint64Decimal, sharesForAssets, unixSecondsNow } from '../lib/money'
@@ -24,21 +27,14 @@ function LenderWorkspace() {
 }
 
 function LenderOverview({ onOpenVaults, onOpenClaims, onRefresh }: { onOpenVaults: () => void; onOpenClaims: () => void; onRefresh: () => Promise<void> }) {
-  const { snapshot } = useAppContext()
+  const { snapshot, accountId } = useAppContext()
   if (!snapshot) return null
-  const netAssets = snapshot.vaults.reduce((total, vault) => total + BigInt(vault.assetsTotal) - BigInt(vault.lossUnrealized), 0n).toString()
-  const available = snapshot.vaults.reduce((total, vault) => total + BigInt(vault.assetsAvailable), 0n).toString()
-  const positions = snapshot.vaults.filter((vault) => BigInt(vault.yourShares || '0') > 0n).length
-  const hasData = snapshot.vaults.length > 0 || snapshot.claims.length > 0 || snapshot.payouts.length > 0
+  const { positions, claims } = accountScope(snapshot, accountId!)
+  const hasData = positions.length > 0 || claims.length > 0 || snapshot.payouts.length > 0
   return <>
     <PageHeader title="Overview" action={<Button variant="secondary" onClick={() => void onRefresh()}>Refresh state</Button>} />
-    <div className="metrics-grid">
-      <Metric label="Net asset value" value={<Money units={netAssets} decimals={snapshot.asset.decimals} />} supporting="After provisions" />
-      <Metric label="Available liquidity" value={<Money units={available} decimals={snapshot.asset.decimals} />} tone="positive" />
-      <Metric label="Vault positions" value={String(positions)} />
-      <Metric label="Payout operations" value={String(snapshot.payouts.length)} tone={snapshot.payouts.some((payout) => payout.status === 'unknown') ? 'warning' : 'default'} />
-    </div>
-    <div className="workspace-overview"><div className="workspace-stack">{!hasData ? <Card><EmptyState icon="▥" title="No vault positions yet" description="Deposit into a vault to get started." action={<Button variant="secondary" onClick={onOpenVaults}>Open vaults</Button>} /></Card> : <div className="dashboard-grid"><Card><SectionHeading title="Vaults" action={<Button variant="quiet" onClick={onOpenVaults}>View all →</Button>} /><VaultTable vaults={snapshot.vaults.slice(0, 4)} decimals={snapshot.asset.decimals} /></Card><Card><SectionHeading title="Claims & payouts" action={<Button variant="quiet" onClick={onOpenClaims}>Review →</Button>} /><ClaimsSummary claims={snapshot.claims} payouts={snapshot.payouts} decimals={snapshot.asset.decimals} /></Card></div>}</div><PrivacyAside /></div>
+    <WorkspaceMetrics />
+    <div className="workspace-overview"><div className="workspace-stack"><YieldSummary />{!hasData ? <Card><EmptyState icon="▥" title="No vault positions yet" description="Deposit into a vault to get started." action={<Button variant="secondary" onClick={onOpenVaults}>Open vaults</Button>} /></Card> : <div className="dashboard-grid"><Card><SectionHeading title="Your vault positions" action={<Button variant="quiet" onClick={onOpenVaults}>View all →</Button>} /><VaultTable vaults={positions.slice(0, 4)} decimals={snapshot.asset.decimals} /></Card><Card><SectionHeading title="Claims & payouts" action={<Button variant="quiet" onClick={onOpenClaims}>Review →</Button>} /><ClaimsSummary claims={claims} payouts={snapshot.payouts} decimals={snapshot.asset.decimals} /></Card></div>}</div><PrivacyAside /></div>
   </>
 }
 

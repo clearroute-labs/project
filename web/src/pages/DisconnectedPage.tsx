@@ -1,3 +1,5 @@
+import { YieldSummary } from '../components/YieldSummary'
+import { metricLabels } from '../lib/workspaceMetrics'
 import { useAppContext } from '../App'
 import { Button, Card, Metric, SectionHeading } from '../components/ui'
 import { PrivacyAside } from '../components/PrivacyAside'
@@ -10,7 +12,7 @@ const nextSteps = {
  borrower:[{path:'/borrower/agreements',title:'Review agreements',description:'Understand the terms before authorizing.'},{path:'/borrower/balance',title:'Open private balance',description:'Manage incoming funds and private transfers.'}],
  auditor:[{path:'/auditor/loans',title:'Review a loan',description:'Read only the fields your audit key authorizes.'},{path:'/auditor/token',title:'Review token activity',description:'Choose a holder or broker and reader scope.'}],
 }
-const metrics = {lender:['Net assets · all vaults','Available liquidity','Your vault positions','Available claims'],broker:['Public broker debt','Debt ceiling','Active loans','Accounting'],borrower:['Active agreements','To review','Next payment','Your balance'],auditor:['Loan scope','Token scope','Reader key','Authorized fields']}
+
 
 export function DisconnectedPage() {
  const {role,path,navigate}=useAppContext()
@@ -35,8 +37,9 @@ export function DisconnectedPage() {
  ] : null
  return <>
   <PageHeader title={route.title} description={route.description}/>
-  {overview ? <section className="metrics-grid" aria-label="Wallet required to read account values">{metrics[role].map(label=><Metric key={label} label={label} value={label==='Your balance'?'Hidden':'—'} supporting="Connect to view"/>)}</section>:null}
+  {overview ? <section className="metrics-grid" aria-label="Wallet required to read account values">{metricLabels[role].map(label=><Metric key={label} label={label} value={label==='Private balance'?'Hidden':'—'} supporting="Connect to view"/>)}</section>:null}
   <div className="workspace-overview"><div className="workspace-stack">
+   {overview && (role==='lender' || role==='broker') ? <YieldSummary /> : null}
    <Card className="connection-panel"><SectionHeading title={route.contentTitle}/><ConnectWallet compact description={route.connection}/></Card>
    {steps ? <Card className="journey-panel"><SectionHeading title={path==='/settings'?'Keep access recoverable':path==='/broker/operations'?'The accounting sequence':'Before you begin'}/>{steps.map(([title,description])=><div className="journey-row" key={title}><h3>{title}</h3><p>{description}</p></div>)}</Card>:null}
    <Card className="next-step-panel"><SectionHeading title={overview?'Your next steps':'Continue exploring'}/>{nextSteps[role].filter(step=>step.path!==path).map(step=><div className="workspace-action-row" key={step.path}><div><h3>{step.title}</h3><p>{step.description}</p></div><Button variant="quiet" onClick={()=>navigate(step.path)} aria-label={step.title}>Open <span aria-hidden="true">↗</span></Button></div>)}{path!=='/settings'?<div className="workspace-action-row"><div><h3>Review your security setup</h3><p>Back up keys before using private features.</p></div><Button variant="quiet" onClick={()=>navigate('/settings')} aria-label="Review your security setup">Review <span aria-hidden="true">↗</span></Button></div>:null}</Card>

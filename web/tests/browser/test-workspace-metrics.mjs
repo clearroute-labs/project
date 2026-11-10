@@ -1,0 +1,31 @@
+import {chromium,expect} from '@playwright/test'
+const origin=process.env.UI_BASE_URL || 'http://localhost:5176'
+const browser=await chromium.launch({channel:process.env.UI_BROWSER_CHANNEL || 'chromium'})
+try {
+ const page=await browser.newPage({viewport:{width:1440,height:1000}})
+ await page.goto(`${origin}/tests/browser/visual.html#/lender/overview`)
+ const metric=label=>page.locator('.metric').filter({has:page.locator('.metric-label').getByText(label,{exact:true})})
+ await expect(metric('Your position value')).toContainText('41.958 TEST')
+ await expect(metric('Available claims')).toContainText('2.5 TEST')
+ await expect(metric('Pending payouts')).toContainText('1')
+ await expect(page.locator('.yield-summary')).toContainText('6.25 TEST')
+ await expect(page.locator('.yield-summary')).toContainText('1.25 TEST')
+ await expect(page.locator('.yield-summary')).toContainText('5 TEST')
+ await expect(page.locator('.yield-summary')).toContainText('not your personal profit')
+ await page.getByLabel('Active workspace').selectOption('broker')
+ await expect(metric('Your broker debt')).toContainText('75 TEST')
+ await expect(metric('Unused debt ceiling')).toContainText('125 TEST')
+ await expect(metric('Active loans')).toContainText('1')
+ await page.getByLabel('Active workspace').selectOption('borrower')
+ // This fixture's loan belongs to another borrower, although it is in the connected broker's book.
+ await expect(metric('Active agreements').locator('.metric-value')).toHaveText('0')
+ await expect(metric('Proposals to review').locator('.metric-value')).toHaveText('0')
+ await expect(metric('Next payment')).toContainText('None scheduled')
+ await expect(metric('Private balance')).toContainText('Hidden')
+ await page.getByLabel('Active workspace').selectOption('auditor')
+ await expect(metric('Record in view')).toContainText('None')
+ await expect(metric('Decrypted fields')).toContainText('Locked')
+ await page.goto(`${origin}/tests/browser/visual.html?state=empty#/broker/overview`)
+ await expect(metric('Accounting to review')).toContainText('No broker accounts registered')
+ console.log('Role metrics show personal positions, owned broker debt and scoped borrowing; private amounts remain hidden.')
+} finally {await browser.close()}

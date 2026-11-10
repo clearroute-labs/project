@@ -1,9 +1,11 @@
+import { WorkspaceMetrics } from '../components/WorkspaceMetrics'
+import { accountScope } from '../lib/workspaceMetrics'
 import { PrivacyAside } from '../components/PrivacyAside'
 import { ActionPanel } from '../components/ActionPanel'
 import { ReviewForm } from '../components/ReviewForm'
 import { useEffect, useState } from 'react'
 import { useAppContext } from '../App'
-import { ActionFeedback, Button, Card, EmptyState, Field, Metric, Mono, Notice, SectionHeading, SelectInput, StatusBadge, Table, TextInput } from '../components/ui'
+import { ActionFeedback, Button, Card, EmptyState, Field, Mono, Notice, SectionHeading, SelectInput, StatusBadge, Table, TextInput } from '../components/ui'
 import { isInboxMergeRequired, requireFinalized, useAction } from '../lib/actionState'
 import { parseAmount, unixSecondsNow } from '../lib/money'
 import { ProtocolError, type LoanSummary, type PrivateAccountView, type ProposalSummary } from '../lib/types'
@@ -24,16 +26,14 @@ function BorrowerWorkspace() {
 }
 
 function BorrowerOverview({ onAgreements, onBalance }: { onAgreements: () => void; onBalance: () => void }) {
-  const { snapshot, refresh } = useAppContext()
+  const { snapshot, refresh, accountId } = useAppContext()
   if (!snapshot) return null
-  const loans = snapshot.loans
-  const active = loans.filter((loan) => loan.status === 'active' || loan.status === 'impaired').length
-  const proposals = snapshot.proposals.filter((proposal) => ['pending', 'broker_authorized'].includes(proposal.status)).length
+  const { borrowerLoans: loans, borrowerProposals: proposals } = accountScope(snapshot, accountId!)
   return <>
     <PageHeader title="Overview" action={<Button variant="secondary" onClick={() => void refresh()}>Refresh state</Button>} />
 
-    <div className="metrics-grid metrics-grid-two"><Metric label="Active agreements" value={String(active)} supporting={`${loans.filter((loan) => loan.status === 'paid').length} paid`} /><Metric label="Pending proposals" value={String(proposals)} tone={proposals ? 'warning' : 'default'} /></div>
-    <div className="workspace-overview"><div className="workspace-stack"><div className="dashboard-grid"><Card><SectionHeading title="Proposals" action={<Button variant="quiet" onClick={onAgreements}>Open agreements →</Button>} />{snapshot.proposals.length ? <ProposalSummary proposals={snapshot.proposals} /> : <EmptyState title="No proposals" />}</Card><Card><SectionHeading title="Balance & transfers" action={<Button variant="quiet" onClick={onBalance}>Open balance →</Button>} /><div className="private-teaser"><span className="private-orb">◈</span><div><strong>Encrypted balance</strong></div></div></Card></div>
+    <WorkspaceMetrics />
+    <div className="workspace-overview"><div className="workspace-stack"><div className="dashboard-grid"><Card><SectionHeading title="Proposals" action={<Button variant="quiet" onClick={onAgreements}>Open agreements →</Button>} />{proposals.length ? <ProposalSummary proposals={proposals} /> : <EmptyState title="No proposals" />}</Card><Card><SectionHeading title="Balance & transfers" action={<Button variant="quiet" onClick={onBalance}>Open balance →</Button>} /><div className="private-teaser"><span className="private-orb">◈</span><div><strong>Encrypted balance</strong></div></div></Card></div>
     <Card><SectionHeading title="Upcoming payments" /><UpcomingLoans loans={loans} /></Card></div><PrivacyAside /></div>
   </>
 }
