@@ -1,3 +1,4 @@
+import { PrivacyAside } from '../components/PrivacyAside'
 import { ActionPanel } from '../components/ActionPanel'
 import { ReviewForm } from '../components/ReviewForm'
 import { useEffect, useState } from 'react'
@@ -32,8 +33,8 @@ function BorrowerOverview({ onAgreements, onBalance }: { onAgreements: () => voi
     <PageHeader title="Overview" action={<Button variant="secondary" onClick={() => void refresh()}>Refresh state</Button>} />
 
     <div className="metrics-grid metrics-grid-two"><Metric label="Active agreements" value={String(active)} supporting={`${loans.filter((loan) => loan.status === 'paid').length} paid`} /><Metric label="Pending proposals" value={String(proposals)} tone={proposals ? 'warning' : 'default'} /></div>
-    <div className="dashboard-grid"><Card><SectionHeading title="Proposals" action={<Button variant="quiet" onClick={onAgreements}>Open agreements →</Button>} />{snapshot.proposals.length ? <ProposalSummary proposals={snapshot.proposals} /> : <EmptyState title="No proposals" />}</Card><Card><SectionHeading title="Balance & transfers" action={<Button variant="quiet" onClick={onBalance}>Open balance →</Button>} /><div className="private-teaser"><span className="private-orb">◈</span><div><strong>Encrypted balance</strong></div></div></Card></div>
-    <Card><SectionHeading title="Upcoming payments" /><UpcomingLoans loans={loans} /></Card>
+    <div className="workspace-overview"><div className="workspace-stack"><div className="dashboard-grid"><Card><SectionHeading title="Proposals" action={<Button variant="quiet" onClick={onAgreements}>Open agreements →</Button>} />{snapshot.proposals.length ? <ProposalSummary proposals={snapshot.proposals} /> : <EmptyState title="No proposals" />}</Card><Card><SectionHeading title="Balance & transfers" action={<Button variant="quiet" onClick={onBalance}>Open balance →</Button>} /><div className="private-teaser"><span className="private-orb">◈</span><div><strong>Encrypted balance</strong></div></div></Card></div>
+    <Card><SectionHeading title="Upcoming payments" /><UpcomingLoans loans={loans} /></Card></div><PrivacyAside /></div>
   </>
 }
 

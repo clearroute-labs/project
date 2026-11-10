@@ -13,8 +13,9 @@ try {
  for(const width of [1440,390]) {
   const context=await browser.newContext({viewport:{width,height:1000},reducedMotion:'reduce'}); const page=await context.newPage()
   await page.goto(origin); await page.evaluate(()=>document.fonts.ready); await audit(page,`landing-${width}`)
-  await page.goto(`${origin}/app`); await expect(page.getByRole('heading',{name:'A clear space for your capital.'})).toBeVisible(); await audit(page,`welcome-${width}`)
+  await page.goto(`${origin}/app`); await expect(page.getByRole('heading',{name:'Your capital, in view.'})).toBeVisible(); await audit(page,`welcome-${width}`)
   for(const route of ['lender/vaults','lender/claims','broker/vaults','broker/loans','broker/operations','borrower/agreements','borrower/balance','auditor/loans','settings']) {
+   await page.goto(`${origin}/app#/${route}`); await expect(page.getByRole('main').getByRole('heading',{level:1})).toBeVisible(); await audit(page,`disconnected/${route}-${width}`)
    await page.goto(`${origin}/tests/browser/visual.html#/${route}`); await expect(page.getByRole('main').getByRole('heading',{level:1})).toBeVisible(); await audit(page,`${route}-${width}`)
    const triggers=page.locator('.action-entry > button')
    for(let i=0;i<await triggers.count();i++) {

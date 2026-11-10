@@ -22,7 +22,7 @@ Sandbox signing is isolated in `tests/support/sandboxWallet.ts` and the developm
 
 The desert identity uses warm ivory, charcoal, copper accents, the angular clear wordmark and locally served Archivo Variable. IBM Plex Mono remains reserved for identifiers. Licensed fonts live in `public/fonts`; responsive WebP dunes weigh approximately 64 KiB (desktop) and 16 KiB (mobile). No remote font, design CDN or illustrative account balance is loaded by the product.
 
-The landing loads the wallet application only after entry. Its terrain-following canvas grain is capped at 30 fps and DPR 1.5, pauses offscreen/in hidden tabs, and respects reduced motion. Keep animation out of data views. The workspace uses a dark desktop sidebar, a modal mobile menu, stacked mobile records and task drawers. Drawers retain entries while closed on the same route; navigation, account changes and session locking discard them. Failed reads hide and disable stale data while preserving mounted forms for a successful retry. Never persist plaintext drafts or private review data to storage.
+The landing loads the wallet application only after entry. Its terrain-following canvas grain is capped at 30 fps and DPR 1.5, pauses offscreen/in hidden tabs, and respects reduced motion. Keep animation out of data views. The workspace follows the approved composition: a dark desktop sidebar with role selector, editorial route headings, a dunes/privacy aside, a modal mobile menu, stacked mobile records and task drawers. Disconnected users can navigate every workspace; each route renders its own context and connection prompt without invented balances. Only account reads and operations require the wallet. Overview URLs include the role so refresh and browser history preserve it. Drawers retain entries while closed on the same route; navigation, account changes and session locking discard them. Failed reads hide and disable stale data while preserving mounted forms for a successful retry. Never persist plaintext drafts or private review data to storage.
 
 Financial forms require a local review before their existing validation/proof/wallet handler runs. File contents, passwords, key material and textareas are hidden in that review. Pending-transaction locks remain in the action layer. Claims are explained as public receipts; checkpoints as accounting snapshots. Public boundary amounts must never be presented as confidential.
 
@@ -31,6 +31,7 @@ From repository root, with the development server running:
 ```sh
 UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-navigation.mjs
 UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-design.mjs
+UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-disconnected-routes.mjs
 UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-interactions.mjs
 UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-accessibility.mjs
 UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-dev-boundaries.mjs

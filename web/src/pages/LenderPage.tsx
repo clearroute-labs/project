@@ -1,3 +1,4 @@
+import { PrivacyAside } from '../components/PrivacyAside'
 import { ActionPanel } from '../components/ActionPanel'
 import { ReviewForm } from '../components/ReviewForm'
 import { useEffect, useMemo, useState } from 'react'
@@ -37,7 +38,7 @@ function LenderOverview({ onOpenVaults, onOpenClaims, onRefresh }: { onOpenVault
       <Metric label="Vault positions" value={String(positions)} />
       <Metric label="Payout operations" value={String(snapshot.payouts.length)} tone={snapshot.payouts.some((payout) => payout.status === 'unknown') ? 'warning' : 'default'} />
     </div>
-    {!hasData ? <Card><EmptyState icon="▥" title="No vault positions yet" description="Deposit into a vault to get started." action={<Button variant="secondary" onClick={onOpenVaults}>Open vaults</Button>} /></Card> : <div className="dashboard-grid"><Card><SectionHeading title="Vaults" action={<Button variant="quiet" onClick={onOpenVaults}>View all →</Button>} /><VaultTable vaults={snapshot.vaults.slice(0, 4)} decimals={snapshot.asset.decimals} /></Card><Card><SectionHeading title="Claims & payouts" action={<Button variant="quiet" onClick={onOpenClaims}>Review →</Button>} /><ClaimsSummary claims={snapshot.claims} payouts={snapshot.payouts} decimals={snapshot.asset.decimals} /></Card></div>}
+    <div className="workspace-overview"><div className="workspace-stack">{!hasData ? <Card><EmptyState icon="▥" title="No vault positions yet" description="Deposit into a vault to get started." action={<Button variant="secondary" onClick={onOpenVaults}>Open vaults</Button>} /></Card> : <div className="dashboard-grid"><Card><SectionHeading title="Vaults" action={<Button variant="quiet" onClick={onOpenVaults}>View all →</Button>} /><VaultTable vaults={snapshot.vaults.slice(0, 4)} decimals={snapshot.asset.decimals} /></Card><Card><SectionHeading title="Claims & payouts" action={<Button variant="quiet" onClick={onOpenClaims}>Review →</Button>} /><ClaimsSummary claims={snapshot.claims} payouts={snapshot.payouts} decimals={snapshot.asset.decimals} /></Card></div>}</div><PrivacyAside /></div>
   </>
 }
 

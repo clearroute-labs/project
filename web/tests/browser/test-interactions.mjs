@@ -6,7 +6,7 @@ try {
   const page = await browser.newPage({ viewport:{width,height:900}, reducedMotion:'reduce' })
   const errors=[]; page.on('pageerror',e=>errors.push(e.message))
   await page.goto(`${origin}/tests/browser/visual.html#/lender/vaults`)
-  await expect(page.getByRole('heading',{name:'Vaults & share positions',exact:true})).toBeVisible()
+  await expect(page.getByRole('heading',{name:'Find your vault.',exact:true})).toBeVisible()
   const trigger=page.getByRole('button',{name:'Open deposit claim into a vault',exact:false})
   await trigger.click()
   const drawer=page.getByRole('dialog',{name:'Deposit claim into a vault',exact:true})

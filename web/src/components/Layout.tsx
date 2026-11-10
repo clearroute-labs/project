@@ -1,3 +1,4 @@
+import { isWorkspaceOverview, workspaceRoute } from '../lib/workspaceRoutes'
 import { containDialogFocus } from './dialogFocus'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button, Notice, SelectInput } from './ui'
@@ -62,6 +63,14 @@ export function Layout({ role, path, onNavigate, onRoleChange, wallet, children,
   notice?: string
 }) {
   const meta = roleMeta[role]
+  const route = workspaceRoute(role, path)
+  const [mobile, setMobile] = useState(() => window.matchMedia?.('(max-width: 800px)').matches ?? false)
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 800px)')
+    const update = () => { setMobile(query.matches); if (!query.matches) setNavigationOpen(false) }
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
   const [walletError, setWalletError] = useState('')
   const [navigationOpen, setNavigationOpen] = useState(false)
   const mobileMenu = useRef<HTMLDialogElement>(null)
@@ -76,23 +85,26 @@ export function Layout({ role, path, onNavigate, onRoleChange, wallet, children,
   const navigate = (nextPath: string) => {
     setNavigationOpen(false)
     mobileMenu.current?.close()
-    onNavigate(nextPath)
+    onNavigate(nextPath === '/' ? `/${role}/overview` : nextPath)
     mainContent.current?.focus({ preventScroll: true })
   }
   const connect = async () => {
     setWalletError('')
     try { await wallet.connect() } catch (error) { setWalletError(error instanceof Error ? error.message : 'Wallet connection failed.') }
   }
+  const rolePicker = <SelectInput className="workspace-select" aria-label="Active workspace" value={role} onChange={(event) => { setNavigationOpen(false); onRoleChange(event.target.value as Role) }}>
+              {(Object.keys(roleMeta) as Role[]).map((item) => <option key={item} value={item}>{roleMeta[item].label}</option>)}
+            </SelectInput>
   return (
     <div className="app-shell">
       <a className="skip-link" href="#workspace-content" onClick={(event) => { event.preventDefault(); mainContent.current?.focus() }}>Skip to workspace</a>
       <aside className="sidebar">
         <button className="brand" onClick={() => navigate('/')} aria-label="clear home"><AppLogo /></button>
 
-        <p className="sidebar-caption">Your workspace</p>
+        <div className="sidebar-workspace"><p className="sidebar-caption">Workspace</p>{!mobile ? rolePicker : null}</div>
         <nav id="desktop-navigation" className="primary-nav" aria-label={`${meta.label} navigation`}>
           {meta.nav.map((item) => {
-            const selected = item.path === '/' ? path === '/' : path.startsWith(item.path)
+            const selected = item.path === '/' ? isWorkspaceOverview(path) : path.startsWith(item.path)
             return <button key={item.path} className={`nav-item ${selected ? 'nav-item-active' : ''}`} aria-label={item.label} title={item.label} aria-current={selected ? 'page' : undefined} onClick={() => navigate(item.path)}><NavIcon name={item.icon} /><span className="nav-label" aria-hidden="true">{item.label}</span></button>
           })}
         </nav>
@@ -102,23 +114,21 @@ export function Layout({ role, path, onNavigate, onRoleChange, wallet, children,
         <div className="drawer-header"><AppLogo /><Button variant="quiet" onClick={closeNavigation}>Close navigation</Button></div>
         <nav id="workspace-navigation" className="primary-nav" aria-label={`${meta.label} navigation`}>
           {meta.nav.map((item) => {
-            const selected = item.path === '/' ? path === '/' : path.startsWith(item.path)
+            const selected = item.path === '/' ? isWorkspaceOverview(path) : path.startsWith(item.path)
             return <button key={item.path} className={`nav-item ${selected ? 'nav-item-active' : ''}`} aria-label={item.label} title={item.label} aria-current={selected ? 'page' : undefined} onClick={() => navigate(item.path)}><NavIcon name={item.icon} /><span className="nav-label" aria-hidden="true">{item.label}</span></button>
           })}
         </nav>
       </dialog>
       <div className="main-column">
         <header className="topbar"><button ref={menuToggle} className="sidebar-toggle" aria-label="Open navigation" aria-haspopup="dialog" aria-expanded={navigationOpen} aria-controls="workspace-navigation" onClick={() => setNavigationOpen(true)}><NavIcon name="menu" /></button>
-          <div className="topbar-context">NEAR {wallet.networkId || 'testnet'}</div>
-          <div className="topbar-actions">
-            <SelectInput className="workspace-select" aria-label="Active workspace" value={role} onChange={(event) => { setNavigationOpen(false); onRoleChange(event.target.value as Role) }}>
-              {(Object.keys(roleMeta) as Role[]).map((item) => <option key={item} value={item}>{roleMeta[item].label}</option>)}
-            </SelectInput>
+          <div className="workspace-breadcrumb"><span>{meta.label}</span><span aria-hidden="true">/</span><strong>{route.section}</strong></div>
+          <div className="topbar-actions"><span className="topbar-context">NEAR {wallet.networkId || 'testnet'}</span>
+            {mobile ? rolePicker : null}
             {connected && wallet.accountId ? <button className="account-chip" aria-label={`Wallet & security: ${wallet.accountId}`} onClick={() => navigate('/settings')}><span className="account-dot" /><span className="account-name">{shortAccount(wallet.accountId)}</span></button> : null}
             {!connected ? <Button variant="secondary" disabled={wallet.status === 'connecting'} onClick={() => void connect()}>{wallet.status === 'connecting' ? 'Connecting…' : 'Connect wallet'}</Button> : null}
           </div>
         </header>
-        <main id="workspace-content" ref={mainContent} tabIndex={-1} className={`main-content${connected ? '' : ' main-content-disconnected'}`}>
+        <main id="workspace-content" ref={mainContent} tabIndex={-1} className="main-content">
           {connected && !adapterReady ? <Notice tone="warning" title="Lending deployment unavailable">Your wallet is connected. A complete contract and security configuration is required before lending actions are available.</Notice> : null}
           {walletError ? <Notice tone="danger" title="Wallet connection unavailable">{walletError}</Notice> : null}
           {notice ? <Notice tone="info">{notice}</Notice> : null}

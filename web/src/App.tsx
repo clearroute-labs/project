@@ -9,7 +9,7 @@ import { BorrowerPage } from './pages/BorrowerPage'
 import { LenderPage } from './pages/LenderPage'
 import { SecurityPage } from './pages/SecurityPage'
 import { DeviceKeySession, type DeviceKeyState } from './lib/deviceKeySession'
-import { ConnectWallet } from './pages/shared'
+import { DisconnectedPage } from './pages/DisconnectedPage'
 
 export interface AppContextValue {
   adapters: AppAdapters
@@ -121,7 +121,7 @@ export function App({ adapters: providedAdapters }: { adapters?: AppAdapters }) 
 
   const changeRole = useCallback((nextRole: Role) => {
     setRole(nextRole)
-    navigate('/')
+    navigate(`/${nextRole}/overview`)
   }, [navigate])
 
   const context = useMemo<AppContextValue>(() => ({
@@ -153,7 +153,7 @@ export function App({ adapters: providedAdapters }: { adapters?: AppAdapters }) 
 
 function PageRouter() {
   const { role, path, accountId, adapters } = useAppContext()
-  if (!accountId || adapters.wallet.status !== 'connected') return <ConnectWallet />
+  if (!accountId || adapters.wallet.status !== 'connected') return <DisconnectedPage />
   if (path === '/settings') return <SecurityPage />
   if (role === 'lender') return <LenderPage />
   if (role === 'broker') return <BrokerPage />

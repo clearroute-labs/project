@@ -1,3 +1,4 @@
+import { PrivacyAside } from '../components/PrivacyAside'
 import { ActionPanel } from '../components/ActionPanel'
 import { ReviewForm } from '../components/ReviewForm'
 import { useMemo, useState } from 'react'
@@ -36,8 +37,8 @@ function BrokerOverview({ onOpenLoans, onOpenOperations, onOpenVaults }: { onOpe
 
 
     <div className="metrics-grid"><Metric label="Aggregate debt" value={<Money units={debt} decimals={snapshot.asset.decimals} />} tone={debt !== '0' ? 'warning' : 'default'} /><Metric label="Debt ceiling" value={<Money units={ceiling} decimals={snapshot.asset.decimals} />} supporting={`${snapshot.brokers.length} broker record${snapshot.brokers.length === 1 ? '' : 's'}`} /><Metric label="Active loans" value={String(activeLoans)} supporting={`${snapshot.loans.filter((loan) => loan.status === 'defaulted').length} defaulted · ${snapshot.loans.filter((loan) => loan.status === 'paid').length} paid`} /><Metric label="Accounting" value={snapshot.brokers.some((broker) => broker.checkpointStatus !== 'current') ? 'Needs review' : 'Current'} tone={snapshot.brokers.some((broker) => broker.checkpointStatus !== 'current') ? 'warning' : 'positive'} /></div>
-    <div className="dashboard-grid"><Card><SectionHeading title="Broker accounts" action={<Button variant="quiet" onClick={onOpenVaults}>Manage →</Button>} /><BrokerTable brokers={snapshot.brokers} decimals={snapshot.asset.decimals} /></Card><Card><SectionHeading title="Loan book" action={<Button variant="quiet" onClick={onOpenLoans}>Open book →</Button>} /><LoanSummaryList loans={snapshot.loans} /></Card></div>
-    <div className="dashboard-grid"><Card><SectionHeading title="Delegates" action={<Button variant="quiet" onClick={onOpenOperations}>Operations →</Button>} /><KeeperSummary grants={snapshot.keeperGrants} /></Card><Card><SectionHeading title="Alerts" /><AttentionList brokers={snapshot.brokers} loans={snapshot.loans} /></Card></div>
+    <div className="workspace-overview"><div className="workspace-stack"><div className="dashboard-grid"><Card><SectionHeading title="Broker accounts" action={<Button variant="quiet" onClick={onOpenVaults}>Manage →</Button>} /><BrokerTable brokers={snapshot.brokers} decimals={snapshot.asset.decimals} /></Card><Card><SectionHeading title="Loan book" action={<Button variant="quiet" onClick={onOpenLoans}>Open book →</Button>} /><LoanSummaryList loans={snapshot.loans} /></Card></div>
+    <div className="dashboard-grid"><Card><SectionHeading title="Delegates" action={<Button variant="quiet" onClick={onOpenOperations}>Operations →</Button>} /><KeeperSummary grants={snapshot.keeperGrants} /></Card><Card><SectionHeading title="Alerts" /><AttentionList brokers={snapshot.brokers} loans={snapshot.loans} /></Card></div></div><PrivacyAside /></div>
   </>
 }
 

@@ -2,14 +2,17 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useAppContext } from '../App'
 import { Button, Card, EmptyState, Mono, Notice, SectionHeading, StatusBadge } from '../components/ui'
 import { formatAmount } from '../lib/money'
+import { workspaceRoute } from '../lib/workspaceRoutes'
 import { AppLogo } from '../components/AppLogo'
 import type { ProtocolError, Role, VaultSummary } from '../lib/types'
 
 export function PageHeader({ title, description, action }: { title: ReactNode; description?: string; action?: ReactNode }) {
-  return <div className="page-header"><div><h1>{title}</h1>{description ? <p className="page-description">{description}</p> : null}</div>{action ? <div className="page-header-action">{action}</div> : null}</div>
+  const { role, path } = useAppContext()
+  const route = workspaceRoute(role, path)
+  return <div className="page-header"><div><p className="eyebrow">{role} workspace</p><h1>{route.title || title}</h1>{(description || route.description) ? <p className="page-description">{description || route.description}</p> : null}</div>{action ? <div className="page-header-action">{action}</div> : null}</div>
 }
 
-export function ConnectWallet() {
+export function ConnectWallet({ compact = false, description }: { compact?: boolean; description?: string } = {}) {
   const { adapters } = useAppContext()
   const [connectionError, setConnectionError] = useState('')
   const connect = async () => {
@@ -17,11 +20,11 @@ export function ConnectWallet() {
     try { await adapters.wallet.connect() }
     catch (error) { setConnectionError(error instanceof Error ? error.message : 'Wallet connection failed.') }
   }
-  return <section className="welcome" aria-label="Wallet connection">
-      <img className="welcome-dunes" src="/clear-dunes-mobile.webp" width="840" height="473" alt="" /><div className="welcome-logo"><AppLogo /></div>
+  return <section className={compact ? "connection-prompt" : "welcome"} aria-label="Wallet connection">
+      {!compact ? <><img className="welcome-dunes" src="/clear-dunes-mobile.webp" width="840" height="473" alt="" /><div className="welcome-logo"><AppLogo /></div>
       <p className="eyebrow">The clear workspace</p>
-      <h1>A clear space for your capital.</h1>
-      <p className="welcome-description">Connect your NEAR wallet to view vaults, manage a loan or access an authorized audit view. Choose your role with the workspace selector.</p>
+      <h1>A clear space for your capital.</h1></> : null}
+      <p className="welcome-description">{description || 'Connect your NEAR wallet to view vaults, manage a loan or access an authorized audit view. Choose your role with the workspace selector.'}</p>
       <Button disabled={adapters.wallet.status === 'connecting'} onClick={() => void connect()}>{adapters.wallet.status === 'connecting' ? 'Connecting…' : 'Connect wallet'}</Button>
       {connectionError ? <Notice tone="danger">{connectionError}</Notice> : null}
       <p className="welcome-footnote">Connecting does not submit a transaction. Confidential amounts require your local decryption keys; account identities and transaction timing remain public.</p>
