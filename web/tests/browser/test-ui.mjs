@@ -39,8 +39,10 @@ async function expectVisibleText(page, text, message = `Expected visible text: $
 async function openWorkspace(page, role, navigationLabel) {
   const selector = page.getByLabel('Active workspace')
   await visible(selector, 'The workspace selector must remain accessible on this viewport.')
+  const openMenu=page.getByRole('dialog',{name:'Workspace navigation'}); if(await openMenu.isVisible()) await page.getByRole('button',{name:'Close navigation',exact:true}).click()
   await selector.selectOption(role)
   await page.waitForTimeout(100)
+  if(page.viewportSize().width<=800) await page.getByRole('button',{name:'Open navigation',exact:true}).click()
   await visible(page.getByRole('button', { name: navigationLabel, exact: true }), `Expected ${role} navigation after workspace switch.`)
 }
 
@@ -48,7 +50,7 @@ async function inspectViewport(page, viewport, screenshotName) {
   await page.setViewportSize(viewport)
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 })
   await visible(page.getByRole('main').getByRole('button', { name: 'Connect wallet', exact: true }), 'Disconnected state should invite a wallet connection.')
-  await visible(page.getByRole('main').getByRole('heading', { name: 'Credit, on your terms.', exact: true }), 'Disconnected screen should explain wallet entry.')
+  await visible(page.getByRole('main').getByRole('heading', { name: 'A clear space for your capital.', exact: true }), 'Disconnected screen should explain wallet entry.')
   await openWorkspace(page, 'broker', 'Loan book')
   await openWorkspace(page, 'borrower', 'Agreements')
   await openWorkspace(page, 'auditor', 'Loan exports')
@@ -61,6 +63,7 @@ async function inspectViewport(page, viewport, screenshotName) {
 
 async function inspectOptionalCredentialFlow(page) {
   if (!credentialFile) return
+  await page.setViewportSize({width:1440,height:900})
   check(fs.existsSync(credentialFile), `Credential file does not exist: ${credentialFile}`)
   const input = page.locator('input[aria-label="Import sandbox credentials"]')
   if ((await input.count()) === 0) {
@@ -120,6 +123,7 @@ async function clickAndWaitFinalized(page, locator, action, timeout = 180_000) {
     try { return JSON.parse(response.request().postData() || '{}').method === 'broadcast_tx_commit' } catch { return false }
   }, { timeout })
   await locator.click()
+  const review=page.getByRole('dialog',{name:'Review your operation'}); if(await review.isVisible()) await review.getByRole('button',{name:/^Confirm:/}).click()
   let response
   try {
     response = await broadcast
@@ -219,6 +223,7 @@ async function inspectConnectedPublicFlow(page) {
     if (!/No finalized vault records/i.test(firstRow)) vaultId = firstRow.trim().split(/\s+/)[0]
   }
   if (!vaultId) {
+    await page.getByRole('button',{name:'Open create a vault',exact:false}).click()
     await page.locator('#vault-maximum').fill(process.env.UI_VAULT_MAXIMUM || '1')
     await page.locator('#vault-share-scale').fill(process.env.UI_VAULT_SHARE_SCALE || '6')
     await page.locator('#vault-epoch').fill(process.env.UI_VAULT_EPOCH || '60')
@@ -228,6 +233,7 @@ async function inspectConnectedPublicFlow(page) {
     vaultId = (await page.locator('table').filter({ hasText: 'Public vault records' }).locator('tbody tr').first().locator('td').first().innerText()).trim().split(/\s+/)[0]
   }
 
+  const drawer=page.locator('.action-drawer[open]'); if(await drawer.isVisible()) await drawer.getByRole('button',{name:'Close',exact:true}).click()
   await switchSandboxAccount(page, lenderCredential)
   await openWorkspace(page, 'lender', 'Vaults')
   await page.getByRole('button', { name: 'Vaults', exact: true }).click()
@@ -239,8 +245,11 @@ async function inspectConnectedPublicFlow(page) {
   }
   await page.getByRole('button', { name: 'Vaults', exact: true }).click()
   const depositAmount = process.env.UI_PUBLIC_DEPOSIT_AMOUNT || '0.0001'
+  await page.getByRole('button',{name:'Open fund a public claim',exact:false}).click()
   await page.locator('#token-deposit-amount').fill(depositAmount)
   record('token ingress → public claim', await clickAndWaitFinalized(page, page.getByRole('button', { name: 'Send token & create claim', exact: true }), 'Fund public claim', 30_000))
+  await page.locator('dialog[open]').getByRole('button',{name:'Close',exact:true}).click()
+  await page.getByRole('button',{name:'Open deposit claim into a vault',exact:false}).click()
   await page.locator('#deposit-vault').selectOption(vaultId)
   await selectLatestAvailable(page, '#deposit-claim')
   // The ingress refresh can remount the form while its claim options arrive;
@@ -249,6 +258,8 @@ async function inspectConnectedPublicFlow(page) {
   await page.locator('#deposit-amount').fill(depositAmount)
   await page.locator('#deposit-min-shares').fill('0')
   record('public claim → vault shares', await clickAndWaitFinalized(page, page.getByRole('button', { name: 'Deposit claim', exact: true }), 'Deposit claim to vault', 30_000))
+  await page.locator('dialog[open]').getByRole('button',{name:'Close',exact:true}).click()
+  await page.getByRole('button',{name:'Open redeem from a vault',exact:false}).click()
   await page.locator('#redeem-vault').selectOption(vaultId)
   // With the demo's share scale of six, 50 human shares equals 50 base asset
   // units at a one-to-one NAV. Tiny fractional share inputs round to zero and
@@ -256,13 +267,16 @@ async function inspectConnectedPublicFlow(page) {
   await page.locator('#redeem-shares').fill(process.env.UI_PUBLIC_REDEEM_SHARES || '50')
   await page.locator('#redeem-min-amount').fill('0')
   record('vault shares → public claim', await clickAndWaitFinalized(page, page.getByRole('button', { name: 'Redeem shares', exact: true }), 'Redeem shares', 30_000))
+  await page.locator('dialog[open]').getByRole('button',{name:'Close',exact:true}).click()
   await page.getByRole('button', { name: 'Claims & payouts', exact: true }).click()
+  await page.getByRole('button',{name:'Open request payout',exact:false}).click()
   const payoutClaimId = await selectLatestAvailable(page, '#payout-claim')
   const payoutRecipient = process.env.UI_PAYOUT_RECIPIENT || 'recipient.test.near'
   await page.getByLabel('Recipient account').fill(payoutRecipient)
   const lenderAccount = accountIdFromCredential(lenderCredential)
   const tokenBalanceBefore = BigInt(String(await finalizedTokenView('ft_balance_of', { account_id: payoutRecipient })))
   record('claim payout reservation', await clickAndWaitFinalized(page, page.getByRole('button', { name: 'Reserve payout', exact: true }), 'Request external payout', 30_000))
+  await page.locator('dialog[open]').getByRole('button',{name:'Close',exact:true}).click()
   const [vault, claims, payouts] = await Promise.all([
     finalizedCoreView('get_vault', { vault_id: vaultId }),
     finalizedCoreView('list_claims', { owner: lenderAccount, cursor: '0', limit: 50 }),

@@ -1,4 +1,4 @@
-# ClearRoute web application
+# clear web application
 
 This directory contains the React/Vite wallet application for the NEAR confidential lending protocol.
 
@@ -20,17 +20,27 @@ Sandbox signing is isolated in `tests/support/sandboxWallet.ts` and the developm
 
 ## Visual conventions and checks
 
-The interface uses paper ivory, forest green and a restrained lime accent. Manrope and IBM Plex Mono are served locally with their licenses in `public/fonts`. Keep the existing orbital mark, visible workspace labels on desktop, keyboard focus and reduced-motion support. Landing-page balances are explicitly illustrative; actual balances remain sourced from the protocol client.
+The desert identity uses warm ivory, charcoal, copper accents, the angular clear wordmark and locally served Archivo Variable. IBM Plex Mono remains reserved for identifiers. Licensed fonts live in `public/fonts`; responsive WebP dunes weigh approximately 64 KiB (desktop) and 16 KiB (mobile). No remote font, design CDN or illustrative account balance is loaded by the product.
 
-With the development server running, validate navigation, responsive workspace states and development file boundaries:
+The landing loads the wallet application only after entry. Its terrain-following canvas grain is capped at 30 fps and DPR 1.5, pauses offscreen/in hidden tabs, and respects reduced motion. Keep animation out of data views. The workspace uses a dark desktop sidebar, a modal mobile menu, stacked mobile records and task drawers. Drawers retain entries while closed on the same route; navigation, account changes and session locking discard them. Failed reads hide and disable stale data while preserving mounted forms for a successful retry. Never persist plaintext drafts or private review data to storage.
+
+Financial forms require a local review before their existing validation/proof/wallet handler runs. File contents, passwords, key material and textareas are hidden in that review. Pending-transaction locks remain in the action layer. Claims are explained as public receipts; checkpoints as accounting snapshots. Public boundary amounts must never be presented as confidential.
+
+From repository root, with the development server running:
 
 ```sh
 UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-navigation.mjs
 UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-design.mjs
+UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-interactions.mjs
+UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-accessibility.mjs
 UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-dev-boundaries.mjs
 ```
 
-Run these commands from the repository root. Set `UI_BROWSER_CHANNEL=chrome` to use installed Chrome. The navigation and design checks cover 1440, 390 and 320 px; their synthetic fixtures do not verify on-chain transactions. The default development port is 5174 and Vite chooses the next free port when occupied.
+Use `UI_BROWSER_CHANNEL=chrome` for installed Chrome. Design checks cover populated/empty/loading/error states at 1440, 768, 390 and 320 px. Interaction checks cover retained entries, focus wrapping, Escape and review cancellation. axe checks WCAG 2.2 AA rules on public pages, workspaces and open task dialogs; this is not an accessibility certification or a substitute for assistive-technology testing. Synthetic fixtures never verify payments.
+
+For a repeatable local performance sample, build, serve `pnpm --dir web preview --host 127.0.0.1 --port 4176`, then run `PERF_BASE_URL=http://127.0.0.1:4176 node web/tests/browser/test-performance.mjs`. It records LCP, layout shifts, resource bytes and animation long tasks under 4× CPU slowdown and a simulated 1.6 Mbps / 150 ms connection in `.local/performance.json`. Local measurements are not field data. The optional Privy popup bundle remains large and does not load on the landing.
+
+The development port defaults to 5174 and advances if occupied. There is no lint script; run the documented build, typecheck and existing tests before committing.
 
 ## Integration boundary
 

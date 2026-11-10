@@ -86,7 +86,6 @@ export function App({ adapters: providedAdapters }: { adapters?: AppAdapters }) 
       return
     }
     setLoading(true)
-    setLoadError(undefined)
     try {
       const [nextSnapshot, nextCryptoStatus] = await Promise.all([
         adapters.protocol.getDashboard(accountId),
@@ -94,10 +93,11 @@ export function App({ adapters: providedAdapters }: { adapters?: AppAdapters }) 
       ])
       if (sequence !== refreshSequence.current) return
       setSnapshot(nextSnapshot)
+      setLoadError(undefined)
       setCryptoStatus(nextCryptoStatus)
     } catch (error) {
       if (sequence !== refreshSequence.current) return
-      setSnapshot(null)
+      // Retain the current account draft; ConnectionGate hides and disables stale state.
       setLoadError(toProtocolError(error))
       try {
         const status = await adapters.crypto.getStatus()

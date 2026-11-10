@@ -12,6 +12,7 @@ const browserChannel = process.env.UI_BROWSER_CHANNEL || 'chromium'
 
 const viewports = [
   { name: 'desktop1440x1000', width: 1440, height: 1000 },
+  { name: 'tablet768x1024', width: 768, height: 1024 },
   { name: 'mobile390x844', width: 390, height: 844 },
   { name: 'narrow320x844', width: 320, height: 844 },
 ]
@@ -107,6 +108,7 @@ async function inspectWorkspace(page, workspace, state, viewport) {
 
   const navigation = page.getByRole('navigation', { name: workspace.navigation })
   for (const route of workspace.routes) {
+    if (viewport.width <= 800) { const menu = page.getByRole('button', { name: 'Open navigation', exact: true }); await menu.focus(); await menu.press('Enter') }
     const routeButton = navigation.getByRole('button', { name: route.label, exact: true })
     await routeButton.focus()
     await expect(routeButton).toBeFocused()
@@ -126,6 +128,7 @@ async function inspectWorkspace(page, workspace, state, viewport) {
     })
   }
 
+  if (viewport.width <= 800) { const menu = page.getByRole('button', { name: 'Open navigation', exact: true }); await menu.focus(); await menu.press('Enter') }
   const overviewButton = navigation.getByRole('button', { name: workspace.overview, exact: true })
   await overviewButton.focus()
   await overviewButton.press('Enter')
@@ -144,6 +147,7 @@ async function inspectSecurity(page, state, viewport) {
   const selector = page.getByLabel('Active workspace')
   await selector.selectOption('lender')
   await waitForHeading(page, 'Overview')
+  if (viewport.width <= 800) { const menu = page.getByRole('button', { name: 'Open navigation', exact: true }); await menu.focus(); await menu.press('Enter') }
   const securityButton = page.getByRole('navigation', { name: 'Lender navigation' }).getByRole('button', { name: 'Wallet & security', exact: true })
   await securityButton.focus()
   await expect(securityButton).toBeFocused()

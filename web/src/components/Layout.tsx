@@ -1,4 +1,5 @@
-import { useRef, useState, type ReactNode } from 'react'
+import { containDialogFocus } from './dialogFocus'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button, Notice, SelectInput } from './ui'
 import type { Role, WalletAdapter } from '../lib/types'
 import { AppLogo } from './AppLogo'
@@ -63,12 +64,18 @@ export function Layout({ role, path, onNavigate, onRoleChange, wallet, children,
   const meta = roleMeta[role]
   const [walletError, setWalletError] = useState('')
   const [navigationOpen, setNavigationOpen] = useState(false)
+  const mobileMenu = useRef<HTMLDialogElement>(null)
+  useEffect(() => {
+    if (navigationOpen) mobileMenu.current?.showModal()
+    else mobileMenu.current?.close()
+  }, [navigationOpen])
   const menuToggle = useRef<HTMLButtonElement>(null)
   const mainContent = useRef<HTMLElement>(null)
   const connected = wallet.status === 'connected' && Boolean(wallet.accountId)
   const closeNavigation = () => { setNavigationOpen(false); menuToggle.current?.focus() }
   const navigate = (nextPath: string) => {
     setNavigationOpen(false)
+    mobileMenu.current?.close()
     onNavigate(nextPath)
     mainContent.current?.focus({ preventScroll: true })
   }
@@ -79,25 +86,29 @@ export function Layout({ role, path, onNavigate, onRoleChange, wallet, children,
   return (
     <div className="app-shell">
       <a className="skip-link" href="#workspace-content" onClick={(event) => { event.preventDefault(); mainContent.current?.focus() }}>Skip to workspace</a>
-      {navigationOpen ? <button className="sidebar-backdrop" aria-label="Close navigation" onClick={closeNavigation} /> : null}
-      <aside className="sidebar" data-expanded={navigationOpen} onBlurCapture={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setNavigationOpen(false)
-      }} onKeyDown={(event) => {
-        if (event.key === 'Escape' && navigationOpen) { event.preventDefault(); closeNavigation() }
-      }}>
-        <button className="brand" onClick={() => navigate('/')} aria-label="ClearRoute home"><AppLogo /><span className="brand-wordmark" aria-hidden="true">ClearRoute</span></button>
-        <button ref={menuToggle} className="sidebar-toggle" aria-label={navigationOpen ? 'Collapse navigation' : 'Expand navigation'} aria-expanded={navigationOpen} aria-controls="workspace-navigation" onClick={() => setNavigationOpen((value) => !value)}><NavIcon name={navigationOpen ? 'close' : 'menu'} /></button>
+      <aside className="sidebar">
+        <button className="brand" onClick={() => navigate('/')} aria-label="clear home"><AppLogo /></button>
+
         <p className="sidebar-caption">Your workspace</p>
+        <nav id="desktop-navigation" className="primary-nav" aria-label={`${meta.label} navigation`}>
+          {meta.nav.map((item) => {
+            const selected = item.path === '/' ? path === '/' : path.startsWith(item.path)
+            return <button key={item.path} className={`nav-item ${selected ? 'nav-item-active' : ''}`} aria-label={item.label} title={item.label} aria-current={selected ? 'page' : undefined} onClick={() => navigate(item.path)}><NavIcon name={item.icon} /><span className="nav-label" aria-hidden="true">{item.label}</span></button>
+          })}
+        </nav>
+        <div className="sidebar-footer"><p>Public capital.<br />Private credit.</p><a href="/">About clear <span aria-hidden="true">↗</span></a></div>
+      </aside>
+      <dialog onKeyDown={containDialogFocus} ref={mobileMenu} className="mobile-navigation" aria-label="Workspace navigation" onClose={() => setNavigationOpen(false)}>
+        <div className="drawer-header"><AppLogo /><Button variant="quiet" onClick={closeNavigation}>Close navigation</Button></div>
         <nav id="workspace-navigation" className="primary-nav" aria-label={`${meta.label} navigation`}>
           {meta.nav.map((item) => {
             const selected = item.path === '/' ? path === '/' : path.startsWith(item.path)
             return <button key={item.path} className={`nav-item ${selected ? 'nav-item-active' : ''}`} aria-label={item.label} title={item.label} aria-current={selected ? 'page' : undefined} onClick={() => navigate(item.path)}><NavIcon name={item.icon} /><span className="nav-label" aria-hidden="true">{item.label}</span></button>
           })}
         </nav>
-        <div className="sidebar-footer"><p>Public capital.<br />Private credit.</p><a href="/">About ClearRoute <span aria-hidden="true">↗</span></a></div>
-      </aside>
+      </dialog>
       <div className="main-column">
-        <header className="topbar">
+        <header className="topbar"><button ref={menuToggle} className="sidebar-toggle" aria-label="Open navigation" aria-haspopup="dialog" aria-expanded={navigationOpen} aria-controls="workspace-navigation" onClick={() => setNavigationOpen(true)}><NavIcon name="menu" /></button>
           <div className="topbar-context">NEAR {wallet.networkId || 'testnet'}</div>
           <div className="topbar-actions">
             <SelectInput className="workspace-select" aria-label="Active workspace" value={role} onChange={(event) => { setNavigationOpen(false); onRoleChange(event.target.value as Role) }}>

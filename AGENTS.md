@@ -1,6 +1,6 @@
-# ClearRoute contributor guide
+# clear contributor guide
 
-ClearRoute is a NEAR testnet confidential-lending prototype. SPEC.md defines the financial and privacy contract. Public vault accounting and encrypted loan amounts must remain distinct in product copy.
+clear is a NEAR testnet confidential-lending prototype. SPEC.md defines the financial and privacy contract. Public vault accounting and encrypted loan amounts must remain distinct in product copy.
 
 Use Node 24.11+ and the pnpm version pinned in package.json. Install with `pnpm install --frozen-lockfile --ignore-scripts`. The web development command is `pnpm --dir web dev`. Build with `pnpm build`, typecheck with `pnpm typecheck`, and run existing tests with `pnpm test`. There is currently no lint script. On-chain browser and proof tests require staged cryptographic artifacts; follow README.md and docs/TESTNET.md.
 
