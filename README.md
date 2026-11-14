@@ -1,14 +1,52 @@
 # clear — confidential lending on NEAR
 
-An implementation of [SPEC.md](SPEC.md): public single-asset vaults fund broker-underwritten loans whose amounts, repayments and balances remain encrypted. The Core contract enforces confidential transfers and credit accounting with Groth16 proofs. Borrowers, brokers and designated auditors decrypt only their authorized views.
+Clear is a confidential lending prototype on NEAR. Lenders fund public vaults, brokers arrange loans, and borrowers manage encrypted loan amounts and balances. Cryptographic proofs let the contract verify operations, while designated auditors can decrypt the views they are authorized to inspect.
 
-The credit model has no on-chain collateral or first-loss cover. Brokers underwrite borrowers off-chain. Fixed finance charges are agreed at origination; there are no late fees or time-based interest accrual. Public settlement repays vault debt before recognizing yield. Impairment and default reconciliation prevent lenders from redeeming against stale accounting.
+**[Try the testnet app](https://clear-near.vercel.app)** · **[Protocol specification](SPEC.md)** · **[Local demo walkthrough](docs/LOCAL_DEMO.md)**
 
-## Run the app
+Clear implements [SPEC.md](SPEC.md), which defines the credit model, privacy boundaries, accounting rules and release requirements. The sections below introduce the product; the specification remains the reference for protocol behavior.
 
-The product defaults to NEAR testnet and uses NEAR Connect for wallet access. Install dependencies with `pnpm install --frozen-lockfile --ignore-scripts`, prepare the pinned public artifacts using [testnet setup](docs/TESTNET.md), and run `pnpm dev --host localhost --port 5175`. See [wallet setup](docs/WALLETS.md) and [web configuration](web/README.md).
+## Why Clear?
 
-Confidential keys can be saved encrypted in this browser and unlocked with a compatible passkey. Keep the encrypted recovery file for a new browser or lost browser data.
+On-chain credit needs verifiable accounting, but publishing every loan amount exposes sensitive financial information. Clear separates public vault accounting from encrypted loan data. Lenders can inspect the vault's public position without automatically gaining access to each borrower's private loan terms.
+
+## How it works
+
+1. **A lender deposits into a vault** and receives shares representing their position in its public accounting.
+2. **A broker evaluates the borrower off-chain** and proposes an encrypted loan agreement. Both parties must authorize the same agreement before funding.
+3. **The borrower receives funds and repays privately.** Proofs check the confidential operations against the contract's rules.
+4. **The broker settles funds back into the vault.** Settlement repays vault debt before recognizing yield; lenders can redeem shares under the vault's accounting and withdrawal rules.
+5. **An authorized loan auditor can inspect the loan.** Audit access is scoped to the encrypted views designated for that auditor.
+
+For a successful-loan example, see [SPEC section 23.2](SPEC.md#232-successful-loan-and-yield). For the corresponding product screens, follow the [local walkthrough](docs/LOCAL_DEMO.md).
+
+## What is public, and what is private?
+
+| Data | Visibility |
+| --- | --- |
+| Loan principal, amount owed, periodic payment and individual repayment amounts | Encrypted; readable through authorized views |
+| Confidential wallet and broker balances | Encrypted; readable through authorized views |
+| Vault totals, shares, broker debt, draws and settlements | Public |
+| Account identities, loan relationships, payment schedules, status and transaction timing | Public |
+| Public deposits, redemptions and external payouts | Public, including their amounts |
+
+Amount confidentiality does not provide anonymity. Public entry/exit amounts can correlate with private activity, and an aggregate containing only one loan can reveal that loan's amount. See [SPEC section 4](SPEC.md#4-roles-and-public-visibility) for the complete visibility model.
+
+## Try it
+
+Open **[clear-near.vercel.app](https://clear-near.vercel.app)** on a desktop browser and connect a NEAR testnet wallet. In **Get test funds**, register token storage and claim TEST tokens; testnet NEAR is also required for gas and storage. Before private operations, open **Wallet & security**, add a Core storage budget, generate confidential keys, save the encrypted recovery file and register the key on-chain. Switch between the lender, broker, borrower and auditor workspaces to explore their roles.
+
+Confidential keys can also be saved encrypted in this browser and unlocked with a compatible passkey. Keep the recovery file for a new browser or lost browser data. See [wallet setup](docs/WALLETS.md) for wallet options and optional email/Google login configuration.
+
+**Current status: testnet prototype.** Test assets have no monetary value. Development proving keys use a single-party setup; this is not an independently reviewed or production-ready release. Large browser proofs can take about three minutes and allocate about 1.72 GB of WASM memory, in addition to other browser memory. The full lending lifecycle has been verified against real contracts in local sandbox; this does not claim a complete loan lifecycle on public testnet.
+
+There is no on-chain borrower collateral or first-loss cover. Brokers assess creditworthiness off-chain; proofs verify protocol rules, not a borrower's ability to repay. Lenders bear credit and liquidity risk and can lose capital. Fixed finance charges are agreed at origination, with no late fees or time-based interest accrual. Impairment and default reconciliation prevent redemption against stale accounting.
+
+## Run locally
+
+For a local testnet client, install dependencies with `pnpm install --frozen-lockfile --ignore-scripts`, prepare the deployment's matching pinned artifacts using [testnet setup](docs/TESTNET.md), and run `pnpm dev --host localhost --port 5175`. A local checkout and the hosted app may target different deployments: the public proving bundle must match the selected Core account and manifest pin. See [web configuration](web/README.md).
+
+To run the complete flow with fresh local test accounts, use the sandbox setup below.
 
 ## Protocol development and sandbox verification
 
