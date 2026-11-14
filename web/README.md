@@ -1,4 +1,4 @@
-# Private Ledger web application
+# clear web application
 
 This directory contains the React/Vite wallet application for the NEAR confidential lending protocol.
 
@@ -17,6 +17,41 @@ Sandbox signing is isolated in `tests/support/sandboxWallet.ts` and the developm
 ## Routes
 
 `/` is the public landing page. `Open app` opens `/app`; workspace navigation uses hashes such as `/app#/borrower/agreements`. Existing root hash links redirect to `/app` while retaining their destination. `/wallet/privy` remains the social-wallet callback route. Configure static hosting to serve `index.html` for `/app` and `/wallet/privy`. Wallet and cryptographic services initialize only when the app is opened.
+
+## Visual conventions and checks
+
+The desert identity uses warm ivory, charcoal, copper accents, the angular clear wordmark and locally served Archivo Variable. IBM Plex Mono remains reserved for identifiers. Licensed fonts live in `public/fonts`; responsive WebP dunes weigh approximately 64 KiB (desktop) and 16 KiB (mobile). No remote font, design CDN or illustrative account balance is loaded by the product.
+
+The landing loads the wallet application only after entry. Its terrain-following canvas grain is capped at 30 fps and DPR 1.5, pauses offscreen/in hidden tabs, and respects reduced motion. Keep animation out of data views. The workspace follows the approved composition: a dark desktop sidebar with role selector, editorial route headings, a dunes/privacy aside, a modal mobile menu, stacked mobile records and task drawers. Disconnected users can navigate every workspace; each route renders its own context and connection prompt without invented balances. Only account reads and operations require the wallet. Overview URLs include the role so refresh and browser history preserve it. Drawers retain entries while closed on the same route; navigation, account changes and session locking discard them. Failed reads hide and disable stale data while preserving mounted forms for a successful retry. Never persist plaintext drafts or private review data to storage.
+
+Financial forms require a local review before their existing validation/proof/wallet handler runs. File contents, passwords, key material and textareas are hidden in that review. Pending-transaction locks remain in the action layer. Claims are explained as public receipts; checkpoints as accounting snapshots. Public boundary amounts must never be presented as confidential.
+
+From repository root, with the development server running:
+
+```sh
+UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-navigation.mjs
+UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-design.mjs
+UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-disconnected-routes.mjs
+UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-interactions.mjs
+UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-accessibility.mjs
+UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-dev-boundaries.mjs
+```
+
+Use `UI_BROWSER_CHANNEL=chrome` for installed Chrome. Design checks cover populated/empty/loading/error states at 1440, 768, 390 and 320 px. Interaction checks cover retained entries, focus wrapping, Escape and review cancellation. axe checks WCAG 2.2 AA rules on public pages, workspaces and open task dialogs; this is not an accessibility certification or a substitute for assistive-technology testing. Synthetic fixtures never verify payments.
+
+For a repeatable local performance sample, build, serve `pnpm --dir web preview --host 127.0.0.1 --port 4176`, then run `PERF_BASE_URL=http://127.0.0.1:4176 node web/tests/browser/test-performance.mjs`. It records LCP, layout shifts, resource bytes and animation long tasks under 4× CPU slowdown and a simulated 1.6 Mbps / 150 ms connection in `.local/performance.json`. Local measurements are not field data. The optional Privy popup bundle remains large and does not load on the landing.
+
+The development port defaults to 5174 and advances if occupied. There is no lint script; run the documented build, typecheck and existing tests before committing.
+
+## Account metrics and realized yield
+
+Overview metrics are scoped to the connected account and role. The lender value is the integer pro-rata share of net vault assets, after provisions; it is unavailable when accounting or share balances are incomplete. Available claims exclude reserved/paid receipts. Unresolved payouts include recorded results awaiting finalization. Broker metrics include only owned broker accounts and their loan book; borrower metrics include only agreements where the account is the borrower. Audit metrics describe the current explicitly decrypted result, never inferred reader authorization.
+
+`cumulative_yield` and `cumulative_realized_losses` are public broker counters. Realized yield is settlement surplus after principal repayment (SPEC.md §12.2), not the finance charge promised at origination. Broker performance covers currently owned active account records. Lender performance aggregates complete counters for the vaults where the account currently holds shares, with membership and broker reads pinned to one finalized block when supported. Optional yield reads run in batches of eight; failure cannot block account loading or become an invented zero.
+
+A deleted broker's tombstone has no historical yield counters, so a vault with incomplete history displays unavailable performance. Gross yield and realized losses are shown separately; net realized result excludes unrealized provisions. These lifetime vault totals are not the shareholder's personal profit. Personal P&L and APY need deposit, withdrawal and share-transfer history and are not inferred from current ownership or share price. No private amounts are automatically decrypted for metrics.
+
+Run `UI_BASE_URL=http://localhost:5174 node web/tests/browser/test-workspace-metrics.mjs` to check displayed values while changing roles. Unit tests cover multi-role wallets, exact large-number arithmetic, stale accounting, incomplete history and negative realized results.
 
 ## Integration boundary
 

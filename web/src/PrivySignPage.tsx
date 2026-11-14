@@ -21,7 +21,7 @@ export default function PrivySignPage() {
   let configuration: PrivyConfiguration | undefined
   try { configuration = privyConfiguration(deployment, window.location.origin) } catch { /* Show a configuration error without starting authentication. */ }
   if (!configuration) return <SigningFrame><Notice tone="warning" title="Social login is not configured">Set a valid public Privy App ID, then restart or rebuild the app. A Client ID is optional.</Notice></SigningFrame>
-  if (!window.opener) return <SigningFrame><Notice tone="info" title="Open this page from your wallet">Return to Private Ledger and select Email or social login from Connect wallet.</Notice></SigningFrame>
+  if (!window.opener) return <SigningFrame><Notice tone="info" title="Open this page from your wallet">Return to clear and select Email or social login from Connect wallet.</Notice></SigningFrame>
   return <ConfiguredSigningPage configuration={configuration} deployment={deployment} />
 }
 
@@ -50,7 +50,7 @@ function ConfiguredSigningPage({ configuration, deployment }: { configuration: P
 }
 
 function SigningFrame({ children }: { children: React.ReactNode }) {
-  return <main className="wallet-sign-page"><div className="wallet-sign-card"><p className="eyebrow">Private Ledger · NEAR wallet</p>{children}</div></main>
+  return <main className="wallet-sign-page"><div className="wallet-sign-card"><p className="eyebrow">clear · NEAR wallet</p>{children}</div></main>
 }
 
 function SigningFlow({ client, configuration, deployment }: { client: Privy; configuration: PrivyConfiguration; deployment: DeploymentConfig }) {
@@ -157,7 +157,7 @@ function SigningFlow({ client, configuration, deployment }: { client: Privy; con
       <p>Sign in with email or Google to use your NEAR wallet.</p>
       <Button onClick={() => login()}>Sign in</Button>
     </> : !walletChecked ? <p role="status">Loading your wallet…</p> : !wallet ? <>
-      <p>Create your NEAR wallet to connect to Private Ledger. You will need NEAR on {configuration.network} for transaction fees.</p>
+      <p>Create your NEAR wallet to connect to clear. You will need NEAR on {configuration.network} for transaction fees.</p>
       <Button disabled={busy} onClick={() => void create()}>{busy ? 'Creating wallet…' : 'Create NEAR wallet'}</Button>
     </> : <>
       <p className="eyebrow">Your NEAR account</p><p className="wallet-sign-account">{wallet.address}</p>
@@ -165,7 +165,7 @@ function SigningFlow({ client, configuration, deployment }: { client: Privy; con
         <p>Contract: <strong>{request.receiverId}</strong></p>
         {request.actions.map((action, index) => action.type === 'FunctionCall' ? <div className="wallet-call" key={index}><strong>{action.params.methodName}</strong><p>Attached deposit: {nearDeposit(action.params.deposit)}</p><p>Gas limit: {Number(BigInt(action.params.gas)) / 1e12} Tgas</p></div> : null)}
         <details><summary>Transaction details</summary><pre className="wallet-request">{JSON.stringify(request, null, 2)}</pre></details>
-      </> : <p>Share this account address with Private Ledger.</p>}
+      </> : <p>Share this account address with clear.</p>}
       <Button disabled={busy || !!validationError || !!error} onClick={() => void approve()}>{busy ? 'Waiting for wallet…' : request?.kind === 'signAndSendTransaction' ? 'Approve transaction' : 'Connect account'}</Button>
     </>}
     <div className="wallet-sign-actions"><Button variant="secondary" disabled={busy} onClick={cancel}>Cancel</Button>{authenticated ? <Button variant="quiet" disabled={busy} onClick={() => { setError(''); void logout().catch(() => setError('Sign-out failed. Close the window and try again.')) }}>Use another login</Button> : null}</div>

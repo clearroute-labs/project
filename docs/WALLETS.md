@@ -1,6 +1,6 @@
 # Wallet connections
 
-Private Ledger uses `@hot-labs/near-connect` on NEAR mainnet and testnet. The selector loads the NEAR Connect ecosystem registry and filters wallets for the deployment network and transaction signing. The application does not replace that registry with a private wallet list. The local sandbox continues to use the existing in-memory credential-file signer.
+clear uses `@hot-labs/near-connect` on NEAR mainnet and testnet. The selector loads the NEAR Connect ecosystem registry and filters wallets for the deployment network and transaction signing. The application does not replace that registry with a private wallet list. The local sandbox continues to use the existing in-memory credential-file signer.
 
 ## Enable email and social login
 
@@ -16,7 +16,7 @@ The login screen uses React Auth and a JS Core signing client with the same IDs,
 
 ## Accounts and confidential keys
 
-A new Privy NEAR wallet has a 64-character implicit account address. Wallet creation does not fund that account. Fund it with native NEAR on the configured network before submitting transactions; a mainnet balance does not pay testnet fees. Storage deposits and attached NEAR deposits remain visible in the approval screen, including the exact amount and gas limit. Private Ledger's large proof calls retain their 300 Tgas budget.
+A new Privy NEAR wallet has a 64-character implicit account address. Wallet creation does not fund that account. Fund it with native NEAR on the configured network before submitting transactions; a mainnet balance does not pay testnet fees. Storage deposits and attached NEAR deposits remain visible in the approval screen, including the exact amount and gas limit. clear's large proof calls retain their 300 Tgas budget.
 
 Privy authenticates the user and holds the NEAR signing key. It does not store the lending protocol's decryption keys or replace their encrypted backup. Continue through **Wallet & security**, save the encrypted backup before key registration, and restore it when using a different browser. Changing accounts clears the active confidential wallet context and invalidates old dashboard reads.
 

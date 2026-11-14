@@ -51,6 +51,9 @@ const visualAsset: AssetProfile = {
 }
 
 const visualVault: VaultSummary = {
+  cumulativeYield: '6250000',
+  cumulativeRealizedLosses: '1250000',
+  yieldStatus: 'available',
   vaultId: VISUAL_VAULT_ID,
   ownerId: VISUAL_ACCOUNT_ID,
   brokerId: VISUAL_BROKER_ID,
@@ -70,6 +73,8 @@ const visualVault: VaultSummary = {
 }
 
 const visualBroker: BrokerSummary = {
+  cumulativeYield: '6250000',
+  cumulativeRealizedLosses: '1250000',
   brokerId: VISUAL_BROKER_ID,
   ownerId: VISUAL_ACCOUNT_ID,
   vaultId: VISUAL_VAULT_ID,

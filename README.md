@@ -1,4 +1,4 @@
-# NEAR confidential lending
+# clear — confidential lending on NEAR
 
 An implementation of [SPEC.md](SPEC.md): public single-asset vaults fund broker-underwritten loans whose amounts, repayments and balances remain encrypted. The Core contract enforces confidential transfers and credit accounting with Groth16 proofs. Borrowers, brokers and designated auditors decrypt only their authorized views.
 

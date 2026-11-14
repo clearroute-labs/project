@@ -12,6 +12,7 @@ const browserChannel = process.env.UI_BROWSER_CHANNEL || 'chromium'
 
 const viewports = [
   { name: 'desktop1440x1000', width: 1440, height: 1000 },
+  { name: 'tablet768x1024', width: 768, height: 1024 },
   { name: 'mobile390x844', width: 390, height: 844 },
   { name: 'narrow320x844', width: 320, height: 844 },
 ]
@@ -21,41 +22,41 @@ const workspaces = [
     value: 'lender',
     navigation: 'Lender navigation',
     overview: 'Overview',
-    overviewHeading: 'Overview',
+    overviewHeading: 'Your capital, in view.',
     routes: [
-      { key: 'vaults', label: 'Vaults', heading: 'Vaults & share positions' },
-      { key: 'claims', label: 'Claims & payouts', heading: 'Claims & payouts' },
+      { key: 'vaults', label: 'Vaults', heading: 'Find your vault.' },
+      { key: 'claims', label: 'Claims & payouts', heading: 'Claims & payouts.' },
     ],
   },
   {
     value: 'broker',
     navigation: 'Broker navigation',
     overview: 'Desk overview',
-    overviewHeading: 'Overview',
+    overviewHeading: 'Credit, coordinated.',
     routes: [
-      { key: 'vaults', label: 'Vaults & brokers', heading: 'Vaults & broker accounts' },
-      { key: 'loan-book', label: 'Loan book', heading: 'Loan book & proposals' },
-      { key: 'operations', label: 'Operations', heading: 'Servicing operations' },
+      { key: 'vaults', label: 'Vaults & brokers', heading: 'Vaults & brokers.' },
+      { key: 'loan-book', label: 'Loan book', heading: 'Your credit book.' },
+      { key: 'operations', label: 'Operations', heading: 'Keep the book current.' },
     ],
   },
   {
     value: 'borrower',
     navigation: 'Borrower navigation',
     overview: 'Home',
-    overviewHeading: 'Overview',
+    overviewHeading: 'Your next step, clear.',
     routes: [
-      { key: 'agreements', label: 'Agreements', heading: 'Agreements & authorization' },
-      { key: 'private-balance', label: 'Private balance', heading: 'Balance & transfers' },
+      { key: 'agreements', label: 'Agreements', heading: 'Your agreements.' },
+      { key: 'private-balance', label: 'Private balance', heading: 'Private by design.' },
     ],
   },
   {
     value: 'auditor',
     navigation: 'Auditor navigation',
     overview: 'Audit home',
-    overviewHeading: 'Audit',
+    overviewHeading: 'Access, with purpose.',
     routes: [
-      { key: 'loan-exports', label: 'Loan exports', heading: 'Audit' },
-      { key: 'token-audit', label: 'Token audit', heading: 'Audit' },
+      { key: 'loan-exports', label: 'Loan exports', heading: 'A focused view of each loan.' },
+      { key: 'token-audit', label: 'Token audit', heading: 'Trace the authorized view.' },
     ],
   },
 ]
@@ -107,6 +108,7 @@ async function inspectWorkspace(page, workspace, state, viewport) {
 
   const navigation = page.getByRole('navigation', { name: workspace.navigation })
   for (const route of workspace.routes) {
+    if (viewport.width <= 800) { const menu = page.getByRole('button', { name: 'Open navigation', exact: true }); await menu.focus(); await menu.press('Enter') }
     const routeButton = navigation.getByRole('button', { name: route.label, exact: true })
     await routeButton.focus()
     await expect(routeButton).toBeFocused()
@@ -126,6 +128,7 @@ async function inspectWorkspace(page, workspace, state, viewport) {
     })
   }
 
+  if (viewport.width <= 800) { const menu = page.getByRole('button', { name: 'Open navigation', exact: true }); await menu.focus(); await menu.press('Enter') }
   const overviewButton = navigation.getByRole('button', { name: workspace.overview, exact: true })
   await overviewButton.focus()
   await overviewButton.press('Enter')
@@ -143,13 +146,14 @@ async function inspectWorkspace(page, workspace, state, viewport) {
 async function inspectSecurity(page, state, viewport) {
   const selector = page.getByLabel('Active workspace')
   await selector.selectOption('lender')
-  await waitForHeading(page, 'Overview')
+  await waitForHeading(page, 'Your capital, in view.')
+  if (viewport.width <= 800) { const menu = page.getByRole('button', { name: 'Open navigation', exact: true }); await menu.focus(); await menu.press('Enter') }
   const securityButton = page.getByRole('navigation', { name: 'Lender navigation' }).getByRole('button', { name: 'Wallet & security', exact: true })
   await securityButton.focus()
   await expect(securityButton).toBeFocused()
   await assertFocusIndicator(page, `${state}/${viewport.name}/security`)
   await securityButton.press('Enter')
-  await waitForHeading(page, 'Wallet & security')
+  await waitForHeading(page, 'Your wallet. Your keys.')
   await expect(page.getByText('Connected account:', { exact: false })).toBeVisible()
   await assertNoHorizontalOverflow(page, `${state}/${viewport.name}/security`)
   await page.getByLabel('Active workspace').focus()
@@ -188,7 +192,7 @@ try {
     await page.setViewportSize({ width: viewport.width, height: viewport.height })
     for (const state of ['populated', 'empty']) {
       await page.goto(fixtureFor(state), { waitUntil: 'domcontentloaded', timeout: 30_000 })
-      await waitForHeading(page, 'Overview')
+      await waitForHeading(page, 'Your capital, in view.')
       await assertNoHorizontalOverflow(page, `${state}/${viewport.name}/initial`)
       for (const workspace of workspaces) await inspectWorkspace(page, workspace, state, viewport)
       await inspectSecurity(page, state, viewport)
